@@ -1,0 +1,3 @@
+[submodule "tea"]
+	path = tea
+	url = git@github.com:jniedzie/tea.git
