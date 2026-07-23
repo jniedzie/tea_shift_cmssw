@@ -2,3 +2,5 @@ build/*
 bin/*
 
 .__afs*
+
+*.root
