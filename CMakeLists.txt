@@ -1,0 +1,129 @@
+cmake_minimum_required(VERSION 3.14...4.0 FATAL_ERROR)
+project(user_analysis)
+
+if(NOT DEFINED CMAKE_CXX_STANDARD)
+    set(CMAKE_CXX_STANDARD 17)
+endif()
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    add_compile_options(-Wno-cpp)
+endif()
+
+# setup variables for macOS builds
+set(CMAKE_OSX_ARCHITECTURES "arm64")
+SET(CMAKE_OSX_DEPLOYMENT_TARGET 13.2)
+
+# setup install directory to "bin"
+set(CMAKE_INSTALL_PREFIX "${CMAKE_SOURCE_DIR}/bin")
+
+# setup ROOT-specific variables
+find_program(ROOT_CONFIG_EXECUTABLE root-config)
+if(ROOT_CONFIG_EXECUTABLE)
+    execute_process(COMMAND ${ROOT_CONFIG_EXECUTABLE} --prefix OUTPUT_VARIABLE ROOT_CONFIG_PREFIX OUTPUT_STRIP_TRAILING_WHITESPACE)
+    execute_process(COMMAND ${ROOT_CONFIG_EXECUTABLE} --incdir OUTPUT_VARIABLE ROOT_CONFIG_INCDIR OUTPUT_STRIP_TRAILING_WHITESPACE)
+    execute_process(COMMAND ${ROOT_CONFIG_EXECUTABLE} --libdir OUTPUT_VARIABLE ROOT_CONFIG_LIBDIR OUTPUT_STRIP_TRAILING_WHITESPACE)
+    execute_process(COMMAND ${ROOT_CONFIG_EXECUTABLE} --cxxstandard OUTPUT_VARIABLE ROOT_CONFIG_CXXSTANDARD OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+
+    if(ROOT_CONFIG_CXXSTANDARD MATCHES "^[0-9]+$" AND ROOT_CONFIG_CXXSTANDARD GREATER CMAKE_CXX_STANDARD)
+        set(CMAKE_CXX_STANDARD "${ROOT_CONFIG_CXXSTANDARD}")
+    endif()
+
+    set(CMAKE_PREFIX_PATH "${ROOT_CONFIG_PREFIX};${ROOT_CONFIG_PREFIX}/cmake;${ROOT_CONFIG_LIBDIR}/cmake/ROOT;${CMAKE_PREFIX_PATH}")
+    set(CMAKE_INCLUDE_PATH "${ROOT_CONFIG_INCDIR};${CMAKE_INCLUDE_PATH}")
+    set(CMAKE_LIBRARY_PATH "${ROOT_CONFIG_LIBDIR};${CMAKE_LIBRARY_PATH}")
+
+    if(EXISTS "${ROOT_CONFIG_PREFIX}/cmake/ROOTConfig.cmake")
+        set(ROOT_DIR "${ROOT_CONFIG_PREFIX}/cmake" CACHE PATH "ROOT CMake package directory" FORCE)
+    elseif(EXISTS "${ROOT_CONFIG_LIBDIR}/cmake/ROOT/ROOTConfig.cmake")
+        set(ROOT_DIR "${ROOT_CONFIG_LIBDIR}/cmake/ROOT" CACHE PATH "ROOT CMake package directory" FORCE)
+    endif()
+endif()
+if(DEFINED ENV{ROOTSYS} AND NOT "$ENV{ROOTSYS}" STREQUAL "")
+    set(CMAKE_PREFIX_PATH "$ENV{ROOTSYS};${CMAKE_PREFIX_PATH}")
+endif()
+set(TEA_ROOT_COMPONENTS Core RIO Tree Hist Graf Gpad Matrix Physics MathCore)
+find_package(ROOT REQUIRED COMPONENTS ${TEA_ROOT_COMPONENTS})
+include(${ROOT_USE_FILE})
+include_directories(${ROOT_INCLUDE_DIRS} ${ROOT_CONFIG_INCDIR})
+SET(CMAKE_SKIP_BUILD_RPATH FALSE)
+SET(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE) 
+SET(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+
+if(DEFINED ENV{CONDA_PREFIX} AND EXISTS "$ENV{CONDA_PREFIX}/bin/python3")
+    set(Python3_EXECUTABLE "$ENV{CONDA_PREFIX}/bin/python3" CACHE FILEPATH "Python interpreter")
+endif()
+
+find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
+if(NOT Python3_INCLUDE_DIRS OR NOT EXISTS "${Python3_INCLUDE_DIRS}/Python.h")
+    execute_process(
+        COMMAND "${Python3_EXECUTABLE}" -c "import sysconfig; print(sysconfig.get_path('include') or '')"
+        OUTPUT_VARIABLE Python3_INCLUDE_DIRS
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+endif()
+if(NOT Python3_INCLUDE_DIRS OR NOT EXISTS "${Python3_INCLUDE_DIRS}/Python.h")
+    message(FATAL_ERROR "Python3 headers not found for ${Python3_EXECUTABLE}. Expected Python.h under ${Python3_INCLUDE_DIRS}.")
+endif()
+message(STATUS "Using Python3 executable: ${Python3_EXECUTABLE}")
+message(STATUS "Using Python3 version: ${Python3_VERSION}")
+message(STATUS "Using Python3 include dirs: ${Python3_INCLUDE_DIRS}")
+
+# setup tea as a subproject
+add_subdirectory(tea)
+
+message(STATUS "correctionlib includes at high_level: ${CORRECTIONLIB_INCLUDE_DIRS}")
+
+# include all tea headers from tea/libs/*/include
+file(GLOB LIBS_SUBDIRS "tea/libs/*")
+foreach(SUBDIR ${LIBS_SUBDIRS})
+    if(IS_DIRECTORY ${SUBDIR} AND EXISTS "${SUBDIR}/include")
+        include_directories(${SUBDIR}/include)
+    endif()
+endforeach()
+
+# add user-defined headers
+file(GLOB LIBS_SUBDIRS "libs/*")
+foreach(SUBDIR ${LIBS_SUBDIRS})
+    if(IS_DIRECTORY ${SUBDIR} AND EXISTS "${SUBDIR}/include")
+        include_directories(${SUBDIR}/include)
+    endif()
+endforeach()
+
+include_directories(${CORRECTIONLIB_INCLUDE_DIRS})
+
+# add user-defined libraries
+file(GLOB_RECURSE USER_LIBS_SRC "${CMAKE_CURRENT_SOURCE_DIR}/libs/*/*.cpp") # Assuming the source files are in .cpp format
+message(STATUS "Found user libs: ${USER_LIBS_SRC}")
+if(USER_LIBS_SRC)
+    add_library(user_libs ${USER_LIBS_SRC})
+endif()
+
+# add user-defined apps
+file(GLOB_RECURSE USER_APPS_SRC "apps/*.cpp")
+foreach(APP_SRC ${USER_APPS_SRC})
+    get_filename_component(APP_NAME ${APP_SRC} NAME_WE) # Get the name without extension
+    
+    add_executable(${APP_NAME} ${APP_SRC})
+    target_include_directories(${APP_NAME} PRIVATE ${Python3_INCLUDE_DIRS})
+    if(USER_LIBS_SRC)
+        message(STATUS "Linking with user, tea, ROOT, and Python libs")
+        target_link_libraries(${APP_NAME} PUBLIC user_libs core extensions histogramming ${ROOT_LIBRARIES} Python3::Python)
+    else()
+        message(STATUS "Linking with tea, ROOT, and Python libs")
+        target_link_libraries(${APP_NAME} PUBLIC core extensions histogramming ${ROOT_LIBRARIES} Python3::Python)
+    endif()
+
+    set_property(TARGET ${APP_NAME} PROPERTY CXX_STANDARD ${CMAKE_CXX_STANDARD})
+    set_target_properties(${APP_NAME} PROPERTIES INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}")
+    install(TARGETS ${APP_NAME} DESTINATION .)
+endforeach()
+
+# make links to python configs
+file(GLOB_RECURSE PYTHON_CONFIGS "configs/*" "utils/*")
+set(PYTHON_INSTALL_DIR "${CMAKE_INSTALL_PREFIX}")
+
+foreach(PYTHON_FILE ${PYTHON_CONFIGS})
+    get_filename_component(PYTHON_FILENAME ${PYTHON_FILE} NAME)
+    install(CODE "execute_process(COMMAND \${CMAKE_COMMAND} -E create_symlink \"${PYTHON_FILE}\" \"${PYTHON_INSTALL_DIR}/${PYTHON_FILENAME}\")")
+endforeach()
