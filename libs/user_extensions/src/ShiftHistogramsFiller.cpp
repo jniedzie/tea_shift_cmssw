@@ -1,0 +1,37 @@
+#include "ShiftHistogramsFiller.hpp"
+
+#include "ConfigManager.hpp"
+#include "ExtensionsHelpers.hpp"
+
+using namespace std;
+
+ShiftHistogramsFiller::ShiftHistogramsFiller(shared_ptr<HistogramsHandler> histogramsHandler_) : histogramsHandler(histogramsHandler_) {
+  // Create a config manager
+  auto &config = ConfigManager::GetInstance();
+
+  // Try to read weights branch
+  try {
+    config.GetValue("weightsBranchName", weightsBranchName);
+  } catch (const Exception& e) {
+  }
+
+  // Create an event processor
+  eventProcessor = make_unique<EventProcessor>();
+}
+
+ShiftHistogramsFiller::~ShiftHistogramsFiller() {}
+
+float ShiftHistogramsFiller::GetWeight(const std::shared_ptr<Event> event) {
+  // Try to get event weight, otherwise set to 1.0
+  float weight = 1.0;
+  try {
+    weight = event->Get(weightsBranchName);
+  } catch (const Exception &e) {
+  }
+  return weight;
+}
+
+void ShiftHistogramsFiller::Fill(const std::shared_ptr<Event> event) {
+  // Fill the histogram for given event (e.g. use EventProcessor to get some variables)
+  histogramsHandler->Fill("test", eventProcessor->GetMaxPt(event, "Muon"));
+}
