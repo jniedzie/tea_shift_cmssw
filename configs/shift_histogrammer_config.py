@@ -12,6 +12,17 @@ extraEventCollections = {
         "pdgId": (443, 443),
         "status": (2, 2),
     },
+    "GenMuon": {
+        "inputCollections": ["GenPart"],
+        "pdgId": (13, -13),
+        "status": (1, 1),
+    },
+    "LoosePATMuons": {
+        "inputCollections": ("Muon",),
+        "pt": (3., 9999999.),
+        "eta": (-2.5, 2.5),
+        "looseId": True,
+    },
 }
 
 defaultHistParams = (
@@ -21,12 +32,11 @@ defaultHistParams = (
   ("GenJPsi"     , "eta"           , 100,    -2.5,    2.5,     ""  ),
 )
 
-# histParams = (
-# #    name         bins  xmin    xmax    dir
-#   ("m_inv",      1000,  0,      10,     "kinematics"),
-#   ("delta_phi",  1000, -3.5,    3.5,    "kinematics"),
-#   ("n_muons",    20,    0,      20,     "counters"  ),
-# )
+histParams = (
+#  collection  variable         bins  xmin    xmax    dir
+  ("Muon"     , "minv", 1000,  0,      10,     ""),
+  ("GenMuon"  , "minv", 1000, -3.5,    3.5,    ""),
+)
 
 
 # specify name of the branch containing event weights
