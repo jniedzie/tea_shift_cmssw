@@ -2,7 +2,8 @@
 nEvents = -1
 
 # specify input/output paths 
-inputFilePath = "/user/jniedzie/shift_cmssw/CMSSW_14_0_24_patch1/src/test_run4d126/step4_nano.root"
+# inputFilePath = "/user/jniedzie/shift_cmssw/CMSSW_14_0_24_patch1/src/test_run4d126/step4_nano.root"
+inputFilePath = "/user/jniedzie/shift_cmssw/samples_tmp/jpsi/test_run/samples/step4/events_NanoAOD_part_0000.root"
 histogramsOutputFilePath = "../test_hists.root"
 
 extraEventCollections = {
