@@ -12,9 +12,17 @@ extraEventCollections = {
         "pdgId": (443, 443),
         "status": (2, 2),
     },
-    "GenMuon": {
+    "GenMuonPlus": {
         "inputCollections": ["GenPart"],
-        "pdgId": (13, -13),
+        "pdgId": (13, 13),
+    },
+    "GenMuonMinus": {
+        "inputCollections": ["GenPart"],
+        "pdgId": (-13, -13),
+    },
+    "GenMuon": {
+        "inputCollections": ["GenMuonPlus", "GenMuonMinus"],
+        # "pt": (3., 9999999.),
         "status": (1, 1),
     },
     "LoosePATMuons": {
@@ -34,8 +42,8 @@ defaultHistParams = (
 
 histParams = (
 #  collection  variable         bins  xmin    xmax    dir
-  ("Muon"     , "minv", 1000,  0,      10,     ""),
-  ("GenMuon"  , "minv", 1000, -3.5,    3.5,    ""),
+  ("Muon"     , "minv", 1000,  0,       10,     ""),
+  ("GenMuon"  , "minv", 1000,  0,       10,    ""),
 )
 
 

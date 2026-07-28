@@ -5,6 +5,7 @@
 #include "EventProcessor.hpp"
 #include "Helpers.hpp"
 #include "HistogramsHandler.hpp"
+#include "ExtensionsHelpers.hpp"
 
 class ShiftHistogramsFiller {
  public:
@@ -16,9 +17,11 @@ class ShiftHistogramsFiller {
  private:
   std::shared_ptr<HistogramsHandler> histogramsHandler;
   std::unique_ptr<EventProcessor> eventProcessor;
-  std::string weightsBranchName;
+  
+  void FillGenLevel(const std::shared_ptr<Event> event);
+  void FillRecoLevel(const std::shared_ptr<Event> event);
 
-  float GetWeight(const std::shared_ptr<Event> event);
+  bool IsMotherJPsi(const std::shared_ptr<NanoGenParticle> particle, const std::shared_ptr<PhysicsObjects> genParticles);
 };
 
 #endif /* ShiftHistogramsFiller_hpp */

@@ -4,12 +4,12 @@
 #include "ExtensionsHelpers.hpp"
 #include "HistogramsFiller.hpp"
 #include "HistogramsHandler.hpp"
-
 #include "ShiftHistogramsFiller.hpp"
+#include "NanoEventProcessor.hpp"
 
 using namespace std;
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
   vector<string> requiredArgs = {"config"};
   vector<string> optionalArgs = {"input_path", "output_hists_path"};
   auto args = make_unique<ArgsManager>(argc, argv, requiredArgs, optionalArgs);
@@ -19,18 +19,21 @@ int main(int argc, char **argv) {
   auto histogramsHandler = make_shared<HistogramsHandler>();
   auto histogramsFiller = make_unique<HistogramsFiller>(histogramsHandler);
   auto shiftHistogramsFiller = make_unique<ShiftHistogramsFiller>(histogramsHandler);
+  auto nanoEventProcessor = make_unique<NanoEventProcessor>();
 
-  
   for (int iEvent = 0; iEvent < eventReader->GetNevents(); iEvent++) {
     auto event = eventReader->GetEvent(iEvent);
+
+    map<string, float> weight = {{"default", nanoEventProcessor->GetGenWeight(asNanoEvent(event))}};    
+    histogramsHandler->SetEventWeights(weight);
 
     histogramsFiller->FillDefaultVariables(event);
     shiftHistogramsFiller->Fill(event);
   }
-
+  
   histogramsHandler->SaveHistograms();
 
-  auto &logger = Logger::GetInstance();
+  auto& logger = Logger::GetInstance();
   logger.Print();
 
   return 0;
