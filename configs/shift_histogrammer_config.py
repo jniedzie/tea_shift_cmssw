@@ -48,7 +48,11 @@ defaultHistParams = (
 
 histParams = (
 #  collection  variable         bins  xmin    xmax    dir
-  ("GenMuon"      , "minv", 1000,  0,       10,     ""),
+  ("GenMuon"      , "minv", 1000,    0,      10,     ""),
+  ("GenMuon"      , "x"   , 1000, -100,     100,     ""),  
+  ("GenMuon"      , "y"   , 1000, -100,     100,     ""),  
+  ("GenMuon"      , "z"   , 1000, -20000, 20000,     ""),
+  ("GenMuon"      , "logZ", 100,  -10   , 10   ,     ""),
   ("LooseDSAMuon" , "minv", 1000,  0,       10,     ""),
   ("LoosePATMuon" , "minv", 1000,  0,       10,     ""),
 )
