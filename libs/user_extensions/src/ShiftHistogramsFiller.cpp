@@ -40,15 +40,27 @@ void ShiftHistogramsFiller::FillGenLevel(const shared_ptr<Event> event) {
 }
 
 void ShiftHistogramsFiller::FillRecoLevel(const shared_ptr<Event> event) {
-  auto recoMuons = event->GetCollection("LoosePATMuons");
+  auto recoPATmuons = event->GetCollection("LoosePATMuons");
   
-  for (size_t i = 0; i < recoMuons->size(); i++) {
-    auto muon1 = asNanoMuon(recoMuons->at(i));
+  for (size_t i = 0; i < recoPATmuons->size(); i++) {
+    auto muon1 = asNanoMuon(recoPATmuons->at(i));
 
-    for (size_t j = i + 1; j < recoMuons->size(); j++) {
-      auto muon2 = asNanoMuon(recoMuons->at(j));
+    for (size_t j = i + 1; j < recoPATmuons->size(); j++) {
+      auto muon2 = asNanoMuon(recoPATmuons->at(j));
       float invMass = (muon1->GetFourVector() + muon2->GetFourVector()).M();
-      histogramsHandler->Fill("Muon_minv", invMass);
+      histogramsHandler->Fill("LoosePATMuon_minv", invMass);
+    }
+  }
+
+  auto recoDSAmuons = event->GetCollection("LooseDSAMuons");
+  
+  for (size_t i = 0; i < recoDSAmuons->size(); i++) {
+    auto muon1 = asNanoMuon(recoDSAmuons->at(i));
+
+    for (size_t j = i + 1; j < recoDSAmuons->size(); j++) {
+      auto muon2 = asNanoMuon(recoDSAmuons->at(j));
+      float invMass = (muon1->GetFourVector() + muon2->GetFourVector()).M();
+      histogramsHandler->Fill("LooseDSAMuon_minv", invMass);
     }
   }
 }

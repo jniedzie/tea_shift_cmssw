@@ -31,6 +31,12 @@ extraEventCollections = {
         "eta": (-2.5, 2.5),
         "looseId": True,
     },
+    "LooseDSAMuons": {
+        "inputCollections": ("DSAMuon",),
+        "pt": (3., 9999999.),
+        "eta": (-2.5, 2.5),
+        "displacedID": (1, 9999999.),
+    },
 }
 
 defaultHistParams = (
@@ -42,8 +48,9 @@ defaultHistParams = (
 
 histParams = (
 #  collection  variable         bins  xmin    xmax    dir
-  ("Muon"     , "minv", 1000,  0,       10,     ""),
-  ("GenMuon"  , "minv", 1000,  0,       10,    ""),
+  ("GenMuon"      , "minv", 1000,  0,       10,     ""),
+  ("LooseDSAMuon" , "minv", 1000,  0,       10,     ""),
+  ("LoosePATMuon" , "minv", 1000,  0,       10,     ""),
 )
 
 
