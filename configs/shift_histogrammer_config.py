@@ -53,6 +53,9 @@ histParams = (
   ("GenMuon"      , "y"   , 1000, -100,     100,     ""),  
   ("GenMuon"      , "z"   , 1000, -20000, 20000,     ""),
   ("GenMuon"      , "logZ", 100,  -10   , 10   ,     ""),
+  ("GenMuon"      , "pt"  , 1000,    0,      100,     ""),
+  ("GenMuon"      , "eta" , 1000,   -10,       10,     ""),
+  ("GenMuon"      , "phi" , 1000,   -3.2,     3.2,     ""),
   ("LooseDSAMuon" , "minv", 1000,  0,       10,     ""),
   ("LoosePATMuon" , "minv", 1000,  0,       10,     ""),
 )
