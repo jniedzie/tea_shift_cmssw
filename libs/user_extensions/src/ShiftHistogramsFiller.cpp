@@ -72,6 +72,18 @@ void ShiftHistogramsFiller::FillRecoLevel(const shared_ptr<Event> event) {
       histogramsHandler->Fill("LooseDSAMuon_minv", invMass);
     }
   }
+
+  auto recoShiftMuons = event->GetCollection("LooseShiftMuons");
+
+  for (size_t i = 0; i < recoShiftMuons->size(); i++) {
+    auto muon1 = asNanoMuon(recoShiftMuons->at(i));
+
+    for (size_t j = i + 1; j < recoShiftMuons->size(); j++) {
+      auto muon2 = asNanoMuon(recoShiftMuons->at(j));
+      float invMass = (muon1->GetFourVector() + muon2->GetFourVector()).M();
+      histogramsHandler->Fill("LooseShiftMuons_minv", invMass);
+    }
+  }
 }
 
 void ShiftHistogramsFiller::Fill(const shared_ptr<Event> event) {

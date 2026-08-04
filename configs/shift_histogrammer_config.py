@@ -37,6 +37,12 @@ extraEventCollections = {
         "eta": (-2.5, 2.5),
         "displacedID": (1, 9999999.),
     },
+    "LooseShiftMuons": {
+        "inputCollections": ("ShiftMuon",),
+        "vz": (5000., 9999999.),
+        # "pt": (3., 9999999.),
+        # "eta": (-2.5, 2.5),
+    },
 }
 
 defaultHistParams = (
@@ -44,6 +50,18 @@ defaultHistParams = (
   ("Event"       , "nMuon"         , 50,     0,       50,      ""  ),
   ("GenJPsi"     , "pt"            , 400,    0,       200,     ""  ),
   ("GenJPsi"     , "eta"           , 100,    -2.5,    2.5,     ""  ),
+  
+  ("ShiftMuon"   , "pt"            , 400,    0,       200,     ""  ),
+  ("ShiftMuon"   , "eta"           , 100,    -10,      10,     ""  ),
+  ("ShiftMuon"   , "vx"            , 100,    -1000,  1000,     ""  ),
+  ("ShiftMuon"   , "vy"            , 100,    -1000,  1000,     ""  ),
+  ("ShiftMuon"   , "vz"            , 100,    -20000,  20000,     ""  ),
+  
+  ("LooseShiftMuons"   , "pt"            , 400,    0,       200,     ""  ),
+  ("LooseShiftMuons"   , "eta"           , 100,    -10,      10,     ""  ),
+  ("LooseShiftMuons"   , "vx"            , 100,    -1000,  1000,     ""  ),
+  ("LooseShiftMuons"   , "vy"            , 100,    -1000,  1000,     ""  ),
+  ("LooseShiftMuons"   , "vz"            , 100,    -20000,  20000,     ""  ),
 )
 
 histParams = (
@@ -58,6 +76,7 @@ histParams = (
   ("GenMuon"      , "phi" , 1000,   -3.2,     3.2,     ""),
   ("LooseDSAMuon" , "minv", 1000,  0,       10,     ""),
   ("LoosePATMuon" , "minv", 1000,  0,       10,     ""),
+  ("LooseShiftMuons", "minv", 200,  0,       10,     ""),
 )
 
 
