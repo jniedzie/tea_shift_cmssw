@@ -56,6 +56,7 @@ defaultHistParams = (
   ("ShiftMuon"   , "vx"            , 100,    -1000,  1000,     ""  ),
   ("ShiftMuon"   , "vy"            , 100,    -1000,  1000,     ""  ),
   ("ShiftMuon"   , "vz"            , 100,    -20000,  20000,     ""  ),
+  ("ShiftMuon"   , "GenPartIdx"      , 30,    -10,      20,     ""  ),
   
   ("LooseShiftMuons"   , "pt"            , 400,    0,       200,     ""  ),
   ("LooseShiftMuons"   , "eta"           , 100,    -10,      10,     ""  ),
@@ -79,6 +80,14 @@ histParams = (
   ("LooseShiftMuons", "minv", 200,  0,       10,     ""),
 )
 
+histParams2D = (
+  ("RecoVsGenMuon_vx", 100, -1000, 1000, 100, -1000, 1000),
+  ("RecoVsGenMuon_vy", 100, -1000, 1000, 100, -1000, 1000),
+  ("RecoVsGenMuon_vz", 100, -20000, 20000, 100, -20000, 20000),
+  ("RecoVsGenMuon_pt", 100, 0, 200, 100, 0, 200),
+  ("RecoVsGenMuon_eta", 100, -10, 10, 100, -10, 10),
+  ("RecoVsGenMuon_phi", 100, -3.2, 3.2, 100, -3.2, 3.2),
+)
 
 # specify name of the branch containing event weights
 weightsBranchName = "genWeight"
