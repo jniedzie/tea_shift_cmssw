@@ -43,26 +43,58 @@ extraEventCollections = {
         # "pt": (3., 9999999.),
         # "eta": (-2.5, 2.5),
     },
+    "GoodShiftDimuonVertex": {
+        "inputCollections": ("ShiftDimuonVertex",),
+        "isOS": (1, 1),
+        "chi2": (0., 10.),
+        "dcaValid": (1, 1),
+    },
 }
 
 defaultHistParams = (
 #  collection      variable          bins    xmin     xmax     dir
-  ("Event"       , "nMuon"         , 50,     0,       50,      ""  ),
-  ("GenJPsi"     , "pt"            , 400,    0,       200,     ""  ),
-  ("GenJPsi"     , "eta"           , 100,    -2.5,    2.5,     ""  ),
+  ("GenJPsi"     , "pt"                     , 400,    0,       200,     ""  ),
+  ("GenJPsi"     , "eta"                    , 100,    -2.5,    2.5,     ""  ),
   
-  ("ShiftMuon"   , "pt"            , 400,    0,       200,     ""  ),
-  ("ShiftMuon"   , "eta"           , 100,    -10,      10,     ""  ),
-  ("ShiftMuon"   , "vx"            , 100,    -1000,  1000,     ""  ),
-  ("ShiftMuon"   , "vy"            , 100,    -1000,  1000,     ""  ),
-  ("ShiftMuon"   , "vz"            , 100,    -20000,  20000,     ""  ),
-  ("ShiftMuon"   , "GenPartIdx"      , 30,    -10,      20,     ""  ),
+  ("ShiftMuon"   , "pt"                     , 400,    0,       200,     ""  ),
+  ("ShiftMuon"   , "eta"                    , 100,    -10,      10,     ""  ),
+  ("ShiftMuon"   , "vx"                     , 100,    -1000,  1000,     ""  ),
+  ("ShiftMuon"   , "vy"                     , 100,    -1000,  1000,     ""  ),
+  ("ShiftMuon"   , "vz"                     , 100,    -20000,  20000,     ""  ),
+  ("ShiftMuon"   , "genPartIdx"             , 30,    -10,      20,     ""  ),
   
-  ("LooseShiftMuons"   , "pt"            , 400,    0,       200,     ""  ),
-  ("LooseShiftMuons"   , "eta"           , 100,    -10,      10,     ""  ),
-  ("LooseShiftMuons"   , "vx"            , 100,    -1000,  1000,     ""  ),
-  ("LooseShiftMuons"   , "vy"            , 100,    -1000,  1000,     ""  ),
-  ("LooseShiftMuons"   , "vz"            , 100,    -20000,  20000,     ""  ),
+  ("LooseShiftMuons"   , "pt"               , 400,    0,       200,     ""  ),
+  ("LooseShiftMuons"   , "eta"              , 100,    -10,      10,     ""  ),
+  ("LooseShiftMuons"   , "vx"               , 100,    -1000,  1000,     ""  ),
+  ("LooseShiftMuons"   , "vy"               , 100,    -1000,  1000,     ""  ),
+  ("LooseShiftMuons"   , "vz"               , 100,    -20000,  20000,     ""  ),
+  
+  ("Event"               , "nShiftDimuonVertex", 10, 0, 10, ""),
+  ("ShiftDimuonVertex"   , "x"              , 100,    -1000,  1000,     ""  ),
+  ("ShiftDimuonVertex"   , "y"              , 100,    -1000,  1000,     ""  ),
+  ("ShiftDimuonVertex"   , "z"              , 100,    -20000,  20000,     ""  ),
+  ("ShiftDimuonVertex"   , "mass"           , 100,    0,       10,     ""  ),
+  ("ShiftDimuonVertex"   , "pt"             , 400,    0,       200,     ""  ),
+  ("ShiftDimuonVertex"   , "eta"            , 100,    -10,      10,     ""  ),
+  ("ShiftDimuonVertex"   , "chi2"           , 100,    -1,     100,     ""  ),
+  ("ShiftDimuonVertex"   , "normalizedChi2" , 100,    -1,     100,     ""  ),
+  ("ShiftDimuonVertex"   , "isOS"           , 20,    -10,     10,     ""  ),
+  ("ShiftDimuonVertex"   , "dca"            , 100,    0,     10000,     ""  ),
+  ("ShiftDimuonVertex"   , "dcaValid"       , 20,    -10,     10,     ""  ),
+  
+  ("Event"               , "nGoodShiftDimuonVertex", 10, 0, 10, ""),
+  ("GoodShiftDimuonVertex"   , "x"              , 100,    -1000,  1000,     ""  ),
+  ("GoodShiftDimuonVertex"   , "y"              , 100,    -1000,  1000,     ""  ),
+  ("GoodShiftDimuonVertex"   , "z"              , 100,    -20000,  20000,     ""  ),
+  ("GoodShiftDimuonVertex"   , "mass"           , 100,    0,       10,     ""  ),
+  ("GoodShiftDimuonVertex"   , "pt"             , 400,    0,       200,     ""  ),
+  ("GoodShiftDimuonVertex"   , "eta"            , 100,    -10,      10,     ""  ),
+  ("GoodShiftDimuonVertex"   , "chi2"           , 100,    -1,     100,     ""  ),
+  ("GoodShiftDimuonVertex"   , "normalizedChi2" , 100,    -1,     100,     ""  ),
+  ("GoodShiftDimuonVertex"   , "isOS"           , 20,    -10,     10,     ""  ),
+  ("GoodShiftDimuonVertex"   , "dca"            , 100,    0,     10000,     ""  ),
+  ("GoodShiftDimuonVertex"   , "dcaValid"       , 20,    -10,     10,     ""  ),
+  
 )
 
 histParams = (
