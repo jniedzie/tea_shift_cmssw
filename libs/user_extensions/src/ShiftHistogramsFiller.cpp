@@ -27,16 +27,6 @@ void ShiftHistogramsFiller::FillGenLevel(const shared_ptr<Event> event) {
   for (size_t i = 0; i < genMuons->size(); i++) {
     auto muon1 = asNanoGenParticle(genMuons->at(i));
     // if (!IsMotherJPsi(muon1, genParticles)) continue;
-
-    histogramsHandler->Fill("GenMuon_x", muon1->GetAs<float>("vx"));
-    histogramsHandler->Fill("GenMuon_y", muon1->GetAs<float>("vy"));
-    histogramsHandler->Fill("GenMuon_z", muon1->GetAs<float>("vz"));
-    histogramsHandler->Fill("GenMuon_logZ", log10(abs(muon1->GetAs<float>("vz"))));
-
-    histogramsHandler->Fill("GenMuon_pt", muon1->GetAs<float>("pt"));
-    histogramsHandler->Fill("GenMuon_eta", muon1->GetAs<float>("eta"));
-    histogramsHandler->Fill("GenMuon_phi", muon1->GetAs<float>("phi"));
-
     for (size_t j = i + 1; j < genMuons->size(); j++) {
       auto muon2 = asNanoGenParticle(genMuons->at(j));
       // if (!IsMotherJPsi(muon2, genParticles)) continue;

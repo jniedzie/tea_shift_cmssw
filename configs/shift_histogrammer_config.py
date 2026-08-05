@@ -61,6 +61,7 @@ defaultHistParams = (
   
   ("Event", "nShiftMuon", 10, 0, 10, ""),
   ("ShiftMuon"   , "pt"                     , 400,    0,       200,     ""  ),
+  ("ShiftMuon"   , "pz"                     , 400,    -10000,       10000,     ""  ),
   ("ShiftMuon"   , "eta"                    , 100,    -10,      10,     ""  ),
   ("ShiftMuon"   , "vx"                     , 100,    -1000,  1000,     ""  ),
   ("ShiftMuon"   , "vy"                     , 100,    -1000,  1000,     ""  ),
@@ -108,18 +109,19 @@ defaultHistParams = (
   ("GoodShiftDimuonVertex"   , "dca"            , 100,    0,     1500,     ""  ),
   ("GoodShiftDimuonVertex"   , "dcaValid"       , 20,    -10,     10,     ""  ),
   
+  ("GenMuon"      , "vx"   , 1000, -100,     100,     ""),  
+  ("GenMuon"      , "vy"   , 1000, -100,     100,     ""),  
+  ("GenMuon"      , "vz"   , 1000, -20000, 20000,     ""),
+  ("GenMuon"      , "pt"  , 1000,    0,      200,     ""),
+  ("GenMuon"      , "pz"  , 1000,    -10000,      10000,     ""),
+  ("GenMuon"      , "eta" , 1000,   -10,       10,     ""),
+  ("GenMuon"      , "phi" , 1000,   -3.2,     3.2,     ""),
+  
 )
 
 histParams = (
 #  collection  variable         bins  xmin    xmax    dir
   ("GenMuon"      , "minv", 1000,    0,      10,     ""),
-  ("GenMuon"      , "x"   , 1000, -100,     100,     ""),  
-  ("GenMuon"      , "y"   , 1000, -100,     100,     ""),  
-  ("GenMuon"      , "z"   , 1000, -20000, 20000,     ""),
-  ("GenMuon"      , "logZ", 100,  -10   , 10   ,     ""),
-  ("GenMuon"      , "pt"  , 1000,    0,      100,     ""),
-  ("GenMuon"      , "eta" , 1000,   -10,       10,     ""),
-  ("GenMuon"      , "phi" , 1000,   -3.2,     3.2,     ""),
   ("LooseDSAMuon" , "minv", 1000,  0,       10,     ""),
   ("LoosePATMuon" , "minv", 1000,  0,       10,     ""),
   ("LooseShiftMuons", "minv", 200,  0,       10,     ""),
