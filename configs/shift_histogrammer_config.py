@@ -128,11 +128,12 @@ histParams = (
 )
 
 histParams2D = (
-  ("RecoVsGenMuon_vx", 100, -1000, 1000, 100, -1000, 1000),
-  ("RecoVsGenMuon_vy", 100, -1000, 1000, 100, -1000, 1000),
-  ("RecoVsGenMuon_vz", 100, -20000, 20000, 100, -20000, 20000),
-  ("RecoVsGenMuon_pt", 100, 0, 200, 100, 0, 200),
-  ("RecoVsGenMuon_eta", 100, -10, 10, 100, -10, 10),
+  ("RecoVsGenMuon_vx", 200, -400, 400, 200, -10, 10),
+  ("RecoVsGenMuon_vy", 200, -400, 400, 200, -10, 10),
+  ("RecoVsGenMuon_vz", 200, 0, 20000, 2000, 0, 20000),
+  ("RecoVsGenMuon_pt", 1000, 0, 60, 1000, 0, 60),
+  ("RecoVsGenMuon_pz", 500, -500, 100, 500, -500, 100),
+  ("RecoVsGenMuon_eta", 1000, -10, 10, 1000, -10, 10),
   ("RecoVsGenMuon_phi", 100, -3.2, 3.2, 100, -3.2, 3.2),
 )
 
