@@ -20,8 +20,10 @@ class ShiftHistogramsFiller {
   
   void FillGenLevel(const std::shared_ptr<Event> event);
   void FillRecoLevel(const std::shared_ptr<Event> event);
-  void FillRecoVsGen(const std::shared_ptr<Event> event);
-
+  void FillRecoVsGen2D(const std::shared_ptr<Event> event);
+  void FillResolutionPlots(const std::shared_ptr<Event> event);
+  
+  TLorentzVector GetGenJPsiDimuonVector(const std::shared_ptr<PhysicsObjects> genParticles);
   bool IsMotherJPsi(const std::shared_ptr<NanoGenParticle> particle, const std::shared_ptr<PhysicsObjects> genParticles);
 };
 
