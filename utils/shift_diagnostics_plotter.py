@@ -136,13 +136,14 @@ def draw_diag_line(hist):
 
 
 def draw_zero_line(hist):
-	y_axis = hist.GetYaxis()
-	line = ROOT.TLine(0.0, y_axis.GetXmin(), 0.0, y_axis.GetXmax())
+	ROOT.gPad.Update()
+	line = ROOT.TLine(0.0, ROOT.gPad.GetUymin(), 0.0, ROOT.gPad.GetUymax())
 	line.SetLineColor(ROOT.kRed + 1)
 	line.SetLineStyle(2)
 	line.SetLineWidth(2)
-	line.Draw("same")
-	return line
+	# DrawClone gives each pad an independent ROOT-owned line. Without the clone,
+	# PyROOT can discard the earlier transient lines while processing later pads.
+	return line.DrawClone("same")
 
 
 def double_sided_crystal_ball(values, parameters):
@@ -199,7 +200,7 @@ def draw_2d(canvas, names, input_file, rebin_factors):
 	for pad, name in enumerate(names, 1):
 		canvas.cd(pad)
 		ROOT.gPad.SetRightMargin(0.14)
-		hist = input_file.Get(name)
+		hist = input_file.Get(f"correlations/{name}")
 		if not hist:
 			print(f"Warning: histogram '{name}' was not found")
 			continue
@@ -222,7 +223,7 @@ def draw_resolutions(canvas, names, input_file, rebin_factor):
 	for pad, name in enumerate(names, 1):
 		canvas.cd(pad)
 		ROOT.gPad.SetLeftMargin(0.14)
-		hist = input_file.Get(name)
+		hist = input_file.Get(f"resolution/{name}")
 		if not hist:
 			print(f"Warning: histogram '{name}' was not found")
 			continue
@@ -276,10 +277,10 @@ def main():
 	os.makedirs(args.output_dir, exist_ok=True)
 
 	canvases = [
-		(ROOT.TCanvas("canvas_muon_correlations", "Muon Correlations", 1600, 900), 4, 2),
-		(ROOT.TCanvas("canvas_dimuon_correlations", "Dimuon Correlations", 1600, 900), 4, 2),
-		(ROOT.TCanvas("canvas_muon_resolutions", "Muon Resolutions", 1200, 800), 2, 2),
-		(ROOT.TCanvas("canvas_dimuon_resolutions", "Dimuon Resolutions", 1500, 900), 3, 2),
+		(ROOT.TCanvas("canvas_muon_correlations", "Muon Correlations", 900, 1600), 2, 4),
+		(ROOT.TCanvas("canvas_dimuon_correlations", "Dimuon Correlations", 900, 1600), 2, 4),
+		(ROOT.TCanvas("canvas_muon_resolutions", "Muon Resolutions", 900, 800), 2, 2),
+		(ROOT.TCanvas("canvas_dimuon_resolutions", "Dimuon Resolutions", 900, 1200), 2, 3),
 	]
 	for canvas, columns, rows in canvases:
 		canvas.Divide(columns, rows)
