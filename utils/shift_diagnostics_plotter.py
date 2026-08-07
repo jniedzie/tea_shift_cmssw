@@ -18,43 +18,75 @@ ROOT.gStyle.SetTitleOffset(1.20, "Y")
 MUON_RESOLUTION_REBIN = 1
 DIMUON_RESOLUTION_REBIN = 3
 
+# The canvases are split into relatively small pads, so ROOT's defaults clip
+# long axis titles and the outermost tick labels.
+PAD_LEFT_MARGIN = 0.17
+PAD_RIGHT_MARGIN = 0.17
+PAD_BOTTOM_MARGIN = 0.18
+PAD_TOP_MARGIN = 0.10
+
 
 MUON_CORRELATIONS = [
 	"RecoVsGenMuon_eta", "RecoVsGenMuon_minv", "RecoVsGenMuon_phi", "RecoVsGenMuon_pt",
 	"RecoVsGenMuon_pz", "RecoVsGenMuon_vx", "RecoVsGenMuon_vy", "RecoVsGenMuon_vz",
 ]
 DIMUON_CORRELATIONS = [
-	"RecoVsGenJPsi_eta", "RecoVsGenJPsi_minv", "RecoVsGenJPsi_phi", "RecoVsGenJPsi_pt",
-	"RecoVsGenJPsi_pz", "RecoVsGenJPsi_vx", "RecoVsGenJPsi_vy", "RecoVsGenJPsi_vz",
+	"RecoVsGenDimuon_eta", "RecoVsGenDimuon_minv", "RecoVsGenDimuon_phi", "RecoVsGenDimuon_pt",
+	"RecoVsGenDimuon_pz", "RecoVsGenDimuon_vx", "RecoVsGenDimuon_vy", "RecoVsGenDimuon_vz",
 ]
-MUON_RESOLUTIONS = ["MuonResolution_eta", "MuonResolution_phi", "MuonResolution_pt", "MuonResolution_pz"]
+MUON_RESOLUTIONS = [
+  "MuonResolution_eta", "MuonResolution_phi", "MuonResolution_pt", "MuonResolution_pz",
+  "MuonResolution_vx", "MuonResolution_vy", "MuonResolution_vz",
+]
 DIMUON_RESOLUTIONS = [
 	"DimuonResolution_eta", "DimuonResolution_minv", "DimuonResolution_phi",
-	"DimuonResolution_pt", "DimuonResolution_pz",
+	"DimuonResolution_pt", "DimuonResolution_pz", "DimuonResolution_vx", "DimuonResolution_vy", "DimuonResolution_vz",
 ]
 
 TITLES = {
-	"RecoVsGenMuon_eta": "Muon #eta", "RecoVsGenMuon_minv": "Muon m_{inv}",
-	"RecoVsGenMuon_phi": "Muon #phi", "RecoVsGenMuon_pt": "Muon p_{T}",
-	"RecoVsGenMuon_pz": "Muon p_{z}", "RecoVsGenMuon_vx": "Muon v_{x}",
-	"RecoVsGenMuon_vy": "Muon v_{y}", "RecoVsGenMuon_vz": "Muon v_{z}",
-	"RecoVsGenJPsi_eta": "J/#psi #eta", "RecoVsGenJPsi_minv": "J/#psi m_{inv}",
-	"RecoVsGenJPsi_phi": "J/#psi #phi", "RecoVsGenJPsi_pt": "J/#psi p_{T}",
-	"RecoVsGenJPsi_pz": "J/#psi p_{z}", "RecoVsGenJPsi_vx": "J/#psi v_{x}",
-	"RecoVsGenJPsi_vy": "J/#psi v_{y}", "RecoVsGenJPsi_vz": "J/#psi v_{z}",
+	"RecoVsGenMuon_eta": "Muon #eta",
+  "RecoVsGenMuon_minv": "Muon m_{inv} (GeV)",
+	"RecoVsGenMuon_phi": "Muon #phi",
+  "RecoVsGenMuon_pt": "Muon p_{T} (GeV)",
+	"RecoVsGenMuon_pz": "Muon p_{z} (GeV)",
+  "RecoVsGenMuon_vx": "Muon v_{x} (cm)",
+	"RecoVsGenMuon_vy": "Muon v_{y} (cm)",
+  "RecoVsGenMuon_vz": "Muon v_{z} (cm)",
+
+  "RecoVsGenDimuon_pt": "J/#psi p_{T} (GeV)",
+  "RecoVsGenDimuon_eta": "J/#psi #eta",
+  "RecoVsGenDimuon_phi": "J/#psi #phi",
+  "RecoVsGenDimuon_minv": "J/#psi m_{inv} (GeV)",
+	"RecoVsGenDimuon_pz": "J/#psi p_{z} (GeV)",
+  "RecoVsGenDimuon_vx": "J/#psi v_{x} (cm)",
+	"RecoVsGenDimuon_vy": "J/#psi v_{y} (cm)",
+  "RecoVsGenDimuon_vz": "J/#psi v_{z} (cm)",
 }
 
 # These labels mirror the quantities filled in ShiftHistogramsFiller::FillResolutionPlots.
 RESOLUTION_TITLES = {
-	"MuonResolution_eta": "#eta^{reco} - #eta^{gen}",
-	"MuonResolution_phi": "#phi^{reco} - #phi^{gen}",
+	"MuonResolution_eta": "(#eta^{reco} - #eta^{gen}) / #eta^{gen}",
+	"MuonResolution_phi": "(#phi^{reco} - #phi^{gen}) / #phi^{gen}",
 	"MuonResolution_pt": "(p_{T}^{reco} - p_{T}^{gen}) / p_{T}^{gen}",
 	"MuonResolution_pz": "(p_{z}^{reco} - p_{z}^{gen}) / p_{z}^{gen}",
-	"DimuonResolution_eta": "#eta_{#mu#mu}^{reco} - #eta_{#mu#mu}^{gen}",
-	"DimuonResolution_phi": "#phi_{#mu#mu}^{reco} - #phi_{#mu#mu}^{gen}",
+	"MuonResolution_vx": "(v_{x}^{reco} - v_{x}^{gen}) / v_{x}^{gen}",
+	"MuonResolution_vy": "(v_{y}^{reco} - v_{y}^{gen}) / v_{y}^{gen}",
+	"MuonResolution_vz": "(v_{z}^{reco} - v_{z}^{gen}) / v_{z}^{gen}",
+	"DimuonResolution_eta": "(#eta_{#mu#mu}^{reco} - #eta_{#mu#mu}^{gen}) / #eta_{#mu#mu}^{gen}",
+	"DimuonResolution_phi": "(#phi_{#mu#mu}^{reco} - #phi_{#mu#mu}^{gen}) / #phi_{#mu#mu}^{gen}",
 	"DimuonResolution_pt": "(p_{T,#mu#mu}^{reco} - p_{T,#mu#mu}^{gen}) / p_{T,#mu#mu}^{gen}",
 	"DimuonResolution_pz": "(p_{z,#mu#mu}^{reco} - p_{z,#mu#mu}^{gen}) / p_{z,#mu#mu}^{gen}",
 	"DimuonResolution_minv": "(m_{#mu#mu}^{reco} - m_{#mu#mu}^{gen}) / m_{#mu#mu}^{gen}",
+	"DimuonResolution_vx": "(v_{x,#mu#mu}^{reco} - v_{x,#mu#mu}^{gen}) / v_{x,#mu#mu}^{gen}",
+	"DimuonResolution_vy": "(v_{y,#mu#mu}^{reco} - v_{y,#mu#mu}^{gen}) / v_{y,#mu#mu}^{gen}",
+	"DimuonResolution_vz": "(v_{z,#mu#mu}^{reco} - v_{z,#mu#mu}^{gen}) / v_{z,#mu#mu}^{gen}",
+}
+
+RESOLUTION_X_RANGES = {
+	"MuonResolution_vx": (-5000.0, 5000.0),
+	"MuonResolution_vy": (-5000.0, 5000.0),
+	"DimuonResolution_vx": (-5000.0, 5000.0),
+	"DimuonResolution_vy": (-5000.0, 5000.0),
 }
 
 
@@ -80,6 +112,13 @@ def set_axes_titles(hist, x_title, y_title):
 	hist.SetTitle("")
 	hist.GetXaxis().SetTitle(x_title)
 	hist.GetYaxis().SetTitle(y_title)
+
+
+def set_pad_margins(right_margin=0.06):
+	ROOT.gPad.SetLeftMargin(PAD_LEFT_MARGIN)
+	ROOT.gPad.SetRightMargin(right_margin)
+	ROOT.gPad.SetBottomMargin(PAD_BOTTOM_MARGIN)
+	ROOT.gPad.SetTopMargin(PAD_TOP_MARGIN)
 
 
 def annotate_entries(hist):
@@ -199,7 +238,7 @@ def draw_2d(canvas, names, input_file, rebin_factors):
 	objects = []
 	for pad, name in enumerate(names, 1):
 		canvas.cd(pad)
-		ROOT.gPad.SetRightMargin(0.14)
+		set_pad_margins(PAD_RIGHT_MARGIN)
 		hist = input_file.Get(f"correlations/{name}")
 		if not hist:
 			print(f"Warning: histogram '{name}' was not found")
@@ -222,7 +261,7 @@ def draw_resolutions(canvas, names, input_file, rebin_factor):
 	objects = []
 	for pad, name in enumerate(names, 1):
 		canvas.cd(pad)
-		ROOT.gPad.SetLeftMargin(0.14)
+		set_pad_margins()
 		hist = input_file.Get(f"resolution/{name}")
 		if not hist:
 			print(f"Warning: histogram '{name}' was not found")
@@ -230,6 +269,8 @@ def draw_resolutions(canvas, names, input_file, rebin_factor):
 		if rebin_factor > 1:
 			hist.Rebin(rebin_factor)
 		set_axes_titles(hist, RESOLUTION_TITLES[name], "Entries")
+		if name in RESOLUTION_X_RANGES:
+			hist.GetXaxis().SetRangeUser(*RESOLUTION_X_RANGES[name])
 		hist.SetMarkerStyle(20)
 		hist.SetMarkerSize(0.8)
 		hist.Draw("E1")
@@ -279,8 +320,8 @@ def main():
 	canvases = [
 		(ROOT.TCanvas("canvas_muon_correlations", "Muon Correlations", 900, 1600), 2, 4),
 		(ROOT.TCanvas("canvas_dimuon_correlations", "Dimuon Correlations", 900, 1600), 2, 4),
-		(ROOT.TCanvas("canvas_muon_resolutions", "Muon Resolutions", 900, 800), 2, 2),
-		(ROOT.TCanvas("canvas_dimuon_resolutions", "Dimuon Resolutions", 900, 1200), 2, 3),
+		(ROOT.TCanvas("canvas_muon_resolutions", "Muon Resolutions", 900, 1600), 2, 4),
+		(ROOT.TCanvas("canvas_dimuon_resolutions", "Dimuon Resolutions", 900, 1600), 2, 4),
 	]
 	for canvas, columns, rows in canvases:
 		canvas.Divide(columns, rows)

@@ -23,7 +23,7 @@ class ShiftHistogramsFiller {
   void FillRecoVsGen2D(const std::shared_ptr<Event> event);
   void FillResolutionPlots(const std::shared_ptr<Event> event);
   
-  TLorentzVector GetGenJPsiDimuonVector(const std::shared_ptr<PhysicsObjects> genParticles);
+  std::pair<TLorentzVector, TVector3> GetGenJPsiDimuonVector(const std::shared_ptr<PhysicsObjects> genParticles);
 };
 
 #endif /* ShiftHistogramsFiller_hpp */
