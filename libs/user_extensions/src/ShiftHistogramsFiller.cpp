@@ -106,9 +106,9 @@ void ShiftHistogramsFiller::FillRecoVsGen2D(const shared_ptr<Event> event) {
   for (size_t i = 0; i < recoShiftDimuons->size(); i++) {
     auto recoDimuon = recoShiftDimuons->at(i);
 
-    histogramsHandler->Fill("RecoVsGenJPsi_vx", recoDimuon->GetAs<float>("x"), genJPsiVec.X());
-    histogramsHandler->Fill("RecoVsGenJPsi_vy", recoDimuon->GetAs<float>("y"), genJPsiVec.Y());
-    histogramsHandler->Fill("RecoVsGenJPsi_vz", recoDimuon->GetAs<float>("z"), genJPsiVec.Z());
+    histogramsHandler->Fill("RecoVsGenJPsi_vx", recoDimuon->GetAs<float>("vx"), genJPsiVec.X());
+    histogramsHandler->Fill("RecoVsGenJPsi_vy", recoDimuon->GetAs<float>("vy"), genJPsiVec.Y());
+    histogramsHandler->Fill("RecoVsGenJPsi_vz", recoDimuon->GetAs<float>("vz"), genJPsiVec.Z());
     histogramsHandler->Fill("RecoVsGenJPsi_pt", recoDimuon->GetAs<float>("pt"), genJPsiVec.Pt());
     // histogramsHandler->Fill("RecoVsGenJPsi_pz", recoDimuon->GetAs<float>("pz"), genJPsiVec.Pz());
     histogramsHandler->Fill("RecoVsGenJPsi_eta", recoDimuon->GetAs<float>("eta"), genJPsiVec.Eta());

@@ -39,9 +39,9 @@ for name in ["GenJPsi", "ShiftDimuonVertex", "GoodShiftDimuonVertex"]:
     (f"{name}"   , "phi"                          , 100 , -3.2  , 3.2   , "dimuon"),
     (f"{name}"   , "mass"                         , 100 , 0     , 10    , "dimuon"),
     
-    (f"{name}"   , "vx" if "Gen" in name else "x" , 100 , -1000 , 1000  , "dimuon"),
-    (f"{name}"   , "vy" if "Gen" in name else "y" , 100 , -1000 , 1000  , "dimuon"),
-    (f"{name}"   , "vz" if "Gen" in name else "z" , 100 , -20000, 20000 , "dimuon"),
+    (f"{name}"   , "vx"                           , 100 , -1000 , 1000  , "dimuon"),
+    (f"{name}"   , "vy"                           , 100 , -1000 , 1000  , "dimuon"),
+    (f"{name}"   , "vz"                           , 100 , -20000, 20000 , "dimuon"),
   )
    
   if "Gen" in name:
