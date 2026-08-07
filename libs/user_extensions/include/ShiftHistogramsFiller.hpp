@@ -24,7 +24,6 @@ class ShiftHistogramsFiller {
   void FillResolutionPlots(const std::shared_ptr<Event> event);
   
   TLorentzVector GetGenJPsiDimuonVector(const std::shared_ptr<PhysicsObjects> genParticles);
-  bool IsMotherJPsi(const std::shared_ptr<NanoGenParticle> particle, const std::shared_ptr<PhysicsObjects> genParticles);
 };
 
 #endif /* ShiftHistogramsFiller_hpp */

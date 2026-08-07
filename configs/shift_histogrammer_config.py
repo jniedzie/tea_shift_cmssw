@@ -7,13 +7,13 @@ for name in ["GenMuon", "ShiftMuon", "LooseShiftMuon"]:
   defaultHistParams += (
     ("Event"     , f"n{name}"       , 10  , 0     , 10    , "event"),
     (f"{name}"   , "pt"             , 200 , 0     , 20    , "muon"),
-    (f"{name}"   , "pz"             , 200 , -1000 , 100   , "muon"),
+    # (f"{name}"   , "pz"             , 200 , -1000 , 100   , "muon"),
     (f"{name}"   , "eta"            , 100 , -10   , 10    , "muon"),
     (f"{name}"   , "phi"            , 100 , -3.2  , 3.2   , "muon"),
     
-    (f"{name}"   , "vx"             , 100 , -1000 , 1000  , "muon"),
-    (f"{name}"   , "vy"             , 100 , -1000 , 1000  , "muon"),
-    (f"{name}"   , "vz"             , 100 , -20000, 20000 , "muon"),
+    # (f"{name}"   , "vx"             , 100 , -1000 , 1000  , "muon"),
+    # (f"{name}"   , "vy"             , 100 , -1000 , 1000  , "muon"),
+    # (f"{name}"   , "vz"             , 100 , -20000, 20000 , "muon"),
   )
    
   if "Gen" in name:
@@ -30,7 +30,7 @@ for name in ["GenMuon", "ShiftMuon", "LooseShiftMuon"]:
 # Default dimuon histograms
 # ============================================================
 
-for name in ["GenJPsi", "ShiftDimuonVertex", "GoodShiftDimuonVertex"]:
+for name in ["ShiftDimuonVertex", "GoodShiftDimuonVertex"]:
   defaultHistParams += (
     ("Event"     , f"n{name}"                     , 10  , 0     , 10    , "event"),
     (f"{name}"   , "pt"                           , 200 , 0     , 20    , "dimuon"),
@@ -39,9 +39,9 @@ for name in ["GenJPsi", "ShiftDimuonVertex", "GoodShiftDimuonVertex"]:
     (f"{name}"   , "phi"                          , 100 , -3.2  , 3.2   , "dimuon"),
     (f"{name}"   , "mass"                         , 100 , 0     , 10    , "dimuon"),
     
-    (f"{name}"   , "vx"                           , 100 , -1000 , 1000  , "dimuon"),
-    (f"{name}"   , "vy"                           , 100 , -1000 , 1000  , "dimuon"),
-    (f"{name}"   , "vz"                           , 100 , -20000, 20000 , "dimuon"),
+    # (f"{name}"   , "vx"                           , 100 , -1000 , 1000  , "dimuon"),
+    # (f"{name}"   , "vy"                           , 100 , -1000 , 1000  , "dimuon"),
+    # (f"{name}"   , "vz"                           , 100 , -20000, 20000 , "dimuon"),
   )
    
   if "Gen" in name:
@@ -63,9 +63,17 @@ for name in ["GenJPsi", "ShiftDimuonVertex", "GoodShiftDimuonVertex"]:
 # ============================================================
 
 histParams = (
-  ("GenMuon"          , "minv"  , 1000  ,  0  , 10  ,     "dimuon"),
   ("LooseShiftMuon"   , "minv"  , 200   ,  0  , 10  ,     "dimuon"),
   
+  (f"GenDimuon"   , "pt"                           , 200 , 0     , 20    , "dimuon"),
+  # (f"GenDimuon"   , "pz"                           , 200 , -1000 , 100   , "dimuon"),
+  (f"GenDimuon"   , "eta"                          , 100 , -10   , 10    , "dimuon"),
+  (f"GenDimuon"   , "phi"                          , 100 , -3.2  , 3.2   , "dimuon"),
+  (f"GenDimuon"   , "mass"                         , 100 , 0     , 10    , "dimuon"),
+  # (f"GenDimuon"   , "vx"                           , 100 , -1000 , 1000  , "dimuon"),
+  # (f"GenDimuon"   , "vy"                           , 100 , -1000 , 1000  , "dimuon"),
+  # (f"GenDimuon"   , "vz"                           , 100 , -20000, 20000 , "dimuon"),
+
   ("MuonResolution"   , "pt"    , 50    , -1  , 1   ,     "resolution"),
   ("MuonResolution"   , "pz"    , 50    , -1  , 1   ,     "resolution"),
   ("MuonResolution"   , "eta"   , 50    , -1  , 1   ,     "resolution"),
@@ -84,7 +92,7 @@ histParams = (
 
 histParams2D = ()
 
-for name in ["RecoVsGenMuon", "RecoVsGenJPsi"]:
+for name in ["RecoVsGenMuon", "RecoVsGenDimuon"]:
 
   histParams2D += (
     (f"{name}_pt"   , 1000  , 0     , 60    , 1000  , 0   , 60    , "correlations"),

@@ -1,9 +1,4 @@
 extraEventCollections = {
-    "GenJPsi": {
-        "inputCollections": ["GenPart"],
-        "pdgId": (443, 443),
-        "status": (2, 2),
-    },
     "GenMuonPlus": {
         "inputCollections": ["GenPart"],
         "pdgId": (13, 13),
