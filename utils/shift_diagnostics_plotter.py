@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 
 import argparse
+import hashlib
 import math
 import os
+from pathlib import Path
+import re
+import subprocess
 
 import ROOT
 
@@ -88,6 +92,63 @@ RESOLUTION_X_RANGES = {
 	"DimuonResolution_vx": (-5000.0, 5000.0),
 	"DimuonResolution_vy": (-5000.0, 5000.0),
 }
+
+
+def find_workflow_env():
+	candidates = []
+	for start in (Path.cwd(), Path(__file__).resolve()):
+		for parent in (start, *start.parents):
+			candidates.append(parent / "shift_cmssw_workflow" / "config" / "workflow.env")
+	return next((path for path in candidates if path.is_file()), None)
+
+
+def cmssw_src_from_workflow():
+	workflow_env = find_workflow_env()
+	if workflow_env is None:
+		return None
+	clean_environment = {key: value for key, value in os.environ.items() if key != "BASH_ENV"}
+	result = subprocess.run(
+		[
+			"bash", "--noprofile", "--norc", "-c",
+			'source "$1" >/dev/null && printf "%s" "$CMSSW_SRC"', "bash", str(workflow_env),
+		],
+		check=False,
+		capture_output=True,
+		text=True,
+		env=clean_environment,
+	)
+	return result.stdout if result.returncode == 0 and result.stdout else None
+
+
+def cmssw_provenance_tag(cmssw_src=None, commit_hash=None):
+	if commit_hash:
+		if not re.fullmatch(r"[0-9a-fA-F]{7,40}", commit_hash):
+			raise ValueError("--commit-hash must contain 7 to 40 hexadecimal characters")
+		return commit_hash.lower()
+
+	source_dir = cmssw_src or os.environ.get("CMSSW_SRC") or cmssw_src_from_workflow()
+	if not source_dir:
+		raise RuntimeError("Could not determine CMSSW_SRC; source workflow.env or pass --cmssw-src/--commit-hash")
+
+	git_command = ["git", "-C", source_dir]
+	try:
+		commit = subprocess.run(
+			[*git_command, "rev-parse", "--short=12", "HEAD"],
+			check=True,
+			capture_output=True,
+			text=True,
+		).stdout.strip()
+		diff = subprocess.run(
+			[*git_command, "diff", "HEAD", "--binary"],
+			check=True,
+			capture_output=True,
+		).stdout
+	except subprocess.CalledProcessError as error:
+		raise RuntimeError(f"Could not derive CMSSW commit from '{source_dir}'") from error
+
+	if diff:
+		return f"{commit}-dirty-{hashlib.sha256(diff).hexdigest()[:8]}"
+	return commit
 
 
 def parse_rebin_specs(specs, dimensions):
@@ -294,6 +355,14 @@ def parse_arguments():
 	parser.add_argument("--input", default="../test_hists_10k.root", help="input ROOT histogram file")
 	parser.add_argument("--output-dir", default="../plots", help="directory for output PDFs")
 	parser.add_argument(
+		"--cmssw-src",
+		help="CMSSW src directory used to derive the output provenance tag (default: CMSSW_SRC/workflow.env)",
+	)
+	parser.add_argument(
+		"--commit-hash",
+		help="override the automatically detected CMSSW commit hash for plots of older inputs",
+	)
+	parser.add_argument(
 		"--rebin-2d", action="append", default=[], metavar="HIST=XFACTOR[,YFACTOR]",
 		help="rebin one 2D histogram; one factor applies to both axes",
 	)
@@ -302,6 +371,8 @@ def parse_arguments():
 
 def main():
 	args = parse_arguments()
+	provenance_tag = cmssw_provenance_tag(args.cmssw_src, args.commit_hash)
+	print(f"CMSSW provenance tag: {provenance_tag}")
 	try:
 		correlation_rebin = parse_rebin_specs(args.rebin_2d, 2)
 	except argparse.ArgumentTypeError as error:
@@ -333,7 +404,12 @@ def main():
 	drawn_objects += draw_resolutions(canvases[2][0], MUON_RESOLUTIONS, input_file, MUON_RESOLUTION_REBIN)
 	drawn_objects += draw_resolutions(canvases[3][0], DIMUON_RESOLUTIONS, input_file, DIMUON_RESOLUTION_REBIN)
 
-	output_names = ["muon_correlations.pdf", "dimuon_correlations.pdf", "muon_resolutions.pdf", "dimuon_resolutions.pdf"]
+	output_names = [
+		f"muon_correlations_{provenance_tag}.pdf",
+		f"dimuon_correlations_{provenance_tag}.pdf",
+		f"muon_resolutions_{provenance_tag}.pdf",
+		f"dimuon_resolutions_{provenance_tag}.pdf",
+	]
 	for (canvas, _, _), output_name in zip(canvases, output_names):
 		canvas.SaveAs(os.path.join(args.output_dir, output_name))
 	input_file.Close()
