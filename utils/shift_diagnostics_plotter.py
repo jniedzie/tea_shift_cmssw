@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+from array import array
 import glob
 import math
 import os
@@ -274,6 +275,13 @@ def fit_resolution(hist, name):
 	return fit, int(fit_result)
 
 
+def robust_resolution_summary(hist):
+	probabilities = array("d", (0.16, 0.50, 0.84))
+	quantiles = array("d", (0.0, 0.0, 0.0))
+	hist.GetQuantiles(len(probabilities), quantiles, probabilities)
+	return quantiles[1], 0.5 * (quantiles[2] - quantiles[0])
+
+
 def draw_2d(canvas, names, input_file, rebin_factors):
 	objects = []
 	for pad, name in enumerate(names, 1):
@@ -315,15 +323,18 @@ def draw_resolutions(canvas, names, input_file, rebin_factor):
 		hist.SetMarkerSize(0.8)
 		hist.Draw("E1")
 		fit, fit_status = fit_resolution(hist, name)
+		median, central_68_half_width = robust_resolution_summary(hist)
 		label = ROOT.TLatex()
 		label.SetNDC(True)
 		label.SetTextFont(42)
-		label.SetTextSize(0.035)
+		label.SetTextSize(0.031)
 		if fit:
-			label.DrawLatex(0.17, 0.84, f"#mu = {fit.GetParameter(1):.4g}")
-			label.DrawLatex(0.17, 0.78, f"#sigma = {abs(fit.GetParameter(2)):.4g}")
+			label.DrawLatex(0.17, 0.85, f"fit #mu = {fit.GetParameter(1):.4g}")
+			label.DrawLatex(0.17, 0.80, f"fit #sigma = {abs(fit.GetParameter(2)):.4g}")
 			if fit_status:
-				label.DrawLatex(0.17, 0.72, f"fit status = {fit_status}")
+				label.DrawLatex(0.17, 0.65, f"fit status = {fit_status}")
+		label.DrawLatex(0.17, 0.75, f"median = {median:.4g}")
+		label.DrawLatex(0.17, 0.70, f"#sigma_{{68}} = {central_68_half_width:.4g}")
 		objects.extend(filter(None, (fit, draw_zero_line(hist), label, annotate_entries(hist))))
 	canvas.Update()
 	return objects
