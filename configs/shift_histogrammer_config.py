@@ -117,8 +117,8 @@ from shift_extra_collections import extraEventCollections
 
 nEvents = -1
 
-inputFilePath = "/user/jniedzie/shift_cmssw/samples_tmp/jpsi/test_run/samples/step4/events_NanoAOD_part_0000.root"
-histogramsOutputFilePath = "../test_hists.root"
+inputFilePath = "/eos/home-j/jniedzie/shift_cmssw/jpsi/Charmonium_FixedTarget_pThat_1to5GeV_13p6TeV_10k_beamB/samples/step4_merged/ntuple_0_2f9aeb2ab027.root"
+histogramsOutputFilePath = "../test_hists_10k.root"
 
 weightsBranchName = "genWeight"
 eventsTreeNames = ["Events",]

@@ -151,6 +151,29 @@ def cmssw_provenance_tag(cmssw_src=None, commit_hash=None):
 	return commit
 
 
+def versioned_output_dir(output_dir, provenance_tag):
+	output_dir = Path(output_dir)
+	version_pattern = re.compile(r"v([1-9][0-9]*)_(.+)")
+	existing_versions = []
+	matching_version = None
+	if output_dir.is_dir():
+		for path in output_dir.iterdir():
+			if not path.is_dir():
+				continue
+			match = version_pattern.fullmatch(path.name)
+			if not match:
+				continue
+			version = int(match.group(1))
+			existing_versions.append(version)
+			if match.group(2) == provenance_tag:
+				matching_version = version
+
+	version = matching_version or max(existing_versions, default=0) + 1
+	version_dir = output_dir / f"v{version}_{provenance_tag}"
+	version_dir.mkdir(parents=True, exist_ok=True)
+	return version_dir
+
+
 def parse_rebin_specs(specs, dimensions):
 	result = {}
 	for spec in specs:
@@ -386,7 +409,8 @@ def main():
 	input_file = ROOT.TFile.Open(args.input, "READ")
 	if not input_file or input_file.IsZombie():
 		raise SystemExit(f"error: could not open input ROOT file '{args.input}'")
-	os.makedirs(args.output_dir, exist_ok=True)
+	output_dir = versioned_output_dir(args.output_dir, provenance_tag)
+	print(f"Output directory: {output_dir}")
 
 	canvases = [
 		(ROOT.TCanvas("canvas_muon_correlations", "Muon Correlations", 900, 1600), 2, 4),
@@ -405,13 +429,13 @@ def main():
 	drawn_objects += draw_resolutions(canvases[3][0], DIMUON_RESOLUTIONS, input_file, DIMUON_RESOLUTION_REBIN)
 
 	output_names = [
-		f"muon_correlations_{provenance_tag}.pdf",
-		f"dimuon_correlations_{provenance_tag}.pdf",
-		f"muon_resolutions_{provenance_tag}.pdf",
-		f"dimuon_resolutions_{provenance_tag}.pdf",
+		"muon_correlations.pdf",
+		"dimuon_correlations.pdf",
+		"muon_resolutions.pdf",
+		"dimuon_resolutions.pdf",
 	]
 	for (canvas, _, _), output_name in zip(canvases, output_names):
-		canvas.SaveAs(os.path.join(args.output_dir, output_name))
+		canvas.SaveAs(str(output_dir / output_name))
 	input_file.Close()
 
 
