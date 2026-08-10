@@ -113,12 +113,42 @@ for name in ["RecoVsGenMuon", "RecoVsGenDimuon"]:
 # Other stuff
 # ============================================================
 
+import glob
+import os
+import re
+
 from shift_extra_collections import extraEventCollections
+from shift_paths import base_path, campaign, sample
+from Logger import info
+
+
+def latest_versioned_sample():
+  samples_dir = f"{base_path}/{sample}/{campaign}/samples/step4_merged"
+  sample_pattern = re.compile(r"ntuple_0_([0-9a-f]{7,40}(?:-dirty-[0-9a-f]{8})?)\.root")
+  samples = []
+  for input_path in glob.glob(f"{samples_dir}/ntuple_0_*.root"):
+    file_name = os.path.basename(input_path)
+    match = sample_pattern.fullmatch(file_name)
+    if match:
+      samples.append((os.stat(input_path).st_mtime_ns, file_name, input_path, match.group(1)))
+
+  if not samples:
+    raise RuntimeError(f"No versioned ntuple_0_<hash>.root files found in '{samples_dir}'")
+
+  samples.sort()
+  _, _, input_path, provenance_tag = samples[-1]
+  return input_path, len(samples), provenance_tag
 
 nEvents = -1
 
-inputFilePath = "/eos/home-j/jniedzie/shift_cmssw/jpsi/Charmonium_FixedTarget_pThat_1to5GeV_13p6TeV_10k_beamB/samples/step4_merged/ntuple_0_2f9aeb2ab027.root"
-histogramsOutputFilePath = "../test_hists_10k.root"
+input_path, sample_version, provenance_tag = latest_versioned_sample()
+project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+inputFilePath = input_path
+histogramsOutputFilePath = f"{project_dir}/plots/v{sample_version}_{provenance_tag}/histograms.root"
+
+info(f"Selected sample v{sample_version}_{provenance_tag}: {inputFilePath}")
+info(f"Histogram output: {histogramsOutputFilePath}")
 
 weightsBranchName = "genWeight"
 eventsTreeNames = ["Events",]

@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 
 import argparse
-import hashlib
+import glob
 import math
 import os
-from pathlib import Path
 import re
-import subprocess
 
 import ROOT
 
@@ -20,7 +18,7 @@ ROOT.gStyle.SetTitleOffset(1.20, "Y")
 
 # Rebin factors for all histograms on the corresponding resolution canvas.
 MUON_RESOLUTION_REBIN = 1
-DIMUON_RESOLUTION_REBIN = 3
+DIMUON_RESOLUTION_REBIN = 2
 
 # The canvases are split into relatively small pads, so ROOT's defaults clip
 # long axis titles and the outermost tick labels.
@@ -94,84 +92,42 @@ RESOLUTION_X_RANGES = {
 }
 
 
-def find_workflow_env():
+HISTOGRAM_FILE_PATTERN = re.compile(
+	r"v([1-9][0-9]*)_([0-9a-f]{7,40}(?:-dirty-[0-9a-f]{8})?)"
+)
+
+
+def histogram_version(path):
+	match = HISTOGRAM_FILE_PATTERN.fullmatch(os.path.basename(os.path.dirname(path)))
+	if not match:
+		raise ValueError(
+			f"histogram file '{path}' must be located in 'vN_<hash>/histograms.root'"
+		)
+	return int(match.group(1)), match.group(2)
+
+
+def latest_histogram_file(histograms_dir):
 	candidates = []
-	for start in (Path.cwd(), Path(__file__).resolve()):
-		for parent in (start, *start.parents):
-			candidates.append(parent / "shift_cmssw_workflow" / "config" / "workflow.env")
-	return next((path for path in candidates if path.is_file()), None)
+	for input_path in glob.glob(os.path.join(histograms_dir, "v*_*", "histograms.root")):
+		try:
+			version, provenance_tag = histogram_version(input_path)
+		except ValueError:
+			continue
+		candidates.append((version, os.path.basename(os.path.dirname(input_path)), input_path, provenance_tag))
 
+	if not candidates:
+		raise RuntimeError(
+			f"No 'vN_<hash>/histograms.root' files found in '{histograms_dir}'"
+		)
 
-def cmssw_src_from_workflow():
-	workflow_env = find_workflow_env()
-	if workflow_env is None:
-		return None
-	clean_environment = {key: value for key, value in os.environ.items() if key != "BASH_ENV"}
-	result = subprocess.run(
-		[
-			"bash", "--noprofile", "--norc", "-c",
-			'source "$1" >/dev/null && printf "%s" "$CMSSW_SRC"', "bash", str(workflow_env),
-		],
-		check=False,
-		capture_output=True,
-		text=True,
-		env=clean_environment,
-	)
-	return result.stdout if result.returncode == 0 and result.stdout else None
+	latest_version = max(candidate[0] for candidate in candidates)
+	latest_candidates = [candidate for candidate in candidates if candidate[0] == latest_version]
+	if len(latest_candidates) != 1:
+		names = ", ".join(sorted(candidate[1] for candidate in latest_candidates))
+		raise RuntimeError(f"Multiple histogram files claim version v{latest_version}: {names}")
 
-
-def cmssw_provenance_tag(cmssw_src=None, commit_hash=None):
-	if commit_hash:
-		if not re.fullmatch(r"[0-9a-fA-F]{7,40}", commit_hash):
-			raise ValueError("--commit-hash must contain 7 to 40 hexadecimal characters")
-		return commit_hash.lower()
-
-	source_dir = cmssw_src or os.environ.get("CMSSW_SRC") or cmssw_src_from_workflow()
-	if not source_dir:
-		raise RuntimeError("Could not determine CMSSW_SRC; source workflow.env or pass --cmssw-src/--commit-hash")
-
-	git_command = ["git", "-C", source_dir]
-	try:
-		commit = subprocess.run(
-			[*git_command, "rev-parse", "--short=12", "HEAD"],
-			check=True,
-			capture_output=True,
-			text=True,
-		).stdout.strip()
-		diff = subprocess.run(
-			[*git_command, "diff", "HEAD", "--binary"],
-			check=True,
-			capture_output=True,
-		).stdout
-	except subprocess.CalledProcessError as error:
-		raise RuntimeError(f"Could not derive CMSSW commit from '{source_dir}'") from error
-
-	if diff:
-		return f"{commit}-dirty-{hashlib.sha256(diff).hexdigest()[:8]}"
-	return commit
-
-
-def versioned_output_dir(output_dir, provenance_tag):
-	output_dir = Path(output_dir)
-	version_pattern = re.compile(r"v([1-9][0-9]*)_(.+)")
-	existing_versions = []
-	matching_version = None
-	if output_dir.is_dir():
-		for path in output_dir.iterdir():
-			if not path.is_dir():
-				continue
-			match = version_pattern.fullmatch(path.name)
-			if not match:
-				continue
-			version = int(match.group(1))
-			existing_versions.append(version)
-			if match.group(2) == provenance_tag:
-				matching_version = version
-
-	version = matching_version or max(existing_versions, default=0) + 1
-	version_dir = output_dir / f"v{version}_{provenance_tag}"
-	version_dir.mkdir(parents=True, exist_ok=True)
-	return version_dir
+	version, _, path, provenance_tag = latest_candidates[0]
+	return path, version, provenance_tag
 
 
 def parse_rebin_specs(specs, dimensions):
@@ -375,15 +331,18 @@ def draw_resolutions(canvas, names, input_file, rebin_factor):
 
 def parse_arguments():
 	parser = argparse.ArgumentParser(description="Plot SHIFT reconstruction diagnostics")
-	parser.add_argument("--input", default="../test_hists_10k.root", help="input ROOT histogram file")
-	parser.add_argument("--output-dir", default="../plots", help="directory for output PDFs")
+	project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 	parser.add_argument(
-		"--cmssw-src",
-		help="CMSSW src directory used to derive the output provenance tag (default: CMSSW_SRC/workflow.env)",
+		"--input",
+		help="versioned input ROOT file (default: highest-version file in --histograms-dir)",
 	)
 	parser.add_argument(
-		"--commit-hash",
-		help="override the automatically detected CMSSW commit hash for plots of older inputs",
+		"--histograms-dir", default=f"{project_dir}/plots/",
+		help="directory searched for histograms_vN_<hash>.root files",
+	)
+	parser.add_argument(
+		"--output-dir", default=f"{project_dir}/plots",
+		help="parent directory for versioned plot directories",
 	)
 	parser.add_argument(
 		"--rebin-2d", action="append", default=[], metavar="HIST=XFACTOR[,YFACTOR]",
@@ -394,8 +353,16 @@ def parse_arguments():
 
 def main():
 	args = parse_arguments()
-	provenance_tag = cmssw_provenance_tag(args.cmssw_src, args.commit_hash)
-	print(f"CMSSW provenance tag: {provenance_tag}")
+	try:
+		if args.input:
+			input_path = args.input
+			version, provenance_tag = histogram_version(input_path)
+		else:
+			input_path, version, provenance_tag = latest_histogram_file(args.histograms_dir)
+	except (RuntimeError, ValueError) as error:
+		raise SystemExit(f"error: {error}") from error
+
+	print(f"Selected histograms v{version}_{provenance_tag}: {input_path}")
 	try:
 		correlation_rebin = parse_rebin_specs(args.rebin_2d, 2)
 	except argparse.ArgumentTypeError as error:
@@ -406,10 +373,11 @@ def main():
 	if unknown:
 		raise SystemExit(f"error: unknown histogram(s) in rebin options: {', '.join(sorted(unknown))}")
 
-	input_file = ROOT.TFile.Open(args.input, "READ")
+	input_file = ROOT.TFile.Open(input_path, "READ")
 	if not input_file or input_file.IsZombie():
-		raise SystemExit(f"error: could not open input ROOT file '{args.input}'")
-	output_dir = versioned_output_dir(args.output_dir, provenance_tag)
+		raise SystemExit(f"error: could not open input ROOT file '{input_path}'")
+	output_dir = f"{args.output_dir}/v{version}_{provenance_tag}"
+	os.makedirs(output_dir, exist_ok=True)
 	print(f"Output directory: {output_dir}")
 
 	canvases = [
@@ -435,7 +403,7 @@ def main():
 		"dimuon_resolutions.pdf",
 	]
 	for (canvas, _, _), output_name in zip(canvases, output_names):
-		canvas.SaveAs(str(output_dir / output_name))
+		canvas.SaveAs(f"{output_dir}/{output_name}")
 	input_file.Close()
 
 
