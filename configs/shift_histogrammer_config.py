@@ -10,8 +10,8 @@ for name in ["GenMuon", "ShiftMuon", "LooseShiftMuon"]:
     (f"{name}"   , "pz"             , 200 , -1000 , 100   , "muon"),
     (f"{name}"   , "eta"            , 100 , -10   , 10    , "muon"),
     (f"{name}"   , "phi"            , 100 , -3.2  , 3.2   , "muon"),
-    (f"{name}"   , "vx"             , 100 , -1000 , 1000  , "muon"),
-    (f"{name}"   , "vy"             , 100 , -1000 , 1000  , "muon"),
+    (f"{name}"   , "vx"             , 100 , -300  , 300   , "muon"),
+    (f"{name}"   , "vy"             , 100 , -300  , 300   , "muon"),
     (f"{name}"   , "vz"             , 100 , -20000, 20000 , "muon"),
   )
    
@@ -37,8 +37,8 @@ for name in ["ShiftDimuonVertex", "GoodShiftDimuonVertex"]:
     (f"{name}"   , "eta"                          , 100 , -10   , 10    , "dimuon"),
     (f"{name}"   , "phi"                          , 100 , -3.2  , 3.2   , "dimuon"),
     (f"{name}"   , "mass"                         , 100 , 0     , 10    , "dimuon"),
-    (f"{name}"   , "vx"                           , 100 , -1000 , 1000  , "dimuon"),
-    (f"{name}"   , "vy"                           , 100 , -1000 , 1000  , "dimuon"),
+    (f"{name}"   , "vx"                           , 100 , -300  , 300   , "dimuon"),
+    (f"{name}"   , "vy"                           , 100 , -300  , 300   , "dimuon"),
     (f"{name}"   , "vz"                           , 100 , -20000, 20000 , "dimuon"),
   )
    
@@ -68,8 +68,8 @@ histParams = (
   (f"GenDimuon"   , "eta"                          , 100 , -10   , 10    , "dimuon"),
   (f"GenDimuon"   , "phi"                          , 100 , -3.2  , 3.2   , "dimuon"),
   (f"GenDimuon"   , "mass"                         , 100 , 0     , 10    , "dimuon"),
-  (f"GenDimuon"   , "vx"                           , 100 , -1000 , 1000  , "dimuon"),
-  (f"GenDimuon"   , "vy"                           , 100 , -1000 , 1000  , "dimuon"),
+  (f"GenDimuon"   , "vx"                           , 100 , -300  , 300   , "dimuon"),
+  (f"GenDimuon"   , "vy"                           , 100 , -300  , 300   , "dimuon"),
   (f"GenDimuon"   , "vz"                           , 100 , -20000, 20000 , "dimuon"),
 
   ("MuonResolution"   , "pt"    , 50    , -1  , 1   ,     "resolution"),
@@ -104,8 +104,8 @@ for name in ["RecoVsGenMuon", "RecoVsGenDimuon"]:
     (f"{name}_eta"  , 1000  , -10   , 10    , 1000  , -10 , 10    , "correlations"),
     (f"{name}_phi"  , 100   , -3.2  , 3.2   , 100   , -3.2, 3.2   , "correlations"),
     (f"{name}_minv" , 100   , 0     , 10    , 100   , 0   , 10    , "correlations"),
-    (f"{name}_vx"   , 200   , -400  , 400   , 200   , -10 , 10    , "correlations"),
-    (f"{name}_vy"   , 200   , -400  , 400   , 200   , -10 , 10    , "correlations"),
+    (f"{name}_vx"   , 200   , -300  , 300   , 200   , -10 , 10    , "correlations"),
+    (f"{name}_vy"   , 200   , -300  , 300   , 200   , -10 , 10    , "correlations"),
     (f"{name}_vz"   , 200   , 0     , 20000 , 2000  , 0   , 20000 , "correlations"),
   )
 

@@ -12,10 +12,11 @@ import ROOT
 
 ROOT.gROOT.SetBatch(True)
 ROOT.gStyle.SetOptStat(0)
-ROOT.gStyle.SetTitleSize(0.055, "XY")
-ROOT.gStyle.SetLabelSize(0.045, "XY")
-ROOT.gStyle.SetTitleOffset(1.05, "X")
-ROOT.gStyle.SetTitleOffset(1.20, "Y")
+ROOT.gStyle.SetTitleSize(0.060, "XY")
+ROOT.gStyle.SetLabelSize(0.050, "XY")
+ROOT.gStyle.SetLabelOffset(0.012, "XY")
+ROOT.gStyle.SetTitleOffset(1.15, "X")
+ROOT.gStyle.SetTitleOffset(1.35, "Y")
 
 # Rebin factors for all histograms on the corresponding resolution canvas.
 MUON_RESOLUTION_REBIN = 1
@@ -23,9 +24,9 @@ DIMUON_RESOLUTION_REBIN = 2
 
 # The canvases are split into relatively small pads, so ROOT's defaults clip
 # long axis titles and the outermost tick labels.
-PAD_LEFT_MARGIN = 0.17
+PAD_LEFT_MARGIN = 0.19
 PAD_RIGHT_MARGIN = 0.17
-PAD_BOTTOM_MARGIN = 0.18
+PAD_BOTTOM_MARGIN = 0.21
 PAD_TOP_MARGIN = 0.10
 
 
@@ -153,6 +154,13 @@ def set_axes_titles(hist, x_title, y_title):
 	hist.SetTitle("")
 	hist.GetXaxis().SetTitle(x_title)
 	hist.GetYaxis().SetTitle(y_title)
+	for axis in (hist.GetXaxis(), hist.GetYaxis()):
+		axis.SetLabelSize(0.050)
+		axis.SetLabelOffset(0.012)
+		axis.SetTitleSize(0.060)
+		axis.SetNdivisions(505)
+	hist.GetXaxis().SetTitleOffset(1.15)
+	hist.GetYaxis().SetTitleOffset(1.35)
 
 
 def set_pad_margins(right_margin=0.06):
@@ -253,26 +261,127 @@ def double_sided_crystal_ball(values, parameters):
 	return normalization * math.exp(exponent)
 
 
+def left_sided_crystal_ball(values, parameters):
+	normalization, mean, sigma = parameters[0], parameters[1], parameters[2]
+	alpha, n = parameters[3], parameters[4]
+	if sigma <= 0:
+		return 0.0
+	t = (values[0] - mean) / sigma
+	if t >= -alpha:
+		return normalization * math.exp(-0.5 * t * t)
+	b = n / alpha - alpha
+	exponent = -0.5 * alpha * alpha + n * (math.log(n / alpha) - math.log(b - t))
+	return normalization * math.exp(exponent)
+
+
+def right_sided_crystal_ball(values, parameters):
+	normalization, mean, sigma = parameters[0], parameters[1], parameters[2]
+	alpha, n = parameters[3], parameters[4]
+	if sigma <= 0:
+		return 0.0
+	t = (values[0] - mean) / sigma
+	if t <= alpha:
+		return normalization * math.exp(-0.5 * t * t)
+	b = n / alpha - alpha
+	exponent = -0.5 * alpha * alpha + n * (math.log(n / alpha) - math.log(b + t))
+	return normalization * math.exp(exponent)
+
+
+def fit_result_is_reliable(fit_result):
+	result = fit_result.Get()
+	return (
+		int(fit_result) == 0
+		and result
+		and result.IsValid()
+		and result.CovMatrixStatus() == 3
+	)
+
+
+def configure_core_parameters(fit, hist, mean_seed, sigma_seed, fit_low, fit_high):
+	bin_width = hist.GetXaxis().GetBinWidth(1)
+	fit.SetParLimits(0, 0.0, max(10.0 * hist.GetMaximum(), 1.0))
+	fit.SetParLimits(1, fit_low, fit_high)
+	fit.SetParLimits(2, 0.1 * bin_width, fit_high - fit_low)
+	fit.SetParameter(0, hist.GetMaximum())
+	fit.SetParameter(1, mean_seed)
+	fit.SetParameter(2, sigma_seed)
+
+
+def fit_quality(fit_result):
+	result = fit_result.Get()
+	return result.Chi2() / max(result.Ndf(), 1)
+
+
 def fit_resolution(hist, name):
 	if hist.GetEntries() < 10 or hist.GetMaximum() <= 0:
-		return None, None
+		return None, "none"
+
 	x_axis = hist.GetXaxis()
-	fit = ROOT.TF1(f"fit_{name}", double_sided_crystal_ball, x_axis.GetXmin(), x_axis.GetXmax(), 7)
-	fit.SetParNames("N", "#mu", "#sigma", "#alpha_{L}", "n_{L}", "#alpha_{R}", "n_{R}")
-	sigma_seed = max(hist.GetRMS(), x_axis.GetBinWidth(1))
-	fit.SetParameters(hist.GetMaximum(), hist.GetMean(), sigma_seed, 1.5, 3.0, 1.5, 3.0)
-	fit.SetParLimits(0, 0.0, max(10.0 * hist.GetMaximum(), 1.0))
-	fit.SetParLimits(1, x_axis.GetXmin(), x_axis.GetXmax())
-	fit.SetParLimits(2, 0.1 * x_axis.GetBinWidth(1), x_axis.GetXmax() - x_axis.GetXmin())
+	fit_low, fit_high = x_axis.GetXmin(), x_axis.GetXmax()
+	median, central_68_half_width = robust_resolution_summary(hist)
+	bin_width = x_axis.GetBinWidth(1)
+	sigma_seed = max(central_68_half_width, bin_width)
+
+	# First fit only the populated core. This supplies stable mean and width
+	# seeds before the tail parameters are introduced.
+	core_low = max(fit_low, median - 2.0 * sigma_seed)
+	core_high = min(fit_high, median + 2.0 * sigma_seed)
+	gaussian = ROOT.TF1(f"fit_gaussian_{name}", "gaus", core_low, core_high)
+	configure_core_parameters(gaussian, hist, median, sigma_seed, core_low, core_high)
+	gaussian_result = hist.Fit(gaussian, "QRS0N")
+	if int(gaussian_result) == 0:
+		mean_seed = gaussian.GetParameter(1)
+		sigma_seed = abs(gaussian.GetParameter(2))
+	else:
+		mean_seed = median
+
+	candidates = []
+
+	double_cb = ROOT.TF1(f"fit_double_cb_{name}", double_sided_crystal_ball, fit_low, fit_high, 7)
+	double_cb.SetParNames("N", "#mu", "#sigma", "#alpha_{L}", "n_{L}", "#alpha_{R}", "n_{R}")
+	configure_core_parameters(double_cb, hist, mean_seed, sigma_seed, fit_low, fit_high)
+	double_cb.SetParameter(3, 1.5)
+	double_cb.SetParameter(4, 3.0)
+	double_cb.SetParameter(5, 1.5)
+	double_cb.SetParameter(6, 3.0)
 	for index in (3, 5):
-		fit.SetParLimits(index, 0.05, 10.0)
+		double_cb.SetParLimits(index, 0.05, 10.0)
 	for index in (4, 6):
-		fit.SetParLimits(index, 1.01, 100.0)
-	fit_result = hist.Fit(fit, "QRS0")
+		double_cb.SetParLimits(index, 1.01, 100.0)
+	double_result = hist.Fit(double_cb, "QRS0N")
+	if fit_result_is_reliable(double_result):
+		candidates.append((0, fit_quality(double_result), double_cb, "DSCB"))
+
+	for priority, callback, model_name in (
+		(1, left_sided_crystal_ball, "left-tail CB"),
+		(1, right_sided_crystal_ball, "right-tail CB"),
+	):
+		model_id = model_name.replace("-", "_").replace(" ", "_")
+		fit = ROOT.TF1(f"fit_{model_id}_{name}", callback, fit_low, fit_high, 5)
+		fit.SetParNames("N", "#mu", "#sigma", "#alpha", "n")
+		configure_core_parameters(fit, hist, mean_seed, sigma_seed, fit_low, fit_high)
+		fit.SetParameter(3, 1.5)
+		fit.SetParameter(4, 3.0)
+		fit.SetParLimits(3, 0.05, 10.0)
+		fit.SetParLimits(4, 1.01, 100.0)
+		fit_result = hist.Fit(fit, "QRS0N")
+		if fit_result_is_reliable(fit_result):
+			candidates.append((priority, fit_quality(fit_result), fit, model_name))
+
+	if fit_result_is_reliable(gaussian_result):
+		candidates.append((2, fit_quality(gaussian_result), gaussian, "Gaussian"))
+
+	if not candidates:
+		return None, "none converged"
+
+	# Prefer the most expressive reliable family; use fit quality to select
+	# between the equally complex left- and right-tail alternatives.
+	_, _, fit, model_name = min(candidates, key=lambda candidate: (candidate[0], candidate[1]))
 	fit.SetLineColor(ROOT.kBlue + 1)
 	fit.SetLineWidth(2)
+	fit.SetNpx(500)
 	fit.Draw("same")
-	return fit, int(fit_result)
+	return fit, model_name
 
 
 def robust_resolution_summary(hist):
@@ -280,6 +389,27 @@ def robust_resolution_summary(hist):
 	quantiles = array("d", (0.0, 0.0, 0.0))
 	hist.GetQuantiles(len(probabilities), quantiles, probabilities)
 	return quantiles[1], 0.5 * (quantiles[2] - quantiles[0])
+
+
+def set_resolution_y_range(hist, fit, margin_fraction=0.15):
+	x_axis = hist.GetXaxis()
+	y_min = 0.0
+	y_max = 0.0
+	for bin_index in range(x_axis.GetFirst(), x_axis.GetLast() + 1):
+		content = hist.GetBinContent(bin_index)
+		error = hist.GetBinError(bin_index)
+		y_min = min(y_min, content - error)
+		y_max = max(y_max, content + error)
+
+	if fit:
+		y_min = min(y_min, fit.GetMinimum(fit.GetXmin(), fit.GetXmax()))
+		y_max = max(y_max, fit.GetMaximum(fit.GetXmin(), fit.GetXmax()))
+
+	span = max(y_max - y_min, 1.0)
+	hist.SetMinimum(y_min - margin_fraction * span if y_min < 0.0 else 0.0)
+	hist.SetMaximum(y_max + margin_fraction * span)
+	ROOT.gPad.Modified()
+	ROOT.gPad.Update()
 
 
 def draw_2d(canvas, names, input_file, rebin_factors):
@@ -322,19 +452,21 @@ def draw_resolutions(canvas, names, input_file, rebin_factor):
 		hist.SetMarkerStyle(20)
 		hist.SetMarkerSize(0.8)
 		hist.Draw("E1")
-		fit, fit_status = fit_resolution(hist, name)
+		fit, fit_model = fit_resolution(hist, name)
+		set_resolution_y_range(hist, fit)
 		median, central_68_half_width = robust_resolution_summary(hist)
 		label = ROOT.TLatex()
 		label.SetNDC(True)
 		label.SetTextFont(42)
-		label.SetTextSize(0.031)
+		label.SetTextSize(0.034)
+		text_x = 0.24
 		if fit:
-			label.DrawLatex(0.17, 0.85, f"fit #mu = {fit.GetParameter(1):.4g}")
-			label.DrawLatex(0.17, 0.80, f"fit #sigma = {abs(fit.GetParameter(2)):.4g}")
-			if fit_status:
-				label.DrawLatex(0.17, 0.65, f"fit status = {fit_status}")
-		label.DrawLatex(0.17, 0.75, f"median = {median:.4g}")
-		label.DrawLatex(0.17, 0.70, f"#sigma_{{68}} = {central_68_half_width:.4g}")
+			label.DrawLatex(text_x, 0.85, f"fit #mu = {fit.GetParameter(1):.2g}")
+			label.DrawLatex(text_x, 0.80, f"fit #sigma = {abs(fit.GetParameter(2)):.2g}")
+		label.DrawLatex(text_x, 0.75, f"median = {median:.2g}")
+		label.DrawLatex(text_x, 0.70, f"#sigma_{{68}} = {central_68_half_width:.2g}")
+		fit_description = f"{fit_model}, converged" if fit else fit_model
+		label.DrawLatex(PAD_LEFT_MARGIN, 0.92, fit_description)
 		objects.extend(filter(None, (fit, draw_zero_line(hist), label, annotate_entries(hist))))
 	canvas.Update()
 	return objects
