@@ -13,19 +13,19 @@ extraEventCollections = {
     },
     "ShiftMuonDoubleTraversing": {
         "inputCollections": ("ShiftMuon",),
-        "quality": (3, 3),
+        "quality": 3,
     },
     "ShiftMuonTraversing": {
         "inputCollections": ("ShiftMuon",),
-        "quality": (2, 2),
+        "quality": 2,
     },
     "ShiftMuonDSA": {
         "inputCollections": ("ShiftMuon",),
-        "quality": (1, 1),
+        "quality": 1,
     },
     "ShiftMuonCosmic": {
         "inputCollections": ("ShiftMuon",),
-        "quality": (0, 0),
+        "quality": 0,
     },
     "GoodShiftDimuonVertex": {
         "inputCollections": ("ShiftDimuonVertex",),
