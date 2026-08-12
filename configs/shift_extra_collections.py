@@ -11,11 +11,21 @@ extraEventCollections = {
         "inputCollections": ["GenMuonPlus", "GenMuonMinus"],
         "status": (1, 1),
     },
-    "LooseShiftMuon": {
+    "ShiftMuonDoubleTraversing": {
         "inputCollections": ("ShiftMuon",),
-        "vz": (5000., 9999999.),
-        # "pt": (3., 9999999.),
-        # "eta": (-2.5, 2.5),
+        "quality": (3, 3),
+    },
+    "ShiftMuonTraversing": {
+        "inputCollections": ("ShiftMuon",),
+        "quality": (2, 2),
+    },
+    "ShiftMuonDSA": {
+        "inputCollections": ("ShiftMuon",),
+        "quality": (1, 1),
+    },
+    "ShiftMuonCosmic": {
+        "inputCollections": ("ShiftMuon",),
+        "quality": (0, 0),
     },
     "GoodShiftDimuonVertex": {
         "inputCollections": ("ShiftDimuonVertex",),

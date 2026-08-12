@@ -38,9 +38,40 @@ DIMUON_CORRELATIONS = [
 	"RecoVsGenDimuon_eta", "RecoVsGenDimuon_minv", "RecoVsGenDimuon_phi", "RecoVsGenDimuon_pt",
 	"RecoVsGenDimuon_pz", "RecoVsGenDimuon_vx", "RecoVsGenDimuon_vy", "RecoVsGenDimuon_vz",
 ]
-MUON_RESOLUTIONS = [
-  "MuonResolution_eta", "MuonResolution_phi", "MuonResolution_pt", "MuonResolution_pz",
-  "MuonResolution_vx", "MuonResolution_vy", "MuonResolution_vz",
+MUON_RESOLUTION_TYPES = [
+	("DoubleTraversing", "double_traversing", "Double Traversing"),
+	("Traversing", "traversing", "Traversing"),
+	("DSA", "dsa", "DSA"),
+	("Cosmic", "cosmic", "Cosmic"),
+]
+MUON_RESOLUTION_VARIABLES = [
+	("eta", "constrainedEta"),
+	("phi", "constrainedPhi"),
+	("pt", "constrainedPt"),
+	("pz", "constrainedPz"),
+	("vx", "constrainedVx"),
+	("vy", "constrainedVy"),
+	("vz", "constrainedVz"),
+]
+
+
+def muon_resolution_names(muon_type, constrained):
+	variable_index = 1 if constrained else 0
+	return [
+		f"MuonResolution{muon_type}_{variables[variable_index]}"
+		for variables in MUON_RESOLUTION_VARIABLES
+	]
+
+
+MUON_RESOLUTION_CANVASES = [
+	{
+		"names": muon_resolution_names(muon_type, constrained),
+		"canvas_name": f"canvas_muon_resolutions_{slug}{'_constrained' if constrained else ''}",
+		"canvas_title": f"{display_name} Muon Resolutions ({'Constrained' if constrained else 'Unconstrained'})",
+		"output_name": f"muon_resolutions_{slug}{'_constrained' if constrained else ''}.pdf",
+	}
+	for muon_type, slug, display_name in MUON_RESOLUTION_TYPES
+	for constrained in (False, True)
 ]
 DIMUON_RESOLUTIONS = [
 	"DimuonResolution_eta", "DimuonResolution_minv", "DimuonResolution_phi",
@@ -69,13 +100,6 @@ TITLES = {
 
 # These labels mirror the quantities filled in ShiftHistogramsFiller::FillResolutionPlots.
 RESOLUTION_TITLES = {
-	"MuonResolution_eta": "(#eta^{reco} - #eta^{gen}) / #eta^{gen}",
-	"MuonResolution_phi": "(#phi^{reco} - #phi^{gen}) / #phi^{gen}",
-	"MuonResolution_pt": "(p_{T}^{reco} - p_{T}^{gen}) / p_{T}^{gen}",
-	"MuonResolution_pz": "(p_{z}^{reco} - p_{z}^{gen}) / p_{z}^{gen}",
-	"MuonResolution_vx": "(v_{x}^{reco} - v_{x}^{gen}) / v_{x}^{gen}",
-	"MuonResolution_vy": "(v_{y}^{reco} - v_{y}^{gen}) / v_{y}^{gen}",
-	"MuonResolution_vz": "(v_{z}^{reco} - v_{z}^{gen}) / v_{z}^{gen}",
 	"DimuonResolution_eta": "(#eta_{#mu#mu}^{reco} - #eta_{#mu#mu}^{gen}) / #eta_{#mu#mu}^{gen}",
 	"DimuonResolution_phi": "(#phi_{#mu#mu}^{reco} - #phi_{#mu#mu}^{gen}) / #phi_{#mu#mu}^{gen}",
 	"DimuonResolution_pt": "(p_{T,#mu#mu}^{reco} - p_{T,#mu#mu}^{gen}) / p_{T,#mu#mu}^{gen}",
@@ -86,12 +110,33 @@ RESOLUTION_TITLES = {
 	"DimuonResolution_vz": "(v_{z,#mu#mu}^{reco} - v_{z,#mu#mu}^{gen}) / v_{z,#mu#mu}^{gen}",
 }
 
+MUON_RESOLUTION_LABELS = {
+	"eta": "#eta",
+	"phi": "#phi",
+	"pt": "p_{T}",
+	"pz": "p_{z}",
+	"vx": "v_{x}",
+	"vy": "v_{y}",
+	"vz": "v_{z}",
+}
+for muon_type, _, _ in MUON_RESOLUTION_TYPES:
+	for (variable, constrained_variable) in MUON_RESOLUTION_VARIABLES:
+		quantity = MUON_RESOLUTION_LABELS[variable]
+		RESOLUTION_TITLES[f"MuonResolution{muon_type}_{variable}"] = (
+			f"({quantity}^{{reco}} - {quantity}^{{gen}}) / {quantity}^{{gen}}"
+		)
+		RESOLUTION_TITLES[f"MuonResolution{muon_type}_{constrained_variable}"] = (
+			f"({quantity}^{{reco, constrained}} - {quantity}^{{gen}}) / {quantity}^{{gen}}"
+		)
+
 RESOLUTION_X_RANGES = {
-	"MuonResolution_vx": (-5000.0, 5000.0),
-	"MuonResolution_vy": (-5000.0, 5000.0),
 	"DimuonResolution_vx": (-5000.0, 5000.0),
 	"DimuonResolution_vy": (-5000.0, 5000.0),
 }
+for resolution_canvas in MUON_RESOLUTION_CANVASES:
+	for name in resolution_canvas["names"]:
+		if name.endswith(("_vx", "_vy", "_constrainedVx", "_constrainedVy")):
+			RESOLUTION_X_RANGES[name] = (-5000.0, 5000.0)
 
 
 HISTOGRAM_FILE_PATTERN = re.compile(
@@ -523,26 +568,37 @@ def main():
 	os.makedirs(output_dir, exist_ok=True)
 	print(f"Output directory: {output_dir}")
 
-	canvases = [
+	correlation_canvases = [
 		(ROOT.TCanvas("canvas_muon_correlations", "Muon Correlations", 900, 1600), 2, 4),
 		(ROOT.TCanvas("canvas_dimuon_correlations", "Dimuon Correlations", 900, 1600), 2, 4),
-		(ROOT.TCanvas("canvas_muon_resolutions", "Muon Resolutions", 900, 1600), 2, 4),
-		(ROOT.TCanvas("canvas_dimuon_resolutions", "Dimuon Resolutions", 900, 1600), 2, 4),
 	]
+	muon_resolution_canvases = [
+		(ROOT.TCanvas(spec["canvas_name"], spec["canvas_title"], 900, 1600), 2, 4)
+		for spec in MUON_RESOLUTION_CANVASES
+	]
+	dimuon_resolution_canvas = (
+		ROOT.TCanvas("canvas_dimuon_resolutions", "Dimuon Resolutions", 900, 1600), 2, 4
+	)
+	canvases = correlation_canvases + muon_resolution_canvases + [dimuon_resolution_canvas]
 	for canvas, columns, rows in canvases:
 		canvas.Divide(columns, rows)
 
 	# Keep references alive until all canvases have been serialized by PyROOT.
 	drawn_objects = []
-	drawn_objects += draw_2d(canvases[0][0], MUON_CORRELATIONS, input_file, correlation_rebin)
-	drawn_objects += draw_2d(canvases[1][0], DIMUON_CORRELATIONS, input_file, correlation_rebin)
-	drawn_objects += draw_resolutions(canvases[2][0], MUON_RESOLUTIONS, input_file, MUON_RESOLUTION_REBIN)
-	drawn_objects += draw_resolutions(canvases[3][0], DIMUON_RESOLUTIONS, input_file, DIMUON_RESOLUTION_REBIN)
+	drawn_objects += draw_2d(correlation_canvases[0][0], MUON_CORRELATIONS, input_file, correlation_rebin)
+	drawn_objects += draw_2d(correlation_canvases[1][0], DIMUON_CORRELATIONS, input_file, correlation_rebin)
+	for canvas_spec, (canvas, _, _) in zip(MUON_RESOLUTION_CANVASES, muon_resolution_canvases):
+		drawn_objects += draw_resolutions(
+			canvas, canvas_spec["names"], input_file, MUON_RESOLUTION_REBIN
+		)
+	drawn_objects += draw_resolutions(
+		dimuon_resolution_canvas[0], DIMUON_RESOLUTIONS, input_file, DIMUON_RESOLUTION_REBIN
+	)
 
 	output_names = [
 		"muon_correlations.pdf",
 		"dimuon_correlations.pdf",
-		"muon_resolutions.pdf",
+		*[spec["output_name"] for spec in MUON_RESOLUTION_CANVASES],
 		"dimuon_resolutions.pdf",
 	]
 	for (canvas, _, _), output_name in zip(canvases, output_names):

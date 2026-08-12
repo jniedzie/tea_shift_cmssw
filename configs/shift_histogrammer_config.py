@@ -3,7 +3,7 @@
 # ============================================================
 
 defaultHistParams = ()
-for name in ["GenMuon", "ShiftMuon", "LooseShiftMuon"]:
+for name in ["GenMuon", "ShiftMuon", "ShiftMuonDoubleTraversing", "ShiftMuonTraversing", "ShiftMuonDSA", "ShiftMuonCosmic"]:
   defaultHistParams += (
     ("Event"     , f"n{name}"       , 10  , 0     , 10    , "event"),
     (f"{name}"   , "pt"             , 200 , 0     , 20    , "muon"),
@@ -19,6 +19,14 @@ for name in ["GenMuon", "ShiftMuon", "LooseShiftMuon"]:
     continue
   
   defaultHistParams += (
+    (f"{name}"   , "constrainedPt"             , 200 , 0     , 20    , "muon"),
+    (f"{name}"   , "constrainedPz"             , 200 , -1000 , 100   , "muon"),
+    (f"{name}"   , "constrainedEta"            , 100 , -10   , 10    , "muon"),
+    (f"{name}"   , "constrainedPhi"            , 100 , -3.2  , 3.2   , "muon"),
+    (f"{name}"   , "constrainedVx"             , 100 , -300  , 300   , "muon"),
+    (f"{name}"   , "constrainedVy"             , 100 , -300  , 300   , "muon"),
+    (f"{name}"   , "constrainedVz"             , 100 , -20000, 20000 , "muon"),
+    
     (f"{name}"   , "dz"             , 100 , -20000, 20000 , "muon"),
     (f"{name}"   , "linePcaZ"       , 100 , -20000, 20000 , "muon"),
     (f"{name}"   , "trackVz"        , 100 , -20000, 20000 , "muon"),  
@@ -61,8 +69,6 @@ for name in ["ShiftDimuonVertex", "GoodShiftDimuonVertex"]:
 # ============================================================
 
 histParams = (
-  ("LooseShiftMuon"   , "minv"  , 200   ,  0  , 10  ,     "dimuon"),
-  
   (f"GenDimuon"   , "pt"                           , 200 , 0     , 20    , "dimuon"),
   (f"GenDimuon"   , "pz"                           , 200 , -1000 , 100   , "dimuon"),
   (f"GenDimuon"   , "eta"                          , 100 , -10   , 10    , "dimuon"),
@@ -71,14 +77,6 @@ histParams = (
   (f"GenDimuon"   , "vx"                           , 100 , -300  , 300   , "dimuon"),
   (f"GenDimuon"   , "vy"                           , 100 , -300  , 300   , "dimuon"),
   (f"GenDimuon"   , "vz"                           , 100 , -20000, 20000 , "dimuon"),
-
-  ("MuonResolution"   , "pt"    , 50    , -1  , 1   ,     "resolution"),
-  ("MuonResolution"   , "pz"    , 50    , -1  , 1   ,     "resolution"),
-  ("MuonResolution"   , "eta"   , 50    , -1  , 1   ,     "resolution"),
-  ("MuonResolution"   , "phi"   , 50    , -1  , 1   ,     "resolution"),
-  ("MuonResolution"   , "vx"    , 100   , -5000, 5000,     "resolution"),
-  ("MuonResolution"   , "vy"    , 100   , -5000, 5000,     "resolution"),
-  ("MuonResolution"   , "vz"    , 50    , -1  , 1   ,     "resolution"),
   
   ("DimuonResolution" , "pt"    , 50    , -1  , 1   ,     "resolution"),
   ("DimuonResolution" , "pz"    , 50    , -1  , 1   ,     "resolution"),
@@ -89,6 +87,25 @@ histParams = (
   ("DimuonResolution" , "vy"    , 100   , -5000, 5000,     "resolution"),
   ("DimuonResolution" , "vz"    , 50    , -1  , 1   ,     "resolution"),
 )
+
+for name in ["DoubleTraversing", "Traversing", "DSA", "Cosmic"]:
+  histParams += (
+    (f"MuonResolution{name}"   , "pt"    , 50    , -1  , 1      ,     "resolution"),
+    (f"MuonResolution{name}"   , "pz"    , 50    , -1  , 1      ,     "resolution"),
+    (f"MuonResolution{name}"   , "eta"   , 50    , -1  , 1      ,     "resolution"),
+    (f"MuonResolution{name}"   , "phi"   , 50    , -1  , 1      ,     "resolution"),
+    (f"MuonResolution{name}"   , "vx"    , 100   , -5000, 5000  ,     "resolution"),
+    (f"MuonResolution{name}"   , "vy"    , 100   , -5000, 5000  ,     "resolution"),
+    (f"MuonResolution{name}"   , "vz"    , 50    , -1  , 1      ,     "resolution"),
+    
+    (f"MuonResolution{name}"   , "constrainedPt"    , 50    , -1  , 1      ,     "resolution"),
+    (f"MuonResolution{name}"   , "constrainedPz"    , 50    , -1  , 1      ,     "resolution"),
+    (f"MuonResolution{name}"   , "constrainedEta"   , 50    , -1  , 1      ,     "resolution"),
+    (f"MuonResolution{name}"   , "constrainedPhi"   , 50    , -1  , 1      ,     "resolution"),
+    (f"MuonResolution{name}"   , "constrainedVx"    , 100   , -5000, 5000  ,     "resolution"),
+    (f"MuonResolution{name}"   , "constrainedVy"    , 100   , -5000, 5000  ,     "resolution"),
+    (f"MuonResolution{name}"   , "constrainedVz"    , 50    , -1  , 1      ,     "resolution"),
+  )
 
 # ============================================================
 # 2D histograms

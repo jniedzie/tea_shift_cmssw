@@ -34,16 +34,7 @@ void ShiftHistogramsFiller::FillGenLevel(const shared_ptr<Event> event) {
 }
 
 void ShiftHistogramsFiller::FillRecoLevel(const shared_ptr<Event> event) {
-  auto recoShiftMuons = event->GetCollection("LooseShiftMuon");
-
-  for (size_t i = 0; i < recoShiftMuons->size(); i++) {
-    auto muon1 = asNanoMuon(recoShiftMuons->at(i));
-    for (size_t j = i + 1; j < recoShiftMuons->size(); j++) {
-      auto muon2 = asNanoMuon(recoShiftMuons->at(j));
-      float invMass = (muon1->GetFourVector() + muon2->GetFourVector()).M();
-      histogramsHandler->Fill("LooseShiftMuon_minv", invMass);
-    }
-  }
+  
 }
 
 void ShiftHistogramsFiller::FillRecoVsGen2D(const shared_ptr<Event> event) {
@@ -93,30 +84,42 @@ void ShiftHistogramsFiller::FillResolutionPlots(const shared_ptr<Event> event) {
   // Implementation for resolution plots
   auto genMuons = event->GetCollection("GenMuon");
   auto genParticles = event->GetCollection("GenPart");
-  auto recoShiftMuons = event->GetCollection("ShiftMuon");
   auto recoShiftDimuons = event->GetCollection("ShiftDimuonVertex");
 
-  // Fill single muon resolution plots
-  for (size_t i = 0; i < recoShiftMuons->size(); i++) {
-    auto recoMuon = recoShiftMuons->at(i);
-    int genPartIdx = recoMuon->Get("genPartIdx");
-    if (genPartIdx < 0 || genPartIdx >= genParticles->size()) continue;
-    auto genMuon = asNanoGenParticle(genParticles->at(genPartIdx));
+  vector<string> shiftMuonTypes = {"DoubleTraversing", "Traversing", "DSA", "Cosmic"};
+  map<string, shared_ptr<PhysicsObjects>> recoShiftMuons;
+  for (const auto& type : shiftMuonTypes) {
+    recoShiftMuons[type] = event->GetCollection("ShiftMuon" + type);
+  }
 
-    histogramsHandler->Fill("MuonResolution_pt",
-                            (recoMuon->GetAs<float>("pt") - genMuon->GetAs<float>("pt")) / genMuon->GetAs<float>("pt"));
-    histogramsHandler->Fill("MuonResolution_pz",
-                            (recoMuon->GetAs<float>("pz") - genMuon->GetAs<float>("pz")) / genMuon->GetAs<float>("pz"));
-    histogramsHandler->Fill("MuonResolution_eta",
-                            (recoMuon->GetAs<float>("eta") - genMuon->GetAs<float>("eta")) / genMuon->GetAs<float>("eta"));
-    histogramsHandler->Fill("MuonResolution_phi",
-                            (recoMuon->GetAs<float>("phi") - genMuon->GetAs<float>("phi")) / genMuon->GetAs<float>("phi"));
-    histogramsHandler->Fill("MuonResolution_vx",
-                            (recoMuon->GetAs<float>("vx") - genMuon->GetAs<float>("vx")) / genMuon->GetAs<float>("vx"));
-    histogramsHandler->Fill("MuonResolution_vy",
-                            (recoMuon->GetAs<float>("vy") - genMuon->GetAs<float>("vy")) / genMuon->GetAs<float>("vy"));
-    histogramsHandler->Fill("MuonResolution_vz",
-                            (recoMuon->GetAs<float>("vz") - genMuon->GetAs<float>("vz")) / genMuon->GetAs<float>("vz"));
+  // Fill single muon resolution plots
+  for (const auto& [name, recoCollection] : recoShiftMuons) {
+    for (size_t i = 0; i < recoCollection->size(); i++) {
+      auto recoMuon = recoCollection->at(i);
+      int genPartIdx = recoMuon->Get("genPartIdx");
+      if (genPartIdx < 0 || genPartIdx >= genParticles->size()) continue;
+      auto genMuon = asNanoGenParticle(genParticles->at(genPartIdx));
+
+      histogramsHandler->Fill("MuonResolution" + name + "_pt", (recoMuon->GetAs<float>("pt") - genMuon->GetAs<float>("pt")) / genMuon->GetAs<float>("pt"));
+      histogramsHandler->Fill("MuonResolution" + name + "_pz", (recoMuon->GetAs<float>("pz") - genMuon->GetAs<float>("pz")) / genMuon->GetAs<float>("pz"));
+      histogramsHandler->Fill("MuonResolution" + name + "_eta", (recoMuon->GetAs<float>("eta") - genMuon->GetAs<float>("eta")) / genMuon->GetAs<float>("eta"));
+      histogramsHandler->Fill("MuonResolution" + name + "_phi", (recoMuon->GetAs<float>("phi") - genMuon->GetAs<float>("phi")) / genMuon->GetAs<float>("phi"));
+      histogramsHandler->Fill("MuonResolution" + name + "_vx", (recoMuon->GetAs<float>("vx") - genMuon->GetAs<float>("vx")) / genMuon->GetAs<float>("vx"));
+      histogramsHandler->Fill("MuonResolution" + name + "_vy", (recoMuon->GetAs<float>("vy") - genMuon->GetAs<float>("vy")) / genMuon->GetAs<float>("vy"));
+      histogramsHandler->Fill("MuonResolution" + name + "_vz", (recoMuon->GetAs<float>("vz") - genMuon->GetAs<float>("vz")) / genMuon->GetAs<float>("vz"));
+
+      // Invalid constrained fits are stored as zeros in NanoAOD. Filling them would manufacture a spike at residual -1 and bias every constrained
+      // scale plot, so require the explicit validity bit.
+      if (recoMuon->GetAs<int>("constrainedValid")) {
+        histogramsHandler->Fill("MuonResolution" + name + "_constrainedPt", (recoMuon->GetAs<float>("constrainedPt") - genMuon->GetAs<float>("pt")) / genMuon->GetAs<float>("pt"));
+        histogramsHandler->Fill("MuonResolution" + name + "_constrainedPz", (recoMuon->GetAs<float>("constrainedPz") - genMuon->GetAs<float>("pz")) / genMuon->GetAs<float>("pz"));
+        histogramsHandler->Fill("MuonResolution" + name + "_constrainedEta", (recoMuon->GetAs<float>("constrainedEta") - genMuon->GetAs<float>("eta")) / genMuon->GetAs<float>("eta"));
+        histogramsHandler->Fill("MuonResolution" + name + "_constrainedPhi", (recoMuon->GetAs<float>("constrainedPhi") - genMuon->GetAs<float>("phi")) / genMuon->GetAs<float>("phi"));
+        histogramsHandler->Fill("MuonResolution" + name + "_constrainedVx", (recoMuon->GetAs<float>("constrainedVx") - genMuon->GetAs<float>("vx")) / genMuon->GetAs<float>("vx"));
+        histogramsHandler->Fill("MuonResolution" + name + "_constrainedVy", (recoMuon->GetAs<float>("constrainedVy") - genMuon->GetAs<float>("vy")) / genMuon->GetAs<float>("vy"));
+        histogramsHandler->Fill("MuonResolution" + name + "_constrainedVz", (recoMuon->GetAs<float>("constrainedVz") - genMuon->GetAs<float>("vz")) / genMuon->GetAs<float>("vz"));
+      }
+    }
   }
 
   // Fill dimuon resolution plots
