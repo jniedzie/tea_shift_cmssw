@@ -100,6 +100,19 @@ void ShiftHistogramsFiller::FillResolutionPlots(const shared_ptr<Event> event) {
       if (genPartIdx < 0 || genPartIdx >= genParticles->size()) continue;
       auto genMuon = asNanoGenParticle(genParticles->at(genPartIdx));
 
+      // CMS-DP-2015-015 uses the signed inverse-pT (curvature) residual.
+      // PDG IDs +13/-13 denote mu-/mu+, hence the opposite sign for charge.
+      double const genPt = genMuon->GetAs<float>("pt");
+      double const recoPt = recoMuon->GetAs<float>("pt");
+      int const genCharge = genMuon->GetPdgId() > 0 ? -1 : 1;
+      int const recoCharge = recoMuon->GetAs<int>("charge");
+      if (genPt > 0. && recoPt > 0.) {
+        double const genQOverPt = genCharge / genPt;
+        double const recoQOverPt = recoCharge / recoPt;
+        histogramsHandler->Fill("MuonResolution" + name + "_qOverPt",
+                                (recoQOverPt - genQOverPt) / genQOverPt);
+      }
+
       histogramsHandler->Fill("MuonResolution" + name + "_pt", (recoMuon->GetAs<float>("pt") - genMuon->GetAs<float>("pt")) / genMuon->GetAs<float>("pt"));
       histogramsHandler->Fill("MuonResolution" + name + "_pz", (recoMuon->GetAs<float>("pz") - genMuon->GetAs<float>("pz")) / genMuon->GetAs<float>("pz"));
       histogramsHandler->Fill("MuonResolution" + name + "_eta", (recoMuon->GetAs<float>("eta") - genMuon->GetAs<float>("eta")) / genMuon->GetAs<float>("eta"));
@@ -111,6 +124,13 @@ void ShiftHistogramsFiller::FillResolutionPlots(const shared_ptr<Event> event) {
       // Invalid constrained fits are stored as zeros in NanoAOD. Filling them would manufacture a spike at residual -1 and bias every constrained
       // scale plot, so require the explicit validity bit.
       if (recoMuon->GetAs<int>("constrainedValid")) {
+        double const constrainedPt = recoMuon->GetAs<float>("constrainedPt");
+        if (genPt > 0. && constrainedPt > 0.) {
+          double const genQOverPt = genCharge / genPt;
+          double const constrainedQOverPt = recoCharge / constrainedPt;
+          histogramsHandler->Fill("MuonResolution" + name + "_constrainedQOverPt",
+                                  (constrainedQOverPt - genQOverPt) / genQOverPt);
+        }
         histogramsHandler->Fill("MuonResolution" + name + "_constrainedPt", (recoMuon->GetAs<float>("constrainedPt") - genMuon->GetAs<float>("pt")) / genMuon->GetAs<float>("pt"));
         histogramsHandler->Fill("MuonResolution" + name + "_constrainedPz", (recoMuon->GetAs<float>("constrainedPz") - genMuon->GetAs<float>("pz")) / genMuon->GetAs<float>("pz"));
         histogramsHandler->Fill("MuonResolution" + name + "_constrainedEta", (recoMuon->GetAs<float>("constrainedEta") - genMuon->GetAs<float>("eta")) / genMuon->GetAs<float>("eta"));
@@ -125,17 +145,51 @@ void ShiftHistogramsFiller::FillResolutionPlots(const shared_ptr<Event> event) {
   // Fill dimuon resolution plots
   auto [genJPsiVec, genJPsiVertex] = GetGenJPsiDimuonVector(genParticles);
 
+  vector<string> const dimuonQualityTypes = {
+      "CosmicCosmic",
+      "CosmicDSA",
+      "CosmicTraversing",
+      "CosmicDoubleTraversing",
+      "DSADSA",
+      "DSATraversing",
+      "DSADoubleTraversing",
+      "TraversingTraversing",
+      "TraversingDoubleTraversing",
+      "DoubleTraversingDoubleTraversing",
+  };
+
   for (size_t i = 0; i < recoShiftDimuons->size(); i++) {
     auto recoDimuon = recoShiftDimuons->at(i);
 
-    histogramsHandler->Fill("DimuonResolution_pt", (recoDimuon->GetAs<float>("pt") - genJPsiVec.Pt()) / genJPsiVec.Pt());
-    histogramsHandler->Fill("DimuonResolution_pz", (recoDimuon->GetAs<float>("pz") - genJPsiVec.Pz()) / genJPsiVec.Pz());
-    histogramsHandler->Fill("DimuonResolution_eta", (recoDimuon->GetAs<float>("eta") - genJPsiVec.Eta()) / genJPsiVec.Eta());
-    histogramsHandler->Fill("DimuonResolution_phi", (recoDimuon->GetAs<float>("phi") - genJPsiVec.Phi()) / genJPsiVec.Phi());
-    histogramsHandler->Fill("DimuonResolution_minv", (recoDimuon->GetAs<float>("mass") - genJPsiVec.M()) / genJPsiVec.M());
-    histogramsHandler->Fill("DimuonResolution_vx", (recoDimuon->GetAs<float>("vx") - genJPsiVertex.X()) / genJPsiVertex.X());
-    histogramsHandler->Fill("DimuonResolution_vy", (recoDimuon->GetAs<float>("vy") - genJPsiVertex.Y()) / genJPsiVertex.Y());
-    histogramsHandler->Fill("DimuonResolution_vz", (recoDimuon->GetAs<float>("vz") - genJPsiVertex.Z()) / genJPsiVertex.Z());
+    string qualityType;
+    for (auto const& candidate : dimuonQualityTypes) {
+      if (recoDimuon->GetAs<int>("is" + candidate)) {
+        qualityType = candidate;
+        break;
+      }
+    }
+    if (qualityType.empty()) continue;
+
+    string const histogramPrefix = "DimuonResolution" + qualityType + "_";
+    histogramsHandler->Fill(histogramPrefix + "pt", (recoDimuon->GetAs<float>("pt") - genJPsiVec.Pt()) / genJPsiVec.Pt());
+    histogramsHandler->Fill(histogramPrefix + "pz", (recoDimuon->GetAs<float>("pz") - genJPsiVec.Pz()) / genJPsiVec.Pz());
+    histogramsHandler->Fill(histogramPrefix + "eta", (recoDimuon->GetAs<float>("eta") - genJPsiVec.Eta()) / genJPsiVec.Eta());
+    histogramsHandler->Fill(histogramPrefix + "phi", (recoDimuon->GetAs<float>("phi") - genJPsiVec.Phi()) / genJPsiVec.Phi());
+    histogramsHandler->Fill(histogramPrefix + "minv", (recoDimuon->GetAs<float>("mass") - genJPsiVec.M()) / genJPsiVec.M());
+    histogramsHandler->Fill(histogramPrefix + "vx", (recoDimuon->GetAs<float>("vx") - genJPsiVertex.X()) / genJPsiVertex.X());
+    histogramsHandler->Fill(histogramPrefix + "vy", (recoDimuon->GetAs<float>("vy") - genJPsiVertex.Y()) / genJPsiVertex.Y());
+    histogramsHandler->Fill(histogramPrefix + "vz", (recoDimuon->GetAs<float>("vz") - genJPsiVertex.Z()) / genJPsiVertex.Z());
+
+    if (!recoDimuon->GetAs<int>("constrainedValid")) continue;
+
+    histogramsHandler->Fill(histogramPrefix + "constrainedPt", (recoDimuon->GetAs<float>("constrainedPt") - genJPsiVec.Pt()) / genJPsiVec.Pt());
+    histogramsHandler->Fill(histogramPrefix + "constrainedPz", (recoDimuon->GetAs<float>("constrainedPz") - genJPsiVec.Pz()) / genJPsiVec.Pz());
+    histogramsHandler->Fill(histogramPrefix + "constrainedEta", (recoDimuon->GetAs<float>("constrainedEta") - genJPsiVec.Eta()) / genJPsiVec.Eta());
+    histogramsHandler->Fill(histogramPrefix + "constrainedPhi", (recoDimuon->GetAs<float>("constrainedPhi") - genJPsiVec.Phi()) / genJPsiVec.Phi());
+    histogramsHandler->Fill(histogramPrefix + "constrainedMinv", (recoDimuon->GetAs<float>("constrainedMass") - genJPsiVec.M()) / genJPsiVec.M());
+    histogramsHandler->Fill(histogramPrefix + "constrainedVx", (recoDimuon->GetAs<float>("constrainedVx") - genJPsiVertex.X()) / genJPsiVertex.X());
+    histogramsHandler->Fill(histogramPrefix + "constrainedVy", (recoDimuon->GetAs<float>("constrainedVy") - genJPsiVertex.Y()) / genJPsiVertex.Y());
+    histogramsHandler->Fill(histogramPrefix + "constrainedVz", (recoDimuon->GetAs<float>("constrainedVz") - genJPsiVertex.Z()) / genJPsiVertex.Z());
   }
 }
 

@@ -77,19 +77,47 @@ histParams = (
   (f"GenDimuon"   , "vx"                           , 100 , -300  , 300   , "dimuon"),
   (f"GenDimuon"   , "vy"                           , 100 , -300  , 300   , "dimuon"),
   (f"GenDimuon"   , "vz"                           , 100 , -20000, 20000 , "dimuon"),
-  
-  ("DimuonResolution" , "pt"    , 50    , -1  , 1   ,     "resolution"),
-  ("DimuonResolution" , "pz"    , 50    , -1  , 1   ,     "resolution"),
-  ("DimuonResolution" , "eta"   , 50    , -1  , 1   ,     "resolution"),
-  ("DimuonResolution" , "phi"   , 50    , -1  , 1   ,     "resolution"),
-  ("DimuonResolution" , "minv"  , 50    , -1  , 1   ,     "resolution"),
-  ("DimuonResolution" , "vx"    , 100   , -5000, 5000,     "resolution"),
-  ("DimuonResolution" , "vy"    , 100   , -5000, 5000,     "resolution"),
-  ("DimuonResolution" , "vz"    , 50    , -1  , 1   ,     "resolution"),
 )
+
+dimuonQualityTypes = [
+  "CosmicCosmic",
+  "CosmicDSA",
+  "CosmicTraversing",
+  "CosmicDoubleTraversing",
+  "DSADSA",
+  "DSATraversing",
+  "DSADoubleTraversing",
+  "TraversingTraversing",
+  "TraversingDoubleTraversing",
+  "DoubleTraversingDoubleTraversing",
+]
+
+for name in dimuonQualityTypes:
+  histParams += (
+    (f"DimuonResolution{name}" , "pt"              , 50    , -1   , 1    , "resolution"),
+    (f"DimuonResolution{name}" , "pz"              , 50    , -1   , 1    , "resolution"),
+    (f"DimuonResolution{name}" , "eta"             , 50    , -1   , 1    , "resolution"),
+    (f"DimuonResolution{name}" , "phi"             , 50    , -1   , 1    , "resolution"),
+    (f"DimuonResolution{name}" , "minv"            , 50    , -1   , 1    , "resolution"),
+    (f"DimuonResolution{name}" , "vx"              , 100   , -5000, 5000, "resolution"),
+    (f"DimuonResolution{name}" , "vy"              , 100   , -5000, 5000, "resolution"),
+    (f"DimuonResolution{name}" , "vz"              , 50    , -1   , 1    , "resolution"),
+
+    (f"DimuonResolution{name}" , "constrainedPt"   , 50    , -1   , 1    , "resolution"),
+    (f"DimuonResolution{name}" , "constrainedPz"   , 50    , -1   , 1    , "resolution"),
+    (f"DimuonResolution{name}" , "constrainedEta"  , 50    , -1   , 1    , "resolution"),
+    (f"DimuonResolution{name}" , "constrainedPhi"  , 50    , -1   , 1    , "resolution"),
+    (f"DimuonResolution{name}" , "constrainedMinv" , 50    , -1   , 1    , "resolution"),
+    (f"DimuonResolution{name}" , "constrainedVx"   , 100   , -5000, 5000, "resolution"),
+    (f"DimuonResolution{name}" , "constrainedVy"   , 100   , -5000, 5000, "resolution"),
+    (f"DimuonResolution{name}" , "constrainedVz"   , 50    , -1   , 1    , "resolution"),
+  )
 
 for name in ["DoubleTraversing", "Traversing", "DSA", "Cosmic"]:
   histParams += (
+    # Signed-curvature residual used in CMS-DP-2015-015.  With 200 bins over
+    # [-2, 2], every bin has the same 0.02 width as the published reference.
+    (f"MuonResolution{name}"   , "qOverPt"    , 200   , -2  , 2      ,     "resolution"),
     (f"MuonResolution{name}"   , "pt"    , 50    , -1  , 1      ,     "resolution"),
     (f"MuonResolution{name}"   , "pz"    , 50    , -1  , 1      ,     "resolution"),
     (f"MuonResolution{name}"   , "eta"   , 50    , -1  , 1      ,     "resolution"),
@@ -99,6 +127,7 @@ for name in ["DoubleTraversing", "Traversing", "DSA", "Cosmic"]:
     (f"MuonResolution{name}"   , "vz"    , 50    , -1  , 1      ,     "resolution"),
     
     (f"MuonResolution{name}"   , "constrainedPt"    , 50    , -1  , 1      ,     "resolution"),
+    (f"MuonResolution{name}"   , "constrainedQOverPt", 200  , -2  , 2      ,     "resolution"),
     (f"MuonResolution{name}"   , "constrainedPz"    , 50    , -1  , 1      ,     "resolution"),
     (f"MuonResolution{name}"   , "constrainedEta"   , 50    , -1  , 1      ,     "resolution"),
     (f"MuonResolution{name}"   , "constrainedPhi"   , 50    , -1  , 1      ,     "resolution"),

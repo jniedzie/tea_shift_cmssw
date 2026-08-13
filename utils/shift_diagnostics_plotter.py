@@ -18,6 +18,11 @@ ROOT.gStyle.SetLabelOffset(0.012, "XY")
 ROOT.gStyle.SetTitleOffset(1.15, "X")
 ROOT.gStyle.SetTitleOffset(1.35, "Y")
 
+PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CMS_DP_QOVERPT_DATA = os.path.join(
+	PROJECT_DIR, "data", "cms_dp_2015_015_qoverpt_digitized.txt"
+)
+
 # Rebin factors for all histograms on the corresponding resolution canvas.
 MUON_RESOLUTION_REBIN = 1
 DIMUON_RESOLUTION_REBIN = 2
@@ -44,8 +49,54 @@ MUON_RESOLUTION_TYPES = [
 	("DSA", "dsa", "DSA"),
 	("Cosmic", "cosmic", "Cosmic"),
 ]
+DIMUON_RESOLUTION_TYPES = [
+	("CosmicCosmic", "cosmic_cosmic", "Cosmic + Cosmic"),
+	("CosmicDSA", "cosmic_dsa", "Cosmic + DSA"),
+	("CosmicTraversing", "cosmic_traversing", "Cosmic + Traversing"),
+	("CosmicDoubleTraversing", "cosmic_double_traversing", "Cosmic + Double Traversing"),
+	("DSADSA", "dsa_dsa", "DSA + DSA"),
+	("DSATraversing", "dsa_traversing", "DSA + Traversing"),
+	("DSADoubleTraversing", "dsa_double_traversing", "DSA + Double Traversing"),
+	("TraversingTraversing", "traversing_traversing", "Traversing + Traversing"),
+	("TraversingDoubleTraversing", "traversing_double_traversing", "Traversing + Double Traversing"),
+	("DoubleTraversingDoubleTraversing", "double_traversing_double_traversing", "Double Traversing + Double Traversing"),
+]
+QOVERPT_SHIFT_STYLES = {
+	"DoubleTraversing": (ROOT.kBlue + 1, "Double-traversing"),
+	# "Traversing": (ROOT.kOrange + 7, "Traversing"),
+	"DSA": (ROOT.kViolet + 1, "DSA"),
+	"Cosmic": (ROOT.kCyan + 2, "Cosmic"),
+}
+# The q/pT samples have very different occupancies.  These fixed factors keep
+# the well-populated double-traversing peak detailed while suppressing empty-bin
+# fluctuations in the smaller DSA, cosmic, and traversing samples.
+QOVERPT_SHIFT_REBIN = {
+	"DoubleTraversing": 5,
+	"Traversing": 100,
+	"DSA": 5,
+	"Cosmic": 5,
+}
+QOVERPT_REFERENCE_STYLES = [
+	("prompt_tracker_muon", ROOT.kBlack, 1, "CMS prompt #mu: tracker+muon fit"),
+	("prompt_muon_only", ROOT.TColor.GetColor("#ff0000"), 3,
+	 "CMS prompt #mu: muon-only, no vertex constraint"),
+	("displaced_muon_only", ROOT.TColor.GetColor("#59d354"), 4,
+	 "CMS displaced #mu: displaced muon-only fit"),
+	("standard_muon_only_displaced", ROOT.TColor.GetColor("#ff00ff"), 4,
+	 "CMS displaced #mu: standard muon-only, no vertex constraint"),
+]
 MUON_RESOLUTION_VARIABLES = [
 	("eta", "constrainedEta"),
+	("phi", "constrainedPhi"),
+	("pt", "constrainedPt"),
+	("pz", "constrainedPz"),
+	("vx", "constrainedVx"),
+	("vy", "constrainedVy"),
+	("vz", "constrainedVz"),
+]
+DIMUON_RESOLUTION_VARIABLES = [
+	("eta", "constrainedEta"),
+	("minv", "constrainedMinv"),
 	("phi", "constrainedPhi"),
 	("pt", "constrainedPt"),
 	("pz", "constrainedPz"),
@@ -73,9 +124,25 @@ MUON_RESOLUTION_CANVASES = [
 	for muon_type, slug, display_name in MUON_RESOLUTION_TYPES
 	for constrained in (False, True)
 ]
-DIMUON_RESOLUTIONS = [
-	"DimuonResolution_eta", "DimuonResolution_minv", "DimuonResolution_phi",
-	"DimuonResolution_pt", "DimuonResolution_pz", "DimuonResolution_vx", "DimuonResolution_vy", "DimuonResolution_vz",
+
+
+def dimuon_resolution_names(dimuon_type, constrained):
+	variable_index = 1 if constrained else 0
+	return [
+		f"DimuonResolution{dimuon_type}_{variables[variable_index]}"
+		for variables in DIMUON_RESOLUTION_VARIABLES
+	]
+
+
+DIMUON_RESOLUTION_CANVASES = [
+	{
+		"names": dimuon_resolution_names(dimuon_type, constrained),
+		"canvas_name": f"canvas_dimuon_resolutions_{slug}{'_constrained' if constrained else ''}",
+		"canvas_title": f"{display_name} Dimuon Resolutions ({'Constrained' if constrained else 'Unconstrained'})",
+		"output_name": f"dimuon_resolutions_{slug}{'_constrained' if constrained else ''}.pdf",
+	}
+	for dimuon_type, slug, display_name in DIMUON_RESOLUTION_TYPES
+	for constrained in (False, True)
 ]
 
 TITLES = {
@@ -99,16 +166,7 @@ TITLES = {
 }
 
 # These labels mirror the quantities filled in ShiftHistogramsFiller::FillResolutionPlots.
-RESOLUTION_TITLES = {
-	"DimuonResolution_eta": "(#eta_{#mu#mu}^{reco} - #eta_{#mu#mu}^{gen}) / #eta_{#mu#mu}^{gen}",
-	"DimuonResolution_phi": "(#phi_{#mu#mu}^{reco} - #phi_{#mu#mu}^{gen}) / #phi_{#mu#mu}^{gen}",
-	"DimuonResolution_pt": "(p_{T,#mu#mu}^{reco} - p_{T,#mu#mu}^{gen}) / p_{T,#mu#mu}^{gen}",
-	"DimuonResolution_pz": "(p_{z,#mu#mu}^{reco} - p_{z,#mu#mu}^{gen}) / p_{z,#mu#mu}^{gen}",
-	"DimuonResolution_minv": "(m_{#mu#mu}^{reco} - m_{#mu#mu}^{gen}) / m_{#mu#mu}^{gen}",
-	"DimuonResolution_vx": "(v_{x,#mu#mu}^{reco} - v_{x,#mu#mu}^{gen}) / v_{x,#mu#mu}^{gen}",
-	"DimuonResolution_vy": "(v_{y,#mu#mu}^{reco} - v_{y,#mu#mu}^{gen}) / v_{y,#mu#mu}^{gen}",
-	"DimuonResolution_vz": "(v_{z,#mu#mu}^{reco} - v_{z,#mu#mu}^{gen}) / v_{z,#mu#mu}^{gen}",
-}
+RESOLUTION_TITLES = {}
 
 MUON_RESOLUTION_LABELS = {
 	"eta": "#eta",
@@ -129,11 +187,32 @@ for muon_type, _, _ in MUON_RESOLUTION_TYPES:
 			f"({quantity}^{{reco, constrained}} - {quantity}^{{gen}}) / {quantity}^{{gen}}"
 		)
 
-RESOLUTION_X_RANGES = {
-	"DimuonResolution_vx": (-5000.0, 5000.0),
-	"DimuonResolution_vy": (-5000.0, 5000.0),
+DIMUON_RESOLUTION_LABELS = {
+	"eta": "#eta_{#mu#mu}",
+	"minv": "m_{#mu#mu}",
+	"phi": "#phi_{#mu#mu}",
+	"pt": "p_{T,#mu#mu}",
+	"pz": "p_{z,#mu#mu}",
+	"vx": "v_{x,#mu#mu}",
+	"vy": "v_{y,#mu#mu}",
+	"vz": "v_{z,#mu#mu}",
 }
+for dimuon_type, _, _ in DIMUON_RESOLUTION_TYPES:
+	for variable, constrained_variable in DIMUON_RESOLUTION_VARIABLES:
+		quantity = DIMUON_RESOLUTION_LABELS[variable]
+		RESOLUTION_TITLES[f"DimuonResolution{dimuon_type}_{variable}"] = (
+			f"({quantity}^{{reco}} - {quantity}^{{gen}}) / {quantity}^{{gen}}"
+		)
+		RESOLUTION_TITLES[f"DimuonResolution{dimuon_type}_{constrained_variable}"] = (
+			f"({quantity}^{{reco, constrained}} - {quantity}^{{gen}}) / {quantity}^{{gen}}"
+		)
+
+RESOLUTION_X_RANGES = {}
 for resolution_canvas in MUON_RESOLUTION_CANVASES:
+	for name in resolution_canvas["names"]:
+		if name.endswith(("_vx", "_vy", "_constrainedVx", "_constrainedVy")):
+			RESOLUTION_X_RANGES[name] = (-5000.0, 5000.0)
+for resolution_canvas in DIMUON_RESOLUTION_CANVASES:
 	for name in resolution_canvas["names"]:
 		if name.endswith(("_vx", "_vy", "_constrainedVx", "_constrainedVy")):
 			RESOLUTION_X_RANGES[name] = (-5000.0, 5000.0)
@@ -497,6 +576,14 @@ def draw_resolutions(canvas, names, input_file, rebin_factor):
 		hist.SetMarkerStyle(20)
 		hist.SetMarkerSize(0.8)
 		hist.Draw("E1")
+		if hist.Integral(1, hist.GetNbinsX()) <= 0.0:
+			label = ROOT.TLatex()
+			label.SetNDC(True)
+			label.SetTextFont(42)
+			label.SetTextSize(0.040)
+			label.DrawLatex(PAD_LEFT_MARGIN, 0.92, "No in-range entries")
+			objects.extend(filter(None, (draw_zero_line(hist), label, annotate_entries(hist))))
+			continue
 		fit, fit_model = fit_resolution(hist, name)
 		set_resolution_y_range(hist, fit)
 		median, central_68_half_width = robust_resolution_summary(hist)
@@ -517,19 +604,159 @@ def draw_resolutions(canvas, names, input_file, rebin_factor):
 	return objects
 
 
+def load_qoverpt_reference_graphs(path):
+	"""Load and unit-normalize the approximate CMS-DP raster digitization."""
+	points = {key: (array("d"), array("d")) for key, _, _, _ in QOVERPT_REFERENCE_STYLES}
+
+	with open(path, encoding="utf-8") as data_file:
+		for line in data_file:
+			if not line.strip() or line.startswith("#"):
+				continue
+			values = line.split()
+			if len(values) != 5:
+				raise ValueError(f"malformed q/pT reference row: {line.rstrip()}")
+			x_value = float(values[0])
+			for column, (key, _, _, _) in enumerate(QOVERPT_REFERENCE_STYLES, 1):
+				y_value = float(values[column])
+				if math.isfinite(y_value):
+					points[key][0].append(x_value)
+					points[key][1].append(y_value)
+
+	graphs = {}
+	for key, color, line_style, _ in QOVERPT_REFERENCE_STYLES:
+		x_values, y_values = points[key]
+		# The digitized values are event counts sampled at the original 0.02-wide
+		# bin centers.  Missing values were below the visible logarithmic frame;
+		# normalize the available digitized area over the displayed x range.
+		bin_width = min(
+			(x_values[index] - x_values[index - 1]
+			 for index in range(1, len(x_values))
+			 if x_values[index] > x_values[index - 1]),
+			default=0.02,
+		)
+		area = sum(y_values) * bin_width
+		if area <= 0.0:
+			raise ValueError(f"q/pT reference curve '{key}' has no positive area")
+		for index in range(len(y_values)):
+			y_values[index] /= area
+		graph = ROOT.TGraph(len(x_values), x_values, y_values)
+		graph.SetName(f"cms_dp_2015_015_{key}")
+		graph.SetLineColor(color)
+		graph.SetLineStyle(line_style)
+		graph.SetLineWidth(3)
+		graphs[key] = graph
+	return graphs
+
+
+def draw_qoverpt_comparison(canvas, input_file, reference_path):
+	"""Overlay all eight SHIFT fits and the four CMS-DP-2015-015 references."""
+	canvas.cd()
+	canvas.SetLogy(True)
+	canvas.SetLeftMargin(0.15)
+	canvas.SetRightMargin(0.04)
+	canvas.SetBottomMargin(0.17)
+	canvas.SetTopMargin(0.34)
+
+	objects = []
+	shift_curves = []
+	for muon_type, (color, display_name) in QOVERPT_SHIFT_STYLES.items():
+		for constrained in (False,):
+			variable = "constrainedQOverPt" if constrained else "qOverPt"
+			name = f"MuonResolution{muon_type}_{variable}"
+			source_hist = input_file.Get(f"resolution/{name}")
+			if not source_hist:
+				print(f"Warning: histogram '{name}' was not found")
+				continue
+			hist = source_hist.Clone(f"draw_{name}")
+			hist.SetDirectory(0)
+			rebin_factor = QOVERPT_SHIFT_REBIN[muon_type]
+			source_bin_count = hist.GetNbinsX()
+			hist = hist.Rebin(rebin_factor, f"draw_{name}_rebin{rebin_factor}")
+			hist.SetDirectory(0)
+			print(
+				f"q/pT rebin {name}: factor={rebin_factor}, "
+				f"bins={source_bin_count}->{hist.GetNbinsX()}, "
+				f"width={hist.GetBinWidth(1):g}"
+			)
+			area = hist.Integral(1, hist.GetNbinsX(), "width")
+			if area <= 0.0:
+				print(f"Warning: histogram '{name}' has no entries in [-2, 2]")
+				continue
+			hist.Scale(1.0 / area)
+			x_values = array("d", (hist.GetBinCenter(index) for index in range(1, hist.GetNbinsX() + 1)))
+			y_values = array("d", (hist.GetBinContent(index) for index in range(1, hist.GetNbinsX() + 1)))
+			curve = ROOT.TGraph(hist.GetNbinsX(), x_values, y_values)
+			curve.SetName(f"curve_{name}")
+			curve.SetLineColor(color)
+			curve.SetLineStyle(2 if constrained else 1)
+			curve.SetLineWidth(2)
+			label = (
+				f"SHIFT {display_name}: target-constrained fit"
+				if constrained else f"SHIFT {display_name}: unconstrained fit"
+			)
+			shift_curves.append((curve, label))
+
+	reference_graphs = load_qoverpt_reference_graphs(reference_path)
+	shift_y_max = max(
+		(curve.GetY()[index]
+		 for curve, _ in shift_curves for index in range(curve.GetN())),
+		default=1.0,
+	)
+	reference_y_max = max(
+		(reference_graphs[key].GetY()[index]
+		 for key in reference_graphs for index in range(reference_graphs[key].GetN())),
+		default=1.0,
+	)
+	y_max = max(shift_y_max, reference_y_max)
+	frame = canvas.DrawFrame(-2.0, 5.0e-3, 2.0, max(10.0, 3.0 * y_max))
+	set_axes_titles(
+		frame,
+		"[(q/p_{T})_{reco} - (q/p_{T})_{gen}] / (q/p_{T})_{gen}",
+		"Unit-normalized density",
+	)
+	frame.GetXaxis().SetNdivisions(510)
+	objects.append(frame)
+
+	for curve, _ in shift_curves:
+		curve.Draw("L SAME")
+	for key, _, _, _ in QOVERPT_REFERENCE_STYLES:
+		reference_graphs[key].Draw("L SAME")
+
+	legend = ROOT.TLegend(0.08, 0.68, 0.96, 0.97)
+	legend.SetNColumns(2)
+	legend.SetBorderSize(0)
+	legend.SetFillColor(ROOT.kWhite)
+	legend.SetFillStyle(1001)
+	legend.SetTextFont(42)
+	legend.SetTextSize(0.021)
+	legend.SetHeader(
+		"Unit area in -2 < residual < 2; CMS-DP-2015-015 curves are an approximate raster digitization",
+		"C",
+	)
+	for curve, label in shift_curves:
+		legend.AddEntry(curve, label, "l")
+	for key, _, _, label in QOVERPT_REFERENCE_STYLES:
+		legend.AddEntry(reference_graphs[key], label, "l")
+	legend.Draw()
+
+	canvas.RedrawAxis()
+	canvas.Update()
+	objects.extend([*[curve for curve, _ in shift_curves], *reference_graphs.values(), legend])
+	return objects
+
+
 def parse_arguments():
 	parser = argparse.ArgumentParser(description="Plot SHIFT reconstruction diagnostics")
-	project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 	parser.add_argument(
 		"--input",
 		help="versioned input ROOT file (default: highest-version file in --histograms-dir)",
 	)
 	parser.add_argument(
-		"--histograms-dir", default=f"{project_dir}/plots/",
+		"--histograms-dir", default=f"{PROJECT_DIR}/plots/",
 		help="directory searched for histograms_vN_<hash>.root files",
 	)
 	parser.add_argument(
-		"--output-dir", default=f"{project_dir}/plots",
+		"--output-dir", default=f"{PROJECT_DIR}/plots",
 		help="parent directory for versioned plot directories",
 	)
 	parser.add_argument(
@@ -540,6 +767,9 @@ def parse_arguments():
 
 
 def main():
+	# set batch mode
+	ROOT.gROOT.SetBatch(True)
+
 	args = parse_arguments()
 	try:
 		if args.input:
@@ -576,10 +806,14 @@ def main():
 		(ROOT.TCanvas(spec["canvas_name"], spec["canvas_title"], 900, 1600), 2, 4)
 		for spec in MUON_RESOLUTION_CANVASES
 	]
-	dimuon_resolution_canvas = (
-		ROOT.TCanvas("canvas_dimuon_resolutions", "Dimuon Resolutions", 900, 1600), 2, 4
+	dimuon_resolution_canvases = [
+		(ROOT.TCanvas(spec["canvas_name"], spec["canvas_title"], 900, 1600), 2, 4)
+		for spec in DIMUON_RESOLUTION_CANVASES
+	]
+	qoverpt_canvas = (
+		ROOT.TCanvas("canvas_muon_qoverpt_comparison", "Muon q/pT Resolution Comparison", 1400, 1600), 1, 1
 	)
-	canvases = correlation_canvases + muon_resolution_canvases + [dimuon_resolution_canvas]
+	canvases = correlation_canvases + muon_resolution_canvases + dimuon_resolution_canvases
 	for canvas, columns, rows in canvases:
 		canvas.Divide(columns, rows)
 
@@ -591,18 +825,21 @@ def main():
 		drawn_objects += draw_resolutions(
 			canvas, canvas_spec["names"], input_file, MUON_RESOLUTION_REBIN
 		)
-	drawn_objects += draw_resolutions(
-		dimuon_resolution_canvas[0], DIMUON_RESOLUTIONS, input_file, DIMUON_RESOLUTION_REBIN
-	)
+	for canvas_spec, (canvas, _, _) in zip(DIMUON_RESOLUTION_CANVASES, dimuon_resolution_canvases):
+		drawn_objects += draw_resolutions(
+			canvas, canvas_spec["names"], input_file, DIMUON_RESOLUTION_REBIN
+		)
+	drawn_objects += draw_qoverpt_comparison(qoverpt_canvas[0], input_file, CMS_DP_QOVERPT_DATA)
 
 	output_names = [
 		"muon_correlations.pdf",
 		"dimuon_correlations.pdf",
 		*[spec["output_name"] for spec in MUON_RESOLUTION_CANVASES],
-		"dimuon_resolutions.pdf",
+		*[spec["output_name"] for spec in DIMUON_RESOLUTION_CANVASES],
 	]
 	for (canvas, _, _), output_name in zip(canvases, output_names):
 		canvas.SaveAs(f"{output_dir}/{output_name}")
+	qoverpt_canvas[0].SaveAs(f"{output_dir}/muon_qoverpt_resolution_comparison.pdf")
 	input_file.Close()
 
 
