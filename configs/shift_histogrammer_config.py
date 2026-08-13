@@ -2,7 +2,23 @@
 # Default single-muon histograms
 # ============================================================
 
-defaultHistParams = ()
+defaultHistParams = (
+  ("ShiftMuon",  "quality"         , 20  , -10   , 10    , "muon"),
+
+  ("ShiftDimuonVertex", "isDoubleTraversingDoubleTraversing", 3  , -1    , 2     , "dimuon"),
+  ("ShiftDimuonVertex", "isTraversingDoubleTraversing", 3  , -1    , 2     , "dimuon"),
+  ("ShiftDimuonVertex", "isDSADoubleTraversing", 3  , -1    , 2     , "dimuon"),
+  ("ShiftDimuonVertex", "isTraversingTraversing", 3  , -1    , 2     , "dimuon"),
+  ("ShiftDimuonVertex", "isDSATraversing", 3  , -1    , 2     , "dimuon"),
+  ("ShiftDimuonVertex", "isDSADSA", 3  , -1    , 2     , "dimuon"),
+  ("ShiftDimuonVertex", "isCosmicCosmic", 3  , -1    , 2     , "dimuon"),
+  ("ShiftDimuonVertex", "isCosmicDSA", 3  , -1    , 2     , "dimuon"),
+  ("ShiftDimuonVertex", "isCosmicTraversing", 3  , -1    , 2     , "dimuon"),
+  ("ShiftDimuonVertex", "isCosmicDoubleTraversing", 3  , -1    , 2     , "dimuon"),
+
+)
+
+
 for name in ["GenMuon", "ShiftMuon", "ShiftMuonDoubleTraversing", "ShiftMuonTraversing", "ShiftMuonDSA", "ShiftMuonCosmic"]:
   defaultHistParams += (
     ("Event"     , f"n{name}"       , 10  , 0     , 10    , "event"),
@@ -135,6 +151,62 @@ for name in ["DoubleTraversing", "Traversing", "DSA", "Cosmic"]:
     (f"MuonResolution{name}"   , "constrainedVy"    , 100   , -5000, 5000  ,     "resolution"),
     (f"MuonResolution{name}"   , "constrainedVz"    , 50    , -1  , 1      ,     "resolution"),
   )
+
+# ============================================================
+# Generator-coordinate reconstruction efficiencies
+# ============================================================
+
+def frange(start, stop, step):
+  values = []
+  current = start
+  while current <= stop:
+    values.append(round(current, 10))
+    current += step
+  return tuple(values)
+
+muonEfficiencyBinning = {
+  "pt":  (0, .2, .4, .6, .8, 1., 1.2, 1.4, 1.6, 1.8, 2., 2.3, 2.6, 3., 3.5, 4.5, 6., 8.),
+  "pz":  frange(-300, 50, 10),
+  "eta": frange(-5, -3, 0.10),
+  "phi": frange(-3.2, 3.2, 0.4),
+  "vz":  (14500, 14600, 14680, 14720, 14750, 14775, 14800, 14825, 14850, 14880, 14920, 15000, 15100),
+}
+
+dimuonEfficiencyBinning = {
+  "pt":  (0, 1., 2., 3., 6., 10.),
+  "pz":  (-400, -300, -150, -125, -100, -50, -20, 20, 40),
+  "eta": frange(-8, -3, 0.5),
+  "phi": frange(-3.2, 3.2, 0.8),
+  "vz":  (14500, 14600, 14700, 14750, 14800, 14850, 14900, 15000, 15100),
+}
+
+muonEfficiencyPrefixes = [
+  "ShiftMuonEfficiency",
+  "ShiftMuonDoubleTraversingEfficiency",
+  "ShiftMuonDSAEfficiency",
+  "ShiftMuonCosmicEfficiency",
+]
+
+dimuonEfficiencyPrefixes = [
+  "ShiftDimuonVertexEfficiency",
+  "ShiftDimuonVertexCosmicDoubleTraversingEfficiency",
+  "ShiftDimuonVertexDSADSAEfficiency",
+  "ShiftDimuonVertexDSADoubleTraversingEfficiency",
+  "ShiftDimuonVertexDoubleTraversingDoubleTraversingEfficiency",
+  "ShiftDimuonVertexOtherEfficiency",
+]
+
+irregularHistParams = ()
+for prefixes, binning in (
+    (muonEfficiencyPrefixes, muonEfficiencyBinning),
+    (dimuonEfficiencyPrefixes, dimuonEfficiencyBinning),
+):
+  for prefix in prefixes:
+    for variable, binEdges in binning.items():
+      irregularHistParams += (
+        (prefix, f"{variable}_total", binEdges, "efficiency"),
+        (prefix, f"{variable}_pass", binEdges, "efficiency"),
+      )
 
 # ============================================================
 # 2D histograms

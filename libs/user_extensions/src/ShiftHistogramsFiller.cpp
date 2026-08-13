@@ -2,6 +2,9 @@
 
 #include "ConfigManager.hpp"
 
+#include <map>
+#include <set>
+
 using namespace std;
 
 ShiftHistogramsFiller::ShiftHistogramsFiller(shared_ptr<HistogramsHandler> histogramsHandler_) : histogramsHandler(histogramsHandler_) {
@@ -16,6 +19,115 @@ void ShiftHistogramsFiller::Fill(const shared_ptr<Event> event) {
   FillRecoLevel(event);
   FillRecoVsGen2D(event);
   FillResolutionPlots(event);
+  FillEfficiencies(event);
+}
+
+void ShiftHistogramsFiller::FillEfficiencies(const shared_ptr<Event> event) {
+  auto genParticles = event->GetCollection("GenPart");
+  auto recoMuons = event->GetCollection("ShiftMuon");
+  auto recoDimuons = event->GetCollection("ShiftDimuonVertex");
+  auto genCandidates = GetGenJPsiCandidates(genParticles);
+
+  map<int, vector<size_t>> recoMuonIndicesByGenIndex;
+  for (size_t recoIndex = 0; recoIndex < recoMuons->size(); ++recoIndex) {
+    int const genIndex = recoMuons->at(recoIndex)->GetAs<int>("genPartIdx");
+    if (genIndex >= 0 && static_cast<size_t>(genIndex) < genParticles->size())
+      recoMuonIndicesByGenIndex[genIndex].push_back(recoIndex);
+  }
+
+  vector<pair<string, int>> const muonCategories = {
+      {"DoubleTraversing", 3},
+      {"DSA", 1},
+      {"Cosmic", 0},
+  };
+  auto fillMuon = [this](string const& prefix, shared_ptr<NanoGenParticle> const& muon, bool pass) {
+    map<string, double> const values = {
+        {"pt", muon->GetAs<float>("pt")},   {"pz", muon->GetAs<float>("pz")},
+        {"eta", muon->GetAs<float>("eta")}, {"phi", muon->GetAs<float>("phi")},
+        {"vz", muon->GetAs<float>("vz")},
+    };
+    for (auto const& [variable, value] : values) {
+      histogramsHandler->FillUnweighted(prefix + "_" + variable + "_total", value);
+      if (pass)
+        histogramsHandler->FillUnweighted(prefix + "_" + variable + "_pass", value);
+    }
+  };
+
+  for (auto const& candidate : genCandidates) {
+    for (auto const& [genIndex, genMuon] : vector<pair<int, shared_ptr<NanoGenParticle>>>{
+             {candidate.muonMinusIdx, candidate.muonMinus}, {candidate.muonPlusIdx, candidate.muonPlus}}) {
+      auto const matchIt = recoMuonIndicesByGenIndex.find(genIndex);
+      bool const matched = matchIt != recoMuonIndicesByGenIndex.end();
+      map<int, bool> categoryMatched;
+      if (matched) {
+        for (size_t const recoIndex : matchIt->second) {
+          auto const recoMuon = recoMuons->at(recoIndex);
+          int const quality = recoMuon->GetAs<int>("quality");
+          categoryMatched[quality] = true;
+        }
+      }
+      fillMuon("ShiftMuonEfficiency", genMuon, matched);
+      for (auto const& [category, quality] : muonCategories)
+        fillMuon("ShiftMuon" + category + "Efficiency", genMuon, categoryMatched[quality]);
+    }
+  }
+
+  vector<string> const rareDimuonTypes = {
+      "CosmicCosmic", "CosmicDSA", "CosmicTraversing", "DSATraversing",
+      "TraversingDoubleTraversing", "TraversingTraversing",
+  };
+  vector<string> const commonDimuonTypes = {
+      "CosmicDoubleTraversing", "DSADSA", "DSADoubleTraversing", "DoubleTraversingDoubleTraversing",
+  };
+  auto fillDimuon = [this](string const& prefix, GenJPsiCandidate const& candidate, bool pass) {
+    map<string, double> const values = {
+        {"pt", candidate.momentum.Pt()},   {"pz", candidate.momentum.Pz()},
+        {"eta", candidate.momentum.Eta()}, {"phi", candidate.momentum.Phi()},
+        {"vz", candidate.vertex.Z()},
+    };
+    for (auto const& [variable, value] : values) {
+      histogramsHandler->FillUnweighted(prefix + "_" + variable + "_total", value);
+      if (pass)
+        histogramsHandler->FillUnweighted(prefix + "_" + variable + "_pass", value);
+    }
+  };
+
+  for (auto const& candidate : genCandidates) {
+    bool matched = false;
+    map<string, bool> typeMatched;
+    for (auto const& recoDimuon : *recoDimuons) {
+      int const firstRecoIndex = recoDimuon->GetAs<int>("muonIdx1");
+      int const secondRecoIndex = recoDimuon->GetAs<int>("muonIdx2");
+      if (firstRecoIndex < 0 || secondRecoIndex < 0 ||
+          static_cast<size_t>(firstRecoIndex) >= recoMuons->size() ||
+          static_cast<size_t>(secondRecoIndex) >= recoMuons->size())
+        continue;
+      set<int> const recoGenIndices = {
+          recoMuons->at(firstRecoIndex)->GetAs<int>("genPartIdx"),
+          recoMuons->at(secondRecoIndex)->GetAs<int>("genPartIdx"),
+      };
+      set<int> const truthGenIndices = {candidate.muonMinusIdx, candidate.muonPlusIdx};
+      if (recoGenIndices.size() != 2 || recoGenIndices != truthGenIndices)
+        continue;
+
+      matched = true;
+      bool isRare = false;
+      for (auto const& type : rareDimuonTypes)
+        isRare = isRare || recoDimuon->GetAs<int>("is" + type);
+      if (isRare) {
+        typeMatched["Other"] = true;
+      }
+      for (auto const& type : commonDimuonTypes) {
+        if (!recoDimuon->GetAs<int>("is" + type))
+          continue;
+        typeMatched[type] = true;
+      }
+    }
+    fillDimuon("ShiftDimuonVertexEfficiency", candidate, matched);
+    for (auto const& type : commonDimuonTypes)
+      fillDimuon("ShiftDimuonVertex" + type + "Efficiency", candidate, typeMatched[type]);
+    fillDimuon("ShiftDimuonVertexOtherEfficiency", candidate, typeMatched["Other"]);
+  }
 }
 
 void ShiftHistogramsFiller::FillGenLevel(const shared_ptr<Event> event) {
@@ -193,29 +305,57 @@ void ShiftHistogramsFiller::FillResolutionPlots(const shared_ptr<Event> event) {
   }
 }
 
-pair<TLorentzVector, TVector3> ShiftHistogramsFiller::GetGenJPsiDimuonVector(const shared_ptr<PhysicsObjects> genParticles) {
-  shared_ptr<NanoGenParticle> muon1 = nullptr;
-  shared_ptr<NanoGenParticle> muon2 = nullptr;
-
-  for (size_t i = 0; i < genParticles->size(); i++) {
-    auto particle = asNanoGenParticle(genParticles->at(i));
-    if (particle->IsMotherJPsi(genParticles)) {
-      if (!muon1)
-        muon1 = particle;
-      else
-        muon2 = particle;
-    }
-    if (muon1 && muon2) break;  // found both muons, no need to continue
+vector<ShiftHistogramsFiller::GenJPsiCandidate> ShiftHistogramsFiller::GetGenJPsiCandidates(
+    const shared_ptr<PhysicsObjects> genParticles) {
+  struct DaughterIndices {
+    vector<int> minus;
+    vector<int> plus;
+  };
+  map<int, DaughterIndices> daughtersByMother;
+  for (size_t index = 0; index < genParticles->size(); ++index) {
+    auto const particle = asNanoGenParticle(genParticles->at(index));
+    if (abs(particle->GetPdgId()) != 13 || particle->GetAs<int>("status") != 1)
+      continue;
+    int const motherIndex = particle->GetMotherIndex();
+    if (motherIndex < 0 || static_cast<size_t>(motherIndex) >= genParticles->size())
+      continue;
+    if (abs(genParticles->at(motherIndex)->GetAs<int>("pdgId")) != 443)
+      continue;
+    if (particle->GetPdgId() == 13)
+      daughtersByMother[motherIndex].minus.push_back(index);
+    else
+      daughtersByMother[motherIndex].plus.push_back(index);
   }
 
-  if (!muon1 || !muon2) {
+  vector<GenJPsiCandidate> candidates;
+  constexpr float muonMass = 0.1056583745;
+  for (auto const& [motherIndex, daughters] : daughtersByMother) {
+    if (daughters.minus.size() != 1 || daughters.plus.size() != 1) {
+      warn() << "Expected exactly one stable mu- and mu+ daughter for GenPart J/psi index " << motherIndex
+             << ", found " << daughters.minus.size() << " and " << daughters.plus.size() << ". Skipping." << endl;
+      continue;
+    }
+    int const minusIndex = daughters.minus.front();
+    int const plusIndex = daughters.plus.front();
+    auto const minus = asNanoGenParticle(genParticles->at(minusIndex));
+    auto const plus = asNanoGenParticle(genParticles->at(plusIndex));
+    TLorentzVector const momentum = minus->GetFourVector(muonMass) + plus->GetFourVector(muonMass);
+    TVector3 const vertex(
+        0.5 * (minus->GetAs<float>("vx") + plus->GetAs<float>("vx")),
+        0.5 * (minus->GetAs<float>("vy") + plus->GetAs<float>("vy")),
+        0.5 * (minus->GetAs<float>("vz") + plus->GetAs<float>("vz")));
+    candidates.push_back({motherIndex, minusIndex, plusIndex, minus, plus, momentum, vertex});
+  }
+  return candidates;
+}
+
+pair<TLorentzVector, TVector3> ShiftHistogramsFiller::GetGenJPsiDimuonVector(const shared_ptr<PhysicsObjects> genParticles) {
+  auto const candidates = GetGenJPsiCandidates(genParticles);
+  if (candidates.empty()) {
     warn() << "Could not find both muons from JPsi decay." << endl;
     return make_pair(TLorentzVector(), TVector3());  // return a zero vector and zero vertex
   }
-
-  float muonMass = 0.1056583745;  // GeV/c^2
-  TLorentzVector genJPsiVec = muon1->GetFourVector(muonMass) + muon2->GetFourVector(muonMass);
-  TVector3 muon1Vertex(muon1->GetAs<float>("vx"), muon1->GetAs<float>("vy"), muon1->GetAs<float>("vz"));
-
-  return make_pair(genJPsiVec, muon1Vertex);
+  if (candidates.size() > 1)
+    warn() << "Found more than one generator J/psi -> mu+mu- candidate; legacy single-candidate plots use the first." << endl;
+  return make_pair(candidates.front().momentum, candidates.front().vertex);
 }
