@@ -265,17 +265,20 @@ for resolution_canvas in DIMUON_RESOLUTION_CANVASES:
     if name.endswith(("_vx", "_vy", "_constrainedVx", "_constrainedVy")):
       RESOLUTION_X_RANGES[name] = (-5000.0, 5000.0)
 
-HISTOGRAM_FILE_PATTERN = re.compile(r"v([1-9][0-9]*)_([0-9a-f]{7,40}(?:-dirty-[0-9a-f]{8})?)")
+HISTOGRAM_FILE_PATTERN = re.compile(
+    r"v([1-9][0-9]*)_([0-9a-f]{7,40}(?:-dirty-[0-9a-f]{8})?(?:_[A-Za-z0-9][A-Za-z0-9_-]*)?)")
 
 
 def histogram_version(path):
   match = HISTOGRAM_FILE_PATTERN.fullmatch(os.path.basename(os.path.dirname(path)))
   if not match:
-    raise ValueError(f"histogram file '{path}' must be located in 'vN_<hash>/histograms.root'")
+    raise ValueError(
+        f"histogram file '{path}' must be located in "
+        "'vN_<hash>[_<recoVariant>]/histograms.root'")
   return int(match.group(1)), match.group(2)
 
 
-def latest_histogram_file(histograms_dir):
+def select_histogram_file(histograms_dir, requested_version=None):
   candidates = []
   for input_path in glob.glob(os.path.join(histograms_dir, "v*_*", "histograms.root")):
     try:
@@ -285,15 +288,20 @@ def latest_histogram_file(histograms_dir):
     candidates.append((version, os.path.basename(os.path.dirname(input_path)), input_path, provenance_tag))
 
   if not candidates:
-    raise RuntimeError(f"No 'vN_<hash>/histograms.root' files found in '{histograms_dir}'")
+    raise RuntimeError(
+        f"No 'vN_<hash>[_<recoVariant>]/histograms.root' files found in '{histograms_dir}'")
 
-  latest_version = max(candidate[0] for candidate in candidates)
-  latest_candidates = [candidate for candidate in candidates if candidate[0] == latest_version]
-  if len(latest_candidates) != 1:
-    names = ", ".join(sorted(candidate[1] for candidate in latest_candidates))
-    raise RuntimeError(f"Multiple histogram files claim version v{latest_version}: {names}")
+  selected_version = requested_version
+  if selected_version is None:
+    selected_version = max(candidate[0] for candidate in candidates)
+  selected_candidates = [candidate for candidate in candidates if candidate[0] == selected_version]
+  if not selected_candidates:
+    raise RuntimeError(f"No histogram file found for version v{selected_version} in '{histograms_dir}'")
+  if len(selected_candidates) != 1:
+    names = ", ".join(sorted(candidate[1] for candidate in selected_candidates))
+    raise RuntimeError(f"Multiple histogram files claim version v{selected_version}: {names}")
 
-  version, _, path, provenance_tag = latest_candidates[0]
+  version, _, path, provenance_tag = selected_candidates[0]
   return path, version, provenance_tag
 
 
@@ -1001,14 +1009,21 @@ def draw_efficiencies(canvas, input_file, object_name, categories):
 
 def parse_arguments():
   parser = argparse.ArgumentParser(description="Plot SHIFT reconstruction diagnostics")
-  parser.add_argument(
+  input_selection = parser.add_mutually_exclusive_group()
+  input_selection.add_argument(
       "--input",
       help="versioned input ROOT file (default: highest-version file in --histograms-dir)",
+  )
+  input_selection.add_argument(
+      "--version",
+      type=int,
+      metavar="N",
+      help="plot version vN from --histograms-dir instead of the highest version",
   )
   parser.add_argument(
       "--histograms-dir",
       default=f"{PROJECT_DIR}/plots/",
-      help="directory searched for histograms_vN_<hash>.root files",
+      help="directory searched for vN_<hash>[_<recoVariant>]/histograms.root files",
   )
   parser.add_argument(
       "--output-dir",
@@ -1035,7 +1050,9 @@ def main():
       input_path = args.input
       version, provenance_tag = histogram_version(input_path)
     else:
-      input_path, version, provenance_tag = latest_histogram_file(args.histograms_dir)
+      if args.version is not None and args.version < 1:
+        raise ValueError("--version must be a positive integer")
+      input_path, version, provenance_tag = select_histogram_file(args.histograms_dir, args.version)
   except (RuntimeError, ValueError) as error:
     raise SystemExit(f"error: {error}") from error
 

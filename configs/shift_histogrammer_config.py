@@ -249,13 +249,15 @@ import glob
 import re
 
 from shift_extra_collections import extraEventCollections
-from shift_paths import base_path, campaign, sample
+from shift_paths import base_path, campaign, sample, reco_variant
 from Logger import info
 
-
 def latest_versioned_sample():
-  reco_variant = os.environ.get("SHIFT_RECO_VARIANT", "")
-  step4_merged = f"step4_{reco_variant}_merged" if reco_variant else "step4_merged"
+  current_reco_variant = reco_variant
+  
+  print(f"\n\nCurrent reco variant: {current_reco_variant}\n\n")
+  
+  step4_merged = f"step4{current_reco_variant}_merged" if current_reco_variant else "step4_merged"
   samples_dir = f"{base_path}/{sample}/{campaign}/samples/{step4_merged}"
   sample_pattern = re.compile(r"ntuple_0_([0-9a-f]{7,40}(?:-dirty-[0-9a-f]{8})?)\.root")
   samples = []
@@ -270,17 +272,43 @@ def latest_versioned_sample():
 
   samples.sort()
   _, _, input_path, provenance_tag = samples[-1]
-  return input_path, len(samples), provenance_tag
+
+  project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+  
+  variant_output_component = f"{current_reco_variant}/" if current_reco_variant else ""
+  plots_dir = f"{project_dir}/plots/{variant_output_component}"
+
+  version_pattern = re.compile(r"^v([0-9]+)_([^/_]+)(?:_([^/]+))?$")
+  latest_version = 0
+  existing_version_for_hash = None
+  for output_path in glob.glob(f"{project_dir}/plots/v*_*"):
+    if not os.path.isdir(output_path):
+      continue
+    dir_name = os.path.basename(output_path)
+    match = version_pattern.fullmatch(dir_name)
+    if not match:
+      continue
+    version_number = int(match.group(1))
+    latest_version = max(latest_version, version_number)
+    output_hash = match.group(2)
+    output_variant = match.group(3) or ""
+    if output_hash == provenance_tag and output_variant == current_reco_variant:
+      if existing_version_for_hash is None:
+        existing_version_for_hash = version_number
+      else:
+        existing_version_for_hash = max(existing_version_for_hash, version_number)
+
+  sample_version = existing_version_for_hash if existing_version_for_hash is not None else latest_version + 1
+  return input_path, sample_version, provenance_tag
 
 nEvents = -1
 
 input_path, sample_version, provenance_tag = latest_versioned_sample()
 project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-reco_variant = os.environ.get("SHIFT_RECO_VARIANT", "")
-variant_output_component = f"{reco_variant}/" if reco_variant else ""
+variant_suffix = f"{reco_variant}" if reco_variant else ""
 
 inputFilePath = input_path
-histogramsOutputFilePath = f"{project_dir}/plots/{variant_output_component}v{sample_version}_{provenance_tag}/histograms.root"
+histogramsOutputFilePath = f"{project_dir}/plots/v{sample_version}_{provenance_tag}{variant_suffix}/histograms.root"
 
 info(f"Selected sample v{sample_version}_{provenance_tag}: {inputFilePath}")
 info(f"Histogram output: {histogramsOutputFilePath}")
