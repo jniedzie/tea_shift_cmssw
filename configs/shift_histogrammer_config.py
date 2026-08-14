@@ -35,6 +35,12 @@ for name in ["GenMuon", "ShiftMuon"] + [f"ShiftMuon{category}" for category in m
     (f"{name}"   , "constrainedVy"             , 100 , -300  , 300   , "muon"),
     (f"{name}"   , "constrainedVz"             , 100 , -20000, 20000 , "muon"),
     
+    (f"{name}"   , "nCSCHits"        , 20  , 0     , 20    , "muon"),
+    (f"{name}"   , "nDTHits"         , 20  , 0     , 20    , "muon"),
+    (f"{name}"   , "nRPCHits"        , 20  , 0     , 20    , "muon"),
+    (f"{name}"   , "nGEMHits"        , 20  , 0     , 20    , "muon"),
+    (f"{name}"   , "nME0Hits"        , 20  , 0     , 20    , "muon"),
+
     (f"{name}"   , "dz"             , 100 , -20000, 20000 , "muon"),
     (f"{name}"   , "linePcaZ"       , 100 , -20000, 20000 , "muon"),
     (f"{name}"   , "trackVz"        , 100 , -20000, 20000 , "muon"),  
@@ -128,6 +134,10 @@ for name in muonCategories:
     (f"MuonResolution{name}"   , "constrainedVy"    , 100   , -5000, 5000  ,     "resolution"),
     (f"MuonResolution{name}"   , "constrainedVz"    , 50    , -1  , 1      ,     "resolution"),
   )
+
+histParams += (
+  ("MuonResolutionSingleEndcap", "qOverPt", 200, -2, 2, "resolution"),
+)
 
 # ============================================================
 # Generator-coordinate reconstruction efficiencies

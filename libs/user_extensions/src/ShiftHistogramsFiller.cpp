@@ -279,6 +279,26 @@ void ShiftHistogramsFiller::FillResolutionPlots(const shared_ptr<Event> event) {
     }
   }
 
+  // This aggregate is intentionally limited to the q/pT comparison. Filling
+  // only its qOverPt histogram keeps all other resolution products unchanged.
+  auto const singleEndcapMuons = event->GetCollection("ShiftMuonSingleEndcap");
+  for (auto const& recoMuon : *singleEndcapMuons) {
+    int const genPartIdx = recoMuon->GetAs<int>("genPartIdx");
+    if (genPartIdx < 0 || static_cast<size_t>(genPartIdx) >= genParticles->size())
+      continue;
+    auto const genMuon = asNanoGenParticle(genParticles->at(genPartIdx));
+    double const genPt = genMuon->GetAs<float>("pt");
+    double const recoPt = recoMuon->GetAs<float>("pt");
+    if (genPt <= 0. || recoPt <= 0.)
+      continue;
+    int const genCharge = genMuon->GetPdgId() > 0 ? -1 : 1;
+    int const recoCharge = recoMuon->GetAs<int>("charge");
+    double const genQOverPt = genCharge / genPt;
+    double const recoQOverPt = recoCharge / recoPt;
+    histogramsHandler->Fill("MuonResolutionSingleEndcap_qOverPt",
+                            (recoQOverPt - genQOverPt) / genQOverPt);
+  }
+
   // Fill dimuon resolution plots
   auto [genJPsiVec, genJPsiVertex] = GetGenJPsiDimuonVector(genParticles);
 

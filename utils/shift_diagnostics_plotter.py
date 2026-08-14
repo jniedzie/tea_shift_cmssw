@@ -74,28 +74,24 @@ DIMUON_SUMMARY_TYPES = [
     ("Other", "other", "Other"),
 ]
 QOVERPT_SHIFT_STYLES = {
-    "BothEndcaps": (ROOT.TColor.GetColor("#D55E00"), "Both Endcaps"),
-    "NearEndcapOnly": (ROOT.TColor.GetColor("#000000"), "Near Endcap Only"),
-    "NearEndcapAndBarrel": (ROOT.TColor.GetColor("#0072B2"), "Near Endcap + Barrel"),
-    "FarEndcapOnly": (ROOT.TColor.GetColor("#332288"), "Far Endcap Only"),
-    "Unclassified": (ROOT.TColor.GetColor("#999999"), "Unclassified"),
+    "BothEndcaps": (ROOT.kRed, "Both Endcaps"),
+    "SingleEndcap": (ROOT.kBlue, "Single Endcap"),
 }
 # The q/pT topology samples have very different occupancies. These fixed
-# factors keep the populous both-endcap and near-endcap samples detailed while
-# suppressing empty-bin fluctuations in the rarer categories.
+# factors keep the populous categories detailed while suppressing empty-bin
+# fluctuations in the rarer unclassified sample.
 QOVERPT_SHIFT_REBIN = {
     "BothEndcaps": 5,
-    "NearEndcapOnly": 5,
-    "NearEndcapAndBarrel": 20,
-    "FarEndcapOnly": 10,
+    "SingleEndcap": 5,
     "Unclassified": 20,
 }
 QOVERPT_REFERENCE_STYLES = [
-    ("prompt_tracker_muon", ROOT.TColor.GetColor("#0072B2"), 1, "prompt #mu, tracker+muon"),
+    ("prompt_tracker_muon", ROOT.kBlack, 1, "prompt #mu, tracker+muon"),
     ("prompt_muon_only", ROOT.TColor.GetColor("#E69F00"), 1, "prompt #mu, muon-only"),
-    ("displaced_muon_only", ROOT.TColor.GetColor("#009E73"), 1, "displaced #mu, displaced"),
+    ("displaced_muon_only", ROOT.TColor.GetColor("#009E73"), 1,
+     "displaced #mu (displaced-muon reconstruction)"),
     ("standard_muon_only_displaced", ROOT.TColor.GetColor("#CC79A7"), 1,
-     "displaced #mu, standard"),
+     "displaced #mu (standard-muon reconstruction)"),
 ]
 MUON_RESOLUTION_VARIABLES = [
     ("eta", "constrainedEta"),
@@ -896,7 +892,7 @@ def draw_qoverpt_comparison(canvas, input_file, reference_path):
   shift_by_type = {muon_type: (curve, label) for muon_type, curve, label in shift_curves}
   cms_entries = [(reference_graphs[key], label) for key, _, _, label in QOVERPT_REFERENCE_STYLES]
   shift_entries = [shift_by_type[key] for key in (
-      "BothEndcaps", "NearEndcapOnly", "NearEndcapAndBarrel", "FarEndcapOnly", "Unclassified"
+      "BothEndcaps", "SingleEndcap", "Unclassified"
   ) if key in shift_by_type]
   legend.AddEntry(0, "CMS", "")
   legend.AddEntry(0, "SHIFT", "")

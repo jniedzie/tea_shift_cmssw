@@ -31,6 +31,13 @@ extraEventCollections = {
         "inputCollections": ("ShiftMuon",),
         "topology": 4,
     },
+    "ShiftMuonSingleEndcap": {
+        "inputCollections": (
+            "ShiftMuonNearEndcapOnly",
+            "ShiftMuonNearEndcapAndBarrel",
+            "ShiftMuonFarEndcapOnly",
+        ),
+    },
     "ShiftDimuonVertexGood": {
         "inputCollections": ("ShiftDimuonVertex",),
         "isOS": (1, 1),
