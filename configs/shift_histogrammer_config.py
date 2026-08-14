@@ -2,12 +2,51 @@
 # Default single-muon histograms
 # ============================================================
 
+import os
+
 defaultHistParams = (
   ("ShiftMuon",  "topology"        , 5   , -.5   , 4.5   , "muon"),
   ("ShiftMuon",  "recoAlgorithm"   , 3   , -.5   , 2.5   , "muon"),
   ("ShiftDimuonVertex", "topologyMin", 5 , -.5   , 4.5   , "dimuon"),
   ("ShiftDimuonVertex", "topologyMax", 5 , -.5   , 4.5   , "dimuon"),
 )
+
+if os.environ.get("SHIFT_RECO_VARIANT"):
+  defaultHistParams += (
+  ("ShiftRecoDiag", "recoVariantCode", 20, -.5, 19.5, "detector_diagnostics"),
+  ("ShiftRecoDiag", "enableDTMeasurement", 2, -.5, 1.5, "detector_diagnostics"),
+  ("ShiftRecoDiag", "dtNavigationMode", 3, -.5, 2.5, "detector_diagnostics"),
+  ("ShiftRecoDiag", "enableGEMMeasurement", 2, -.5, 1.5, "detector_diagnostics"),
+  ("ShiftRecoDiag", "trackerMode", 3, -.5, 2.5, "detector_diagnostics"),
+  ("ShiftRecoDiag", "enableHcalDiagnostics", 2, -.5, 1.5, "detector_diagnostics"),
+  ("ShiftRecoDiag", "enableZDCDiagnostics", 2, -.5, 1.5, "detector_diagnostics"),
+  ("ShiftRecoDiag", "nDTSimHits", 100, 0, 100, "detector_diagnostics"),
+  ("ShiftRecoDiag", "nDTSegments", 50, 0, 50, "detector_diagnostics"),
+  ("ShiftRecoDiag", "nGEMSimHits", 20, 0, 20, "detector_diagnostics"),
+  ("ShiftRecoDiag", "nGEMSegments", 20, 0, 20, "detector_diagnostics"),
+  ("ShiftRecoDiag", "nGeneralTracks", 50, 0, 50, "detector_diagnostics"),
+  ("ShiftRecoDiag", "nDSATrackerMatches", 10, 0, 10, "detector_diagnostics"),
+  ("ShiftRecoDiag", "nTraversingTrackerMatches", 10, 0, 10, "detector_diagnostics"),
+  ("ShiftRecoDiag", "nSignalMuonHcalSimHits", 50, -2, 48, "detector_diagnostics"),
+  ("ShiftRecoDiag", "signalMuonHcalSimEnergy", 100, -2, 2, "detector_diagnostics"),
+  ("ShiftRecoDiag", "nSignalMuonZDCSimHits", 50, -2, 48, "detector_diagnostics"),
+  ("ShiftRecoDiag", "signalMuonZDCSimEnergy", 100, -2, 2, "detector_diagnostics"),
+  ("ShiftRecoDiag", "signalMuonZDCFirstTime", 120, -600, 0, "detector_diagnostics"),
+  ("ShiftMuon", "simDTHits", 50, 0, 50, "detector_diagnostics"),
+  ("ShiftMuon", "simGEMHits", 20, 0, 20, "detector_diagnostics"),
+  ("ShiftMuon", "trackerMatchValid", 2, -.5, 1.5, "detector_diagnostics"),
+  ("ShiftMuon", "trackerValidHits", 30, 0, 30, "detector_diagnostics"),
+  ("ShiftMuon", "combinedTrackValid", 2, -.5, 1.5, "detector_diagnostics"),
+  ("ShiftMuon", "combinedTrackerHits", 30, 0, 30, "detector_diagnostics"),
+  ("ShiftMuon", "combinedTargetPt", 200, 0, 20, "detector_diagnostics"),
+  ("ShiftMuon", "combinedTargetPz", 200, -1000, 100, "detector_diagnostics"),
+  ("ShiftMuon", "combinedTargetDca", 100, -1, 500, "detector_diagnostics"),
+  ("ShiftMuon", "simHcalHits", 50, -2, 48, "detector_diagnostics"),
+  ("ShiftMuon", "simHcalEnergy", 100, -2, 2, "detector_diagnostics"),
+  ("ShiftMuon", "simZDCHits", 50, -2, 48, "detector_diagnostics"),
+  ("ShiftMuon", "simZDCEnergy", 100, -2, 2, "detector_diagnostics"),
+  ("ShiftMuon", "simZDCFirstTime", 120, -600, 0, "detector_diagnostics"),
+  )
 
 muonCategories = ["NearEndcapOnly", "NearEndcapAndBarrel", "BothEndcaps", "FarEndcapOnly", "Unclassified"]
 
@@ -207,7 +246,6 @@ for name in ["RecoVsGenMuon", "RecoVsGenDimuon"]:
 # ============================================================
 
 import glob
-import os
 import re
 
 from shift_extra_collections import extraEventCollections
@@ -216,7 +254,9 @@ from Logger import info
 
 
 def latest_versioned_sample():
-  samples_dir = f"{base_path}/{sample}/{campaign}/samples/step4_merged"
+  reco_variant = os.environ.get("SHIFT_RECO_VARIANT", "")
+  step4_merged = f"step4_{reco_variant}_merged" if reco_variant else "step4_merged"
+  samples_dir = f"{base_path}/{sample}/{campaign}/samples/{step4_merged}"
   sample_pattern = re.compile(r"ntuple_0_([0-9a-f]{7,40}(?:-dirty-[0-9a-f]{8})?)\.root")
   samples = []
   for input_path in glob.glob(f"{samples_dir}/ntuple_0_*.root"):
@@ -236,9 +276,11 @@ nEvents = -1
 
 input_path, sample_version, provenance_tag = latest_versioned_sample()
 project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+reco_variant = os.environ.get("SHIFT_RECO_VARIANT", "")
+variant_output_component = f"{reco_variant}/" if reco_variant else ""
 
 inputFilePath = input_path
-histogramsOutputFilePath = f"{project_dir}/plots/v{sample_version}_{provenance_tag}/histograms.root"
+histogramsOutputFilePath = f"{project_dir}/plots/{variant_output_component}v{sample_version}_{provenance_tag}/histograms.root"
 
 info(f"Selected sample v{sample_version}_{provenance_tag}: {inputFilePath}")
 info(f"Histogram output: {histogramsOutputFilePath}")
