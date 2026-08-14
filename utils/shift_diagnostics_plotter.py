@@ -52,20 +52,26 @@ DIMUON_CORRELATIONS = [
     "RecoVsGenDimuon_vz",
 ]
 MUON_RESOLUTION_TYPES = [
-    ("NearEndcapOnly", "near_endcap_only", "Near Endcap Only"),
-    ("NearEndcapAndBarrel", "near_endcap_and_barrel", "Near Endcap + Barrel"),
     ("BothEndcaps", "both_endcaps", "Both Endcaps"),
+    ("NearEndcapOnly", "near_endcap_only", "Near Endcap Only"),
     ("FarEndcapOnly", "far_endcap_only", "Far Endcap Only"),
+    ("NearEndcapAndBarrel", "near_endcap_and_barrel", "Near Endcap + Barrel"),
     ("Unclassified", "unclassified", "Unclassified"),
 ]
 DIMUON_RESOLUTION_TYPES = [
     ("", "inclusive", "Inclusive"),
-    ("Good", "good", "Good"),
-    ("Near-Both", "near_both", "Near Endcap Only + Both Endcaps"),
-    ("Near-Far", "near_far", "Near Endcap Only + Far Endcap Only"),
     ("Both-Both", "both_both", "Both Endcaps + Both Endcaps"),
+    ("Near-Both", "near_both", "Near Endcap Only + Both Endcaps"),
     ("Both-Far", "both_far", "Both Endcaps + Far Endcap Only"),
+    ("Near-Far", "near_far", "Near Endcap Only + Far Endcap Only"),
     ("Other", "other", "Other Topologies"),
+]
+DIMUON_SUMMARY_TYPES = [
+    ("Both-Both", "both_both", "Both + Both"),
+    ("Near-Both", "near_both", "Both + Near"),
+    ("Both-Far", "both_far", "Both + Far"),
+    ("Near-Far", "near_far", "Near + Far"),
+    ("Other", "other", "Other"),
 ]
 QOVERPT_SHIFT_STYLES = {
     "BothEndcaps": (ROOT.TColor.GetColor("#D55E00"), "Both Endcaps"),
@@ -94,21 +100,25 @@ QOVERPT_REFERENCE_STYLES = [
 MUON_RESOLUTION_VARIABLES = [
     ("eta", "constrainedEta"),
     ("phi", "constrainedPhi"),
-    ("pt", "constrainedPt"),
     ("pz", "constrainedPz"),
-    ("vx", "constrainedVx"),
-    ("vy", "constrainedVy"),
     ("vz", "constrainedVz"),
+    ("pt", "constrainedPt"),
+    
 ]
 DIMUON_RESOLUTION_VARIABLES = [
     ("eta", "constrainedEta"),
-    ("minv", "constrainedMinv"),
     ("phi", "constrainedPhi"),
-    ("pt", "constrainedPt"),
     ("pz", "constrainedPz"),
-    ("vx", "constrainedVx"),
-    ("vy", "constrainedVy"),
     ("vz", "constrainedVz"),
+    ("pt", "constrainedPt"),
+    ("minv", "constrainedMinv"),
+]
+
+MUON_SUMMARY_VARIABLES = [
+    variables for variables in MUON_RESOLUTION_VARIABLES if variables[0] not in ("vx", "vy")
+]
+DIMUON_SUMMARY_VARIABLES = [
+    variables for variables in DIMUON_RESOLUTION_VARIABLES if variables[0] not in ("vx", "vy")
 ]
 
 EFFICIENCY_VARIABLES = ["pt", "pz", "eta", "phi", "vz"]
@@ -128,19 +138,18 @@ DIMUON_EFFICIENCY_TITLES = {
 }
 MUON_EFFICIENCY_TYPES = [
     ("", "Inclusive", ROOT.kBlack),
-    ("NearEndcapOnly", "Near Endcap Only", ROOT.kViolet + 1),
-    ("NearEndcapAndBarrel", "Near Endcap + Barrel", ROOT.kBlue + 1),
     ("BothEndcaps", "Both Endcaps", ROOT.kGreen + 2),
+    ("NearEndcapOnly", "Near Endcap Only", ROOT.kViolet + 1),
     ("FarEndcapOnly", "Far Endcap Only", ROOT.kCyan + 2),
+    ("NearEndcapAndBarrel", "Near Endcap + Barrel", ROOT.kBlue + 1),
     ("Unclassified", "Unclassified", ROOT.kGray + 2),
 ]
 DIMUON_EFFICIENCY_TYPES = [
     ("", "Inclusive", ROOT.kBlack),
-    ("Good", "Good", ROOT.kRed + 1),
-    ("Near-Both", "Near Endcap Only + Both Endcaps", ROOT.kViolet + 1),
-    ("Near-Far", "Near Endcap Only + Far Endcap Only", ROOT.kBlue + 1),
     ("Both-Both", "Both Endcaps + Both Endcaps", ROOT.kGreen + 2),
+    ("Near-Both", "Both Endcaps + Near Endcap Only", ROOT.kViolet + 1),
     ("Both-Far", "Both Endcaps + Far Endcap Only", ROOT.kCyan + 2),
+    ("Near-Far", "Near Endcap Only + Far Endcap Only", ROOT.kBlue + 1),
     ("Other", "Other topologies", ROOT.kGray + 2),
 ]
 
@@ -169,6 +178,29 @@ DIMUON_RESOLUTION_CANVASES = [{
     "canvas_title": f"{display_name} Dimuon Resolutions ({'Constrained' if constrained else 'Unconstrained'})",
     "output_name": f"dimuon_resolutions_{slug}{'_constrained' if constrained else ''}.pdf",
 } for dimuon_type, slug, display_name in DIMUON_RESOLUTION_TYPES for constrained in (False, True)]
+
+SUMMARY_CANVAS_SPECS = [
+    {
+        "object_name": "Muon",
+        "categories": MUON_RESOLUTION_TYPES,
+        "variables": MUON_SUMMARY_VARIABLES,
+        "histogram_prefix": "MuonResolution",
+        "canvas_name": "canvas_muon_scale_resolution_summary",
+        "canvas_title": "Muon Scale and Resolution Summary",
+        "output_name": "muon_scale_resolution_summary.pdf",
+    },
+    {
+        "object_name": "Dimuon",
+        # The inclusive category would duplicate the same events represented
+        # by these mutually exclusive labeled topology bins.
+        "categories": DIMUON_SUMMARY_TYPES,
+        "variables": DIMUON_SUMMARY_VARIABLES,
+        "histogram_prefix": "DimuonResolution",
+        "canvas_name": "canvas_dimuon_scale_resolution_summary",
+        "canvas_title": "Dimuon Scale and Resolution Summary",
+        "output_name": "dimuon_scale_resolution_summary.pdf",
+    },
+]
 
 TITLES = {
     "RecoVsGenMuon_eta": "Muon #eta",
@@ -515,6 +547,137 @@ def robust_resolution_summary(hist):
   quantiles = array("d", (0.0, 0.0, 0.0))
   hist.GetQuantiles(len(probabilities), quantiles, probabilities)
   return quantiles[1], 0.5 * (quantiles[2] - quantiles[0])
+
+
+def draw_scale_resolution_summary(canvas, spec, input_file):
+  """Compare unconstrained and constrained direct summaries by topology."""
+  objects = []
+  categories = spec["categories"]
+  legend_graphs = None
+  for pad_index, variables in enumerate(spec["variables"], 1):
+    canvas.cd(pad_index)
+    ROOT.gPad.SetLeftMargin(0.20)
+    ROOT.gPad.SetRightMargin(0.06)
+    ROOT.gPad.SetBottomMargin(0.32)
+    ROOT.gPad.SetTopMargin(0.16)
+
+    frame = ROOT.TH1D(
+        f"frame_{spec['canvas_name']}_{variables[0]}",
+        "",
+        len(categories),
+        0.5,
+        len(categories) + 0.5,
+    )
+    frame.SetDirectory(0)
+    frame.SetStats(False)
+    for bin_index, (_, _, display_name) in enumerate(categories, 1):
+      frame.GetXaxis().SetBinLabel(bin_index, display_name)
+
+    summaries = {
+        "unconstrained": (array("d"), array("d"), array("d"), array("d")),
+        "constrained": (array("d"), array("d"), array("d"), array("d")),
+    }
+    for bin_index, (category, _, _) in enumerate(categories, 1):
+      for strategy, variable, x_offset in (
+          ("unconstrained", variables[0], -0.12),
+          ("constrained", variables[1], 0.12),
+      ):
+        name = f"{spec['histogram_prefix']}{category}_{variable}"
+        hist = input_file.Get(f"resolution/{name}")
+        if not hist:
+          print(f"Warning: histogram '{name}' was not found")
+          continue
+        if hist.Integral(1, hist.GetNbinsX()) <= 0.0:
+          print(f"Warning: histogram '{name}' has no in-range entries")
+          continue
+
+        scale = 1.0 + hist.GetMean()
+        resolution = hist.GetStdDev()
+        if not math.isfinite(scale) or not math.isfinite(resolution):
+          print(f"Warning: histogram '{name}' has a non-finite direct summary")
+          continue
+        x_values, y_values, x_errors, y_errors = summaries[strategy]
+        x_values.append(bin_index + x_offset)
+        y_values.append(scale)
+        x_errors.append(0.0)
+        y_errors.append(resolution)
+
+    reference_value = 1.0
+    all_points = [
+        (value, error)
+        for _, y_values, _, y_errors in summaries.values()
+        for value, error in zip(y_values, y_errors)
+    ]
+    lows = [value - error for value, error in all_points] + [reference_value]
+    highs = [value + error for value, error in all_points] + [reference_value]
+    y_min = min(lows)
+    y_max = max(highs)
+    span = max(y_max - y_min, 0.05 * max(abs(y_min), abs(y_max), 1.0))
+    frame.SetMinimum(y_min - 0.18 * span)
+    frame.SetMaximum(y_max + 0.18 * span)
+    set_axes_titles(
+        frame,
+        f"{spec['object_name']} topology",
+        "RECO / GEN scale",
+    )
+    frame.GetXaxis().SetLabelSize(0.050)
+    frame.GetXaxis().SetLabelOffset(0.015)
+    frame.GetXaxis().LabelsOption("d")
+    frame.GetXaxis().SetTitleOffset(2.45)
+    frame.GetYaxis().SetTitleOffset(1.45)
+    frame.Draw("AXIS")
+
+    unity = ROOT.TLine(0.5, reference_value, len(categories) + 0.5, reference_value)
+    unity.SetLineColor(ROOT.kBlack)
+    unity.SetLineStyle(2)
+    unity.SetLineWidth(2)
+    unity.Draw("same")
+
+    graphs = []
+    for strategy, color, marker_style in (
+        ("unconstrained", ROOT.kBlue + 1, 20),
+        ("constrained", ROOT.kOrange + 7, 21),
+    ):
+      x_values, y_values, x_errors, y_errors = summaries[strategy]
+      graph = ROOT.TGraphErrors(len(x_values), x_values, y_values, x_errors, y_errors)
+      graph.SetName(f"graph_{spec['canvas_name']}_{variables[0]}_{strategy}")
+      graph.SetMarkerStyle(marker_style)
+      graph.SetMarkerSize(1.15)
+      graph.SetMarkerColor(color)
+      graph.SetLineColor(color)
+      graph.SetLineWidth(2)
+      graph.Draw("P SAME")
+      graphs.append(graph)
+    if legend_graphs is None:
+      legend_graphs = graphs
+
+    quantity = (MUON_RESOLUTION_LABELS if spec["object_name"] == "Muon"
+                else DIMUON_RESOLUTION_LABELS)[variables[0]]
+    label = ROOT.TLatex()
+    label.SetNDC(True)
+    label.SetTextFont(42)
+    label.SetTextSize(0.060)
+    label.DrawLatex(0.22, 0.89, quantity)
+    objects.extend((frame, unity, *graphs, label))
+
+  canvas.cd(len(spec["variables"]) + 1)
+  ROOT.gPad.SetLeftMargin(0.06)
+  ROOT.gPad.SetRightMargin(0.06)
+  ROOT.gPad.SetBottomMargin(0.06)
+  ROOT.gPad.SetTopMargin(0.06)
+  legend = ROOT.TLegend(0.10, 0.30, 0.90, 0.70)
+  legend.SetBorderSize(0)
+  legend.SetFillStyle(0)
+  legend.SetTextFont(42)
+  legend.SetTextSize(0.060)
+  legend.SetHeader("Scale and resolution", "C")
+  legend.AddEntry(legend_graphs[0], "Unconstrained: 1 + mean #pm RMS", "pe")
+  legend.AddEntry(legend_graphs[1], "Constrained: 1 + mean #pm RMS", "pe")
+  legend.Draw()
+  objects.append(legend)
+
+  canvas.Update()
+  return objects
 
 
 def set_resolution_y_range(hist, fit, margin_fraction=0.15):
@@ -908,6 +1071,10 @@ def main():
   dimuon_resolution_canvases = [
       (ROOT.TCanvas(spec["canvas_name"], spec["canvas_title"], 900, 1600), 2, 4) for spec in DIMUON_RESOLUTION_CANVASES
   ]
+  summary_canvases = [
+      (ROOT.TCanvas(spec["canvas_name"], spec["canvas_title"], 1100, 1600), 2, 4)
+      for spec in SUMMARY_CANVAS_SPECS
+  ]
   qoverpt_canvas = (ROOT.TCanvas("canvas_muon_qoverpt_comparison", "Muon q/pT Resolution Comparison", 1400, 1600), 1, 1)
   efficiency_canvases = []
   for object_name, categories, output_stem in (
@@ -920,7 +1087,7 @@ def main():
         categories,
         f"{output_stem}.pdf",
     ))
-  canvases = correlation_canvases + muon_resolution_canvases + dimuon_resolution_canvases
+  canvases = correlation_canvases + muon_resolution_canvases + dimuon_resolution_canvases + summary_canvases
   for canvas, columns, rows in canvases:
     canvas.Divide(columns, rows)
 
@@ -928,6 +1095,10 @@ def main():
   drawn_objects = []
   drawn_objects += draw_2d(correlation_canvases[0][0], MUON_CORRELATIONS, input_file, correlation_rebin)
   drawn_objects += draw_2d(correlation_canvases[1][0], DIMUON_CORRELATIONS, input_file, correlation_rebin)
+  # Summarize the native-bin histograms before the detailed resolution plots
+  # apply their display rebinning in place.
+  for summary_spec, (canvas, _, _) in zip(SUMMARY_CANVAS_SPECS, summary_canvases):
+    drawn_objects += draw_scale_resolution_summary(canvas, summary_spec, input_file)
   for canvas_spec, (canvas, _, _) in zip(MUON_RESOLUTION_CANVASES, muon_resolution_canvases):
     drawn_objects += draw_resolutions(canvas, canvas_spec["names"], input_file, MUON_RESOLUTION_REBIN)
   for canvas_spec, (canvas, _, _) in zip(DIMUON_RESOLUTION_CANVASES, dimuon_resolution_canvases):
@@ -942,6 +1113,7 @@ def main():
       "dimuon_correlations.pdf",
       *[spec["output_name"] for spec in MUON_RESOLUTION_CANVASES],
       *[spec["output_name"] for spec in DIMUON_RESOLUTION_CANVASES],
+      *[spec["output_name"] for spec in SUMMARY_CANVAS_SPECS],
   ]
   for (canvas, _, _), output_name in zip(canvases, output_names):
     canvas.SaveAs(f"{output_dir}/{output_name}")
