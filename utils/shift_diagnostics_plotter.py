@@ -52,10 +52,11 @@ DIMUON_CORRELATIONS = [
     "RecoVsGenDimuon_vz",
 ]
 MUON_RESOLUTION_TYPES = [
-    ("DoubleTraversing", "double_traversing", "Double Traversing"),
-    ("Traversing", "traversing", "Traversing"),
-    ("DSA", "dsa", "DSA"),
-    ("Cosmic", "cosmic", "Cosmic"),
+    ("NearEndcapOnly", "near_endcap_only", "Near Endcap Only"),
+    ("NearEndcapAndBarrel", "near_endcap_and_barrel", "Near Endcap + Barrel"),
+    ("BothEndcaps", "both_endcaps", "Both Endcaps"),
+    ("FarEndcapOnly", "far_endcap_only", "Far Endcap Only"),
+    ("Unclassified", "unclassified", "Unclassified"),
 ]
 DIMUON_RESOLUTION_TYPES = [
     ("CosmicCosmic", "cosmic_cosmic", "Cosmic + Cosmic"),
@@ -71,19 +72,21 @@ DIMUON_RESOLUTION_TYPES = [
      "Double Traversing + Double Traversing"),
 ]
 QOVERPT_SHIFT_STYLES = {
-    "DoubleTraversing": (ROOT.TColor.GetColor("#D55E00"), "DoubleTraversing"),
-    # "Traversing": (ROOT.kOrange + 7, "Traversing"),
-    "Cosmic": (ROOT.TColor.GetColor("#332288"), "Cosmic"),
-    "DSA": (ROOT.TColor.GetColor("#000000"), "DSA"),
+    "BothEndcaps": (ROOT.TColor.GetColor("#D55E00"), "Both Endcaps"),
+    "NearEndcapOnly": (ROOT.TColor.GetColor("#000000"), "Near Endcap Only"),
+    "NearEndcapAndBarrel": (ROOT.TColor.GetColor("#0072B2"), "Near Endcap + Barrel"),
+    "FarEndcapOnly": (ROOT.TColor.GetColor("#332288"), "Far Endcap Only"),
+    "Unclassified": (ROOT.TColor.GetColor("#999999"), "Unclassified"),
 }
-# The q/pT samples have very different occupancies.  These fixed factors keep
-# the well-populated double-traversing peak detailed while suppressing empty-bin
-# fluctuations in the smaller DSA, cosmic, and traversing samples.
+# The q/pT topology samples have very different occupancies. These fixed
+# factors keep the populous both-endcap and near-endcap samples detailed while
+# suppressing empty-bin fluctuations in the rarer categories.
 QOVERPT_SHIFT_REBIN = {
-    "DoubleTraversing": 5,
-    "Traversing": 100,
-    "DSA": 5,
-    "Cosmic": 5,
+    "BothEndcaps": 5,
+    "NearEndcapOnly": 5,
+    "NearEndcapAndBarrel": 20,
+    "FarEndcapOnly": 10,
+    "Unclassified": 20,
 }
 QOVERPT_REFERENCE_STYLES = [
     ("prompt_tracker_muon", ROOT.TColor.GetColor("#0072B2"), 1, "prompt #mu, tracker+muon"),
@@ -129,9 +132,11 @@ DIMUON_EFFICIENCY_TITLES = {
 }
 MUON_EFFICIENCY_TYPES = [
     ("", "Inclusive", ROOT.kBlack),
-    ("DoubleTraversing", "Double Traversing", ROOT.kGreen + 2),
-    ("DSA", "DSA", ROOT.kViolet + 1),
-    ("Cosmic", "Cosmic", ROOT.kCyan + 2),
+    ("NearEndcapOnly", "Near Endcap Only", ROOT.kViolet + 1),
+    ("NearEndcapAndBarrel", "Near Endcap + Barrel", ROOT.kBlue + 1),
+    ("BothEndcaps", "Both Endcaps", ROOT.kGreen + 2),
+    ("FarEndcapOnly", "Far Endcap Only", ROOT.kCyan + 2),
+    ("Unclassified", "Unclassified", ROOT.kGray + 2),
 ]
 DIMUON_EFFICIENCY_TYPES = [
     ("", "Inclusive", ROOT.kBlack),
@@ -730,7 +735,9 @@ def draw_qoverpt_comparison(canvas, input_file, reference_path):
   legend.SetTextSize(0.027)
   shift_by_type = {muon_type: (curve, label) for muon_type, curve, label in shift_curves}
   cms_entries = [(reference_graphs[key], label) for key, _, _, label in QOVERPT_REFERENCE_STYLES]
-  shift_entries = [shift_by_type[key] for key in ("DoubleTraversing", "Cosmic", "DSA") if key in shift_by_type]
+  shift_entries = [shift_by_type[key] for key in (
+      "BothEndcaps", "NearEndcapOnly", "NearEndcapAndBarrel", "FarEndcapOnly", "Unclassified"
+  ) if key in shift_by_type]
   legend.AddEntry(0, "CMS", "")
   legend.AddEntry(0, "SHIFT", "")
   for row in range(max(len(cms_entries), len(shift_entries))):

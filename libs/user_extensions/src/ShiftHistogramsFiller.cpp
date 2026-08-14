@@ -36,9 +36,11 @@ void ShiftHistogramsFiller::FillEfficiencies(const shared_ptr<Event> event) {
   }
 
   vector<pair<string, int>> const muonCategories = {
-      {"DoubleTraversing", 3},
-      {"DSA", 1},
-      {"Cosmic", 0},
+      {"NearEndcapOnly", 0},
+      {"NearEndcapAndBarrel", 1},
+      {"BothEndcaps", 2},
+      {"FarEndcapOnly", 3},
+      {"Unclassified", 4},
   };
   auto fillMuon = [this](string const& prefix, shared_ptr<NanoGenParticle> const& muon, bool pass) {
     map<string, double> const values = {
@@ -62,13 +64,13 @@ void ShiftHistogramsFiller::FillEfficiencies(const shared_ptr<Event> event) {
       if (matched) {
         for (size_t const recoIndex : matchIt->second) {
           auto const recoMuon = recoMuons->at(recoIndex);
-          int const quality = recoMuon->GetAs<int>("quality");
-          categoryMatched[quality] = true;
+          int const topology = recoMuon->GetAs<int>("topology");
+          categoryMatched[topology] = true;
         }
       }
       fillMuon("ShiftMuonEfficiency", genMuon, matched);
-      for (auto const& [category, quality] : muonCategories)
-        fillMuon("ShiftMuon" + category + "Efficiency", genMuon, categoryMatched[quality]);
+      for (auto const& [category, topology] : muonCategories)
+        fillMuon("ShiftMuon" + category + "Efficiency", genMuon, categoryMatched[topology]);
     }
   }
 
@@ -198,7 +200,8 @@ void ShiftHistogramsFiller::FillResolutionPlots(const shared_ptr<Event> event) {
   auto genParticles = event->GetCollection("GenPart");
   auto recoShiftDimuons = event->GetCollection("ShiftDimuonVertex");
 
-  vector<string> shiftMuonTypes = {"DoubleTraversing", "Traversing", "DSA", "Cosmic"};
+  vector<string> shiftMuonTypes = {
+      "NearEndcapOnly", "NearEndcapAndBarrel", "BothEndcaps", "FarEndcapOnly", "Unclassified"};
   map<string, shared_ptr<PhysicsObjects>> recoShiftMuons;
   for (const auto& type : shiftMuonTypes) {
     recoShiftMuons[type] = event->GetCollection("ShiftMuon" + type);

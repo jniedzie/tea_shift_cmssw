@@ -3,7 +3,10 @@
 # ============================================================
 
 defaultHistParams = (
-  ("ShiftMuon",  "quality"         , 20  , -10   , 10    , "muon"),
+  ("ShiftMuon",  "topology"        , 5   , -.5   , 4.5   , "muon"),
+  ("ShiftMuon",  "recoAlgorithm"   , 3   , -.5   , 2.5   , "muon"),
+  ("ShiftDimuonVertex", "topologyMin", 5 , -.5   , 4.5   , "dimuon"),
+  ("ShiftDimuonVertex", "topologyMax", 5 , -.5   , 4.5   , "dimuon"),
 
   ("ShiftDimuonVertex", "isDoubleTraversingDoubleTraversing", 3  , -1    , 2     , "dimuon"),
   ("ShiftDimuonVertex", "isTraversingDoubleTraversing", 3  , -1    , 2     , "dimuon"),
@@ -19,7 +22,10 @@ defaultHistParams = (
 )
 
 
-for name in ["GenMuon", "ShiftMuon", "ShiftMuonDoubleTraversing", "ShiftMuonTraversing", "ShiftMuonDSA", "ShiftMuonCosmic"]:
+for name in [
+  "GenMuon", "ShiftMuon", "ShiftMuonNearEndcapOnly", "ShiftMuonNearEndcapAndBarrel",
+  "ShiftMuonBothEndcaps", "ShiftMuonFarEndcapOnly", "ShiftMuonUnclassified",
+]:
   defaultHistParams += (
     ("Event"     , f"n{name}"       , 10  , 0     , 10    , "event"),
     (f"{name}"   , "pt"             , 200 , 0     , 20    , "muon"),
@@ -129,7 +135,7 @@ for name in dimuonQualityTypes:
     (f"DimuonResolution{name}" , "constrainedVz"   , 50    , -1   , 1    , "resolution"),
   )
 
-for name in ["DoubleTraversing", "Traversing", "DSA", "Cosmic"]:
+for name in ["NearEndcapOnly", "NearEndcapAndBarrel", "BothEndcaps", "FarEndcapOnly", "Unclassified"]:
   histParams += (
     # Signed-curvature residual used in CMS-DP-2015-015.  With 200 bins over
     # [-2, 2], every bin has the same 0.02 width as the published reference.
@@ -182,9 +188,11 @@ dimuonEfficiencyBinning = {
 
 muonEfficiencyPrefixes = [
   "ShiftMuonEfficiency",
-  "ShiftMuonDoubleTraversingEfficiency",
-  "ShiftMuonDSAEfficiency",
-  "ShiftMuonCosmicEfficiency",
+  "ShiftMuonNearEndcapOnlyEfficiency",
+  "ShiftMuonNearEndcapAndBarrelEfficiency",
+  "ShiftMuonBothEndcapsEfficiency",
+  "ShiftMuonFarEndcapOnlyEfficiency",
+  "ShiftMuonUnclassifiedEfficiency",
 ]
 
 dimuonEfficiencyPrefixes = [
