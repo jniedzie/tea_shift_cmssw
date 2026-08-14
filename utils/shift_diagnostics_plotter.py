@@ -59,17 +59,13 @@ MUON_RESOLUTION_TYPES = [
     ("Unclassified", "unclassified", "Unclassified"),
 ]
 DIMUON_RESOLUTION_TYPES = [
-    ("CosmicCosmic", "cosmic_cosmic", "Cosmic + Cosmic"),
-    ("CosmicDSA", "cosmic_dsa", "Cosmic + DSA"),
-    ("CosmicTraversing", "cosmic_traversing", "Cosmic + Traversing"),
-    ("CosmicDoubleTraversing", "cosmic_double_traversing", "Cosmic + Double Traversing"),
-    ("DSADSA", "dsa_dsa", "DSA + DSA"),
-    ("DSATraversing", "dsa_traversing", "DSA + Traversing"),
-    ("DSADoubleTraversing", "dsa_double_traversing", "DSA + Double Traversing"),
-    ("TraversingTraversing", "traversing_traversing", "Traversing + Traversing"),
-    ("TraversingDoubleTraversing", "traversing_double_traversing", "Traversing + Double Traversing"),
-    ("DoubleTraversingDoubleTraversing", "double_traversing_double_traversing",
-     "Double Traversing + Double Traversing"),
+    ("", "inclusive", "Inclusive"),
+    ("Good", "good", "Good"),
+    ("Near-Both", "near_both", "Near Endcap Only + Both Endcaps"),
+    ("Near-Far", "near_far", "Near Endcap Only + Far Endcap Only"),
+    ("Both-Both", "both_both", "Both Endcaps + Both Endcaps"),
+    ("Both-Far", "both_far", "Both Endcaps + Far Endcap Only"),
+    ("Other", "other", "Other Topologies"),
 ]
 QOVERPT_SHIFT_STYLES = {
     "BothEndcaps": (ROOT.TColor.GetColor("#D55E00"), "Both Endcaps"),
@@ -140,11 +136,12 @@ MUON_EFFICIENCY_TYPES = [
 ]
 DIMUON_EFFICIENCY_TYPES = [
     ("", "Inclusive", ROOT.kBlack),
-    ("DoubleTraversingDoubleTraversing", "Double Traversing + Double Traversing", ROOT.kGreen + 2),
-    ("DSADoubleTraversing", "DSA + Double Traversing", ROOT.kBlue + 1),
-    ("CosmicDoubleTraversing", "Cosmic + Double Traversing", ROOT.kOrange + 7),
-    ("DSADSA", "DSA + DSA", ROOT.kViolet + 1),
-    ("Other", "Other rare combinations", ROOT.kGray + 2),
+    ("Good", "Good", ROOT.kRed + 1),
+    ("Near-Both", "Near Endcap Only + Both Endcaps", ROOT.kViolet + 1),
+    ("Near-Far", "Near Endcap Only + Far Endcap Only", ROOT.kBlue + 1),
+    ("Both-Both", "Both Endcaps + Both Endcaps", ROOT.kGreen + 2),
+    ("Both-Far", "Both Endcaps + Far Endcap Only", ROOT.kCyan + 2),
+    ("Other", "Other topologies", ROOT.kGray + 2),
 ]
 
 

@@ -7,25 +7,11 @@ defaultHistParams = (
   ("ShiftMuon",  "recoAlgorithm"   , 3   , -.5   , 2.5   , "muon"),
   ("ShiftDimuonVertex", "topologyMin", 5 , -.5   , 4.5   , "dimuon"),
   ("ShiftDimuonVertex", "topologyMax", 5 , -.5   , 4.5   , "dimuon"),
-
-  ("ShiftDimuonVertex", "isDoubleTraversingDoubleTraversing", 3  , -1    , 2     , "dimuon"),
-  ("ShiftDimuonVertex", "isTraversingDoubleTraversing", 3  , -1    , 2     , "dimuon"),
-  ("ShiftDimuonVertex", "isDSADoubleTraversing", 3  , -1    , 2     , "dimuon"),
-  ("ShiftDimuonVertex", "isTraversingTraversing", 3  , -1    , 2     , "dimuon"),
-  ("ShiftDimuonVertex", "isDSATraversing", 3  , -1    , 2     , "dimuon"),
-  ("ShiftDimuonVertex", "isDSADSA", 3  , -1    , 2     , "dimuon"),
-  ("ShiftDimuonVertex", "isCosmicCosmic", 3  , -1    , 2     , "dimuon"),
-  ("ShiftDimuonVertex", "isCosmicDSA", 3  , -1    , 2     , "dimuon"),
-  ("ShiftDimuonVertex", "isCosmicTraversing", 3  , -1    , 2     , "dimuon"),
-  ("ShiftDimuonVertex", "isCosmicDoubleTraversing", 3  , -1    , 2     , "dimuon"),
-
 )
 
+muonCategories = ["NearEndcapOnly", "NearEndcapAndBarrel", "BothEndcaps", "FarEndcapOnly", "Unclassified"]
 
-for name in [
-  "GenMuon", "ShiftMuon", "ShiftMuonNearEndcapOnly", "ShiftMuonNearEndcapAndBarrel",
-  "ShiftMuonBothEndcaps", "ShiftMuonFarEndcapOnly", "ShiftMuonUnclassified",
-]:
+for name in ["GenMuon", "ShiftMuon"] + [f"ShiftMuon{category}" for category in muonCategories]:
   defaultHistParams += (
     ("Event"     , f"n{name}"       , 10  , 0     , 10    , "event"),
     (f"{name}"   , "pt"             , 200 , 0     , 20    , "muon"),
@@ -39,7 +25,7 @@ for name in [
    
   if "Gen" in name:
     continue
-  
+
   defaultHistParams += (
     (f"{name}"   , "constrainedPt"             , 200 , 0     , 20    , "muon"),
     (f"{name}"   , "constrainedPz"             , 200 , -1000 , 100   , "muon"),
@@ -59,31 +45,27 @@ for name in [
 # Default dimuon histograms
 # ============================================================
 
-for name in ["ShiftDimuonVertex", "GoodShiftDimuonVertex"]:
+dimuonCategories = ["", "Good", "Near-Both", "Near-Far", "Both-Both", "Both-Far", "Other"]
+
+for name in dimuonCategories:
   defaultHistParams += (
-    ("Event"     , f"n{name}"                     , 10  , 0     , 10    , "event"),
-    (f"{name}"   , "pt"                           , 200 , 0     , 20    , "dimuon"),
-    (f"{name}"   , "pz"                           , 200 , -1000 , 100   , "dimuon"),
-    (f"{name}"   , "eta"                          , 100 , -10   , 10    , "dimuon"),
-    (f"{name}"   , "phi"                          , 100 , -3.2  , 3.2   , "dimuon"),
-    (f"{name}"   , "mass"                         , 100 , 0     , 10    , "dimuon"),
-    (f"{name}"   , "vx"                           , 100 , -300  , 300   , "dimuon"),
-    (f"{name}"   , "vy"                           , 100 , -300  , 300   , "dimuon"),
-    (f"{name}"   , "vz"                           , 100 , -20000, 20000 , "dimuon"),
-  )
-   
-  if "Gen" in name:
-    continue 
-  
-  defaultHistParams += (
-    (f"{name}"   , "chi2"           , 100 , -1    , 100   , "dimuon"),
-    (f"{name}"   , "normalizedChi2" , 100 , -1    , 100   , "dimuon"),
-    (f"{name}"   , "dca"            , 100 , 0     , 1500  , "dimuon"),
-    (f"{name}"   , "dcaValid"       , 20  ,-10    , 10    , "dimuon"),
+    ("Event"     , f"nShiftDimuonVertex{name}"                     , 10  , 0     , 10    , "event"),
+    (f"ShiftDimuonVertex{name}"   , "pt"                           , 200 , 0     , 20    , "dimuon"),
+    (f"ShiftDimuonVertex{name}"   , "pz"                           , 200 , -1000 , 100   , "dimuon"),
+    (f"ShiftDimuonVertex{name}"   , "eta"                          , 100 , -10   , 10    , "dimuon"),
+    (f"ShiftDimuonVertex{name}"   , "phi"                          , 100 , -3.2  , 3.2   , "dimuon"),
+    (f"ShiftDimuonVertex{name}"   , "mass"                         , 100 , 0     , 10    , "dimuon"),
+    (f"ShiftDimuonVertex{name}"   , "vx"                           , 100 , -300  , 300   , "dimuon"),
+    (f"ShiftDimuonVertex{name}"   , "vy"                           , 100 , -300  , 300   , "dimuon"),
+    (f"ShiftDimuonVertex{name}"   , "vz"                           , 100 , -20000, 20000 , "dimuon"),
+    (f"ShiftDimuonVertex{name}"   , "chi2"           , 100 , -1    , 100   , "dimuon"),
+    (f"ShiftDimuonVertex{name}"   , "normalizedChi2" , 100 , -1    , 100   , "dimuon"),
+    (f"ShiftDimuonVertex{name}"   , "dca"            , 100 , 0     , 1500  , "dimuon"),
+    (f"ShiftDimuonVertex{name}"   , "dcaValid"       , 20  ,-10    , 10    , "dimuon"),
     
-    (f"{name}"   , "isOS"           , 20  , -10   , 10    , "dimuon"),
-    (f"{name}"   , "genIsOS"        , 20  ,-10    , 10    , "dimuon"),
-    (f"{name}"   , "sameGenMuon"    , 20  ,-10    , 10    , "dimuon"),
+    (f"ShiftDimuonVertex{name}"   , "isOS"           , 20  , -10   , 10    , "dimuon"),
+    (f"ShiftDimuonVertex{name}"   , "genIsOS"        , 20  ,-10    , 10    , "dimuon"),
+    (f"ShiftDimuonVertex{name}"   , "sameGenMuon"    , 20  ,-10    , 10    , "dimuon"),
   )
 
 # ============================================================
@@ -99,22 +81,11 @@ histParams = (
   (f"GenDimuon"   , "vx"                           , 100 , -300  , 300   , "dimuon"),
   (f"GenDimuon"   , "vy"                           , 100 , -300  , 300   , "dimuon"),
   (f"GenDimuon"   , "vz"                           , 100 , -20000, 20000 , "dimuon"),
+
+  ("ShiftDimuonVertex", "topologyCategory", 5, -.5, 4.5, "dimuon"),
 )
 
-dimuonQualityTypes = [
-  "CosmicCosmic",
-  "CosmicDSA",
-  "CosmicTraversing",
-  "CosmicDoubleTraversing",
-  "DSADSA",
-  "DSATraversing",
-  "DSADoubleTraversing",
-  "TraversingTraversing",
-  "TraversingDoubleTraversing",
-  "DoubleTraversingDoubleTraversing",
-]
-
-for name in dimuonQualityTypes:
+for name in dimuonCategories:
   histParams += (
     (f"DimuonResolution{name}" , "pt"              , 50    , -1   , 1    , "resolution"),
     (f"DimuonResolution{name}" , "pz"              , 50    , -1   , 1    , "resolution"),
@@ -135,7 +106,7 @@ for name in dimuonQualityTypes:
     (f"DimuonResolution{name}" , "constrainedVz"   , 50    , -1   , 1    , "resolution"),
   )
 
-for name in ["NearEndcapOnly", "NearEndcapAndBarrel", "BothEndcaps", "FarEndcapOnly", "Unclassified"]:
+for name in muonCategories:
   histParams += (
     # Signed-curvature residual used in CMS-DP-2015-015.  With 200 bins over
     # [-2, 2], every bin has the same 0.02 width as the published reference.
@@ -186,23 +157,9 @@ dimuonEfficiencyBinning = {
   "vz":  (14500, 14600, 14700, 14750, 14800, 14850, 14900, 15000, 15100),
 }
 
-muonEfficiencyPrefixes = [
-  "ShiftMuonEfficiency",
-  "ShiftMuonNearEndcapOnlyEfficiency",
-  "ShiftMuonNearEndcapAndBarrelEfficiency",
-  "ShiftMuonBothEndcapsEfficiency",
-  "ShiftMuonFarEndcapOnlyEfficiency",
-  "ShiftMuonUnclassifiedEfficiency",
-]
+muonEfficiencyPrefixes = ["ShiftMuonEfficiency"] + [f"ShiftMuon{category}Efficiency" for category in muonCategories]
 
-dimuonEfficiencyPrefixes = [
-  "ShiftDimuonVertexEfficiency",
-  "ShiftDimuonVertexCosmicDoubleTraversingEfficiency",
-  "ShiftDimuonVertexDSADSAEfficiency",
-  "ShiftDimuonVertexDSADoubleTraversingEfficiency",
-  "ShiftDimuonVertexDoubleTraversingDoubleTraversingEfficiency",
-  "ShiftDimuonVertexOtherEfficiency",
-]
+dimuonEfficiencyPrefixes = [f"ShiftDimuonVertex{category}Efficiency" for category in dimuonCategories]
 
 irregularHistParams = ()
 for prefixes, binning in (
