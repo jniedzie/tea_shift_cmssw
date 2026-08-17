@@ -38,6 +38,32 @@ void ShiftHistogramsFiller::Fill(const shared_ptr<Event> event) {
   FillRecoVsGen2D(event);
   FillResolutionPlots(event);
   FillEfficiencies(event);
+  FillDetectorDiagnostics(event);
+}
+
+void ShiftHistogramsFiller::FillDetectorDiagnostics(const shared_ptr<Event> event) {
+  auto muons = event->GetCollection("ShiftMuon");
+  for (auto const& muon : *muons) {
+    int const compatibleDT = muon->GetAs<int>("nCompatibleDTSegments");
+    int const addedDT = muon->GetAs<int>("nAddedDTRefitHits");
+    int const compatibleTracker = muon->GetAs<int>("nCompatiblePixelHits") +
+                                  muon->GetAs<int>("nCompatibleStripHits");
+    int const addedTracker = muon->GetAs<int>("nAddedTrackerRefitHits");
+    if (compatibleDT > 0)
+      histogramsHandler->FillUnweighted("DetectorDiagnostics_dtAttachmentFraction",
+                                        static_cast<double>(addedDT) / compatibleDT);
+    int const truthMatchedDT = muon->GetAs<int>("nAddedDTTruthChamberMatches");
+    if (addedDT > 0 && truthMatchedDT >= 0)
+      histogramsHandler->FillUnweighted("DetectorDiagnostics_dtTruthChamberPurity",
+                                        static_cast<double>(truthMatchedDT) / addedDT);
+    if (compatibleTracker > 0)
+      histogramsHandler->FillUnweighted("DetectorDiagnostics_trackerAttachmentFraction",
+                                        static_cast<double>(addedTracker) / compatibleTracker);
+    histogramsHandler->FillUnweighted("DetectorDiagnostics_timingMeasurements",
+                                      muon->GetAs<int>("nTimingMeasurements"));
+    histogramsHandler->FillUnweighted("DetectorDiagnostics_timingDeltaChi2",
+                                      muon->GetAs<float>("timingDeltaChi2"));
+  }
 }
 
 void ShiftHistogramsFiller::FillEfficiencies(const shared_ptr<Event> event) {

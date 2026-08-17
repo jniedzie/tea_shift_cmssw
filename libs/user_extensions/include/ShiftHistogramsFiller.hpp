@@ -33,6 +33,7 @@ class ShiftHistogramsFiller {
   void FillRecoVsGen2D(const std::shared_ptr<Event> event);
   void FillResolutionPlots(const std::shared_ptr<Event> event);
   void FillEfficiencies(const std::shared_ptr<Event> event);
+  void FillDetectorDiagnostics(const std::shared_ptr<Event> event);
   
   std::vector<GenJPsiCandidate> GetGenJPsiCandidates(const std::shared_ptr<PhysicsObjects> genParticles);
   std::pair<TLorentzVector, TVector3> GetGenJPsiDimuonVector(const std::shared_ptr<PhysicsObjects> genParticles);
