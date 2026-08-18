@@ -63,6 +63,18 @@ void ShiftHistogramsFiller::FillDetectorDiagnostics(const shared_ptr<Event> even
                                       muon->GetAs<int>("nTimingMeasurements"));
     histogramsHandler->FillUnweighted("DetectorDiagnostics_timingDeltaChi2",
                                       muon->GetAs<float>("timingDeltaChi2"));
+    histogramsHandler->FillUnweighted("DetectorDiagnostics_combinedTimingDeltaChi2",
+                                      muon->GetAs<float>("combinedTimingDeltaChi2"));
+    int const crossedHBHE = muon->GetAs<int>("nCrossedHBHERecHits");
+    int const crossedHO = muon->GetAs<int>("nCrossedHORecHits");
+    if (crossedHBHE > 0)
+      histogramsHandler->FillUnweighted("DetectorDiagnostics_hbheValidTimeFraction",
+                                        static_cast<double>(muon->GetAs<int>("nValidCrossedHBHETimes")) /
+                                            crossedHBHE);
+    if (crossedHO > 0)
+      histogramsHandler->FillUnweighted("DetectorDiagnostics_hoValidTimeFraction",
+                                        static_cast<double>(muon->GetAs<int>("nValidCrossedHOTimes")) /
+                                            crossedHO);
   }
 }
 

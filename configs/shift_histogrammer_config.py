@@ -3,7 +3,7 @@
 # ============================================================
 
 from Logger import info
-from shift_paths import base_path, campaign, sample, reco_variant
+from shift_paths import base_path, campaign, sample
 from shift_extra_collections import extraEventCollections
 import re
 import glob
@@ -49,6 +49,10 @@ defaultHistParams += (
     ("ShiftMuon", "minDTEstimatorChi2", 200, -1, 999, "detector_diagnostics"),
     ("ShiftMuon", "minTrackerResidual", 200, -1, 199, "detector_diagnostics"),
     ("ShiftMuon", "minTrackerEstimatorChi2", 200, -1, 999, "detector_diagnostics"),
+    ("ShiftMuon", "trackerMatchRawValid", 2, -.5, 1.5, "detector_diagnostics"),
+    ("ShiftMuon", "trackerMatchValid", 2, -.5, 1.5, "detector_diagnostics"),
+    ("ShiftMuon", "trackerMatchLineDistance", 200, -1, 999, "detector_diagnostics"),
+    ("ShiftMuon", "trackerMatchAxisAngle", 160, -0.01, 1.59, "detector_diagnostics"),
     ("ShiftMuon", "nMatchedEcalRecHits", 50, 0, 50, "detector_diagnostics"),
     ("ShiftMuon", "nMatchedHBHERecHits", 50, 0, 50, "detector_diagnostics"),
     ("ShiftMuon", "nMatchedHFRecHits", 50, 0, 50, "detector_diagnostics"),
@@ -58,12 +62,30 @@ defaultHistParams += (
     ("ShiftMuon", "matchedHBHEEnergy", 100, 0, 20, "detector_diagnostics"),
     ("ShiftMuon", "matchedHFEnergy", 100, 0, 20, "detector_diagnostics"),
     ("ShiftMuon", "matchedHOEnergy", 100, 0, 20, "detector_diagnostics"),
+    ("ShiftMuon", "nCrossedHBHEIds", 30, 0, 30, "detector_diagnostics"),
+    ("ShiftMuon", "nCrossedHBHERecHits", 30, 0, 30, "detector_diagnostics"),
+    ("ShiftMuon", "nValidCrossedHBHETimes", 30, 0, 30, "detector_diagnostics"),
+    ("ShiftMuon", "crossedHBHEEnergy", 100, 0, 20, "detector_diagnostics"),
+    ("ShiftMuon", "hbhe3x3Energy", 100, 0, 20, "detector_diagnostics"),
+    ("ShiftMuon", "maxCrossedHBHEEnergy", 100, 0, 10, "detector_diagnostics"),
+    ("ShiftMuon", "maxCrossedHBHETime", 160, -1000, 200, "detector_diagnostics"),
+    ("ShiftMuon", "nCrossedHOIds", 30, 0, 30, "detector_diagnostics"),
+    ("ShiftMuon", "nCrossedHORecHits", 30, 0, 30, "detector_diagnostics"),
+    ("ShiftMuon", "nValidCrossedHOTimes", 30, 0, 30, "detector_diagnostics"),
+    ("ShiftMuon", "hcalAssociationDirection", 4, -0.5, 3.5, "detector_diagnostics"),
+    ("ShiftMuon", "crossedHOEnergy", 100, 0, 20, "detector_diagnostics"),
+    ("ShiftMuon", "ho3x3Energy", 100, 0, 20, "detector_diagnostics"),
+    ("ShiftMuon", "maxCrossedHOEnergy", 100, 0, 10, "detector_diagnostics"),
+    ("ShiftMuon", "maxCrossedHOTime", 160, -1000, 200, "detector_diagnostics"),
     ("ShiftMuon", "matchedZDCEnergy", 100, 0, 10, "detector_diagnostics"),
     ("ShiftMuon", "nCaloTimingMeasurements", 10, 0, 10, "detector_diagnostics"),
     ("ShiftMuon", "caloTimingDirectionSign", 3, -1.5, 1.5, "detector_diagnostics"),
     ("ShiftMuon", "caloTimingDeltaChi2", 100, 0, 100, "detector_diagnostics"),
+    ("ShiftMuon", "combinedTimingDirectionSign", 3, -1.5, 1.5, "detector_diagnostics"),
+    ("ShiftMuon", "nCombinedTimingMeasurements", 20, 0, 20, "detector_diagnostics"),
+    ("ShiftMuon", "combinedTimingDeltaChi2", 100, 0, 100, "detector_diagnostics"),
+    ("ShiftMuon", "combinedTimingAgreesWithMuon", 3, -1.5, 1.5, "detector_diagnostics"),
 
-    ("Event", "ShiftRecoDiag_recoVariantCode", 20, -.5, 19.5, "detector_diagnostics"),
     ("Event", "ShiftRecoDiag_enableDTMeasurement", 2, -.5, 1.5, "detector_diagnostics"),
     ("Event", "ShiftRecoDiag_dtNavigationMode", 3, -.5, 2.5, "detector_diagnostics"),
     ("Event", "ShiftRecoDiag_enableGEMMeasurement", 2, -.5, 1.5, "detector_diagnostics"),
@@ -75,6 +97,16 @@ defaultHistParams += (
     ("Event", "ShiftRecoDiag_nGEMSimHits", 20, 0, 20, "detector_diagnostics"),
     ("Event", "ShiftRecoDiag_nGEMSegments", 20, 0, 20, "detector_diagnostics"),
     ("Event", "ShiftRecoDiag_nGeneralTracks", 50, 0, 50, "detector_diagnostics"),
+    ("Event", "ShiftRecoDiag_nTrackerSeeds", 30, 0, 30, "detector_diagnostics"),
+    ("Event", "ShiftRecoDiag_nTrackerTrackCandidates", 30, 0, 30, "detector_diagnostics"),
+    ("Event", "ShiftRecoDiag_nTrackerRawTracks", 30, 0, 30, "detector_diagnostics"),
+    ("Event", "ShiftRecoDiag_nTrackerSelectedTracks", 30, 0, 30, "detector_diagnostics"),
+    ("Event", "ShiftRecoDiag_nTrackerLHCTrackCandidates", 30, 0, 30, "detector_diagnostics"),
+    ("Event", "ShiftRecoDiag_nTrackerLHCTracks", 30, 0, 30, "detector_diagnostics"),
+    ("Event", "ShiftRecoDiag_nSignalMuonSimTracks", 10, 0, 10, "detector_diagnostics"),
+    ("Event", "ShiftRecoDiag_nSignalMuonWithTrackerSimHits", 10, 0, 10, "detector_diagnostics"),
+    ("Event", "ShiftRecoDiag_nSignalMuonWithMuonSystemSimHits", 10, 0, 10, "detector_diagnostics"),
+    ("Event", "ShiftRecoDiag_nSignalMuonWithTrackerAndMuonSystemSimHits", 10, 0, 10, "detector_diagnostics"),
     ("Event", "ShiftRecoDiag_nDSATrackerMatches", 10, 0, 10, "detector_diagnostics"),
     ("Event", "ShiftRecoDiag_nTraversingTrackerMatches", 10, 0, 10, "detector_diagnostics"),
     ("Event", "ShiftRecoDiag_nSignalMuonHcalSimHits", 50, -2, 48, "detector_diagnostics"),
@@ -193,6 +225,9 @@ histParams = (
     ("DetectorDiagnostics", "dtTruthChamberPurity", 51, 0, 1.02, "detector_diagnostics"),
     ("DetectorDiagnostics", "timingMeasurements", 20, 0, 20, "detector_diagnostics"),
     ("DetectorDiagnostics", "timingDeltaChi2", 100, 0, 100, "detector_diagnostics"),
+    ("DetectorDiagnostics", "combinedTimingDeltaChi2", 100, 0, 100, "detector_diagnostics"),
+    ("DetectorDiagnostics", "hbheValidTimeFraction", 51, 0, 1.02, "detector_diagnostics"),
+    ("DetectorDiagnostics", "hoValidTimeFraction", 51, 0, 1.02, "detector_diagnostics"),
     (f"GenDimuon", "pt", 200, 0, 20, "dimuon"),
     (f"GenDimuon", "pz", 200, -1000, 100, "dimuon"),
     (f"GenDimuon", "eta", 100, -10, 10, "dimuon"),
@@ -324,12 +359,7 @@ for name in ["RecoVsGenMuon", "RecoVsGenDimuon"]:
 
 
 def latest_versioned_sample():
-  current_reco_variant = reco_variant
-
-  print(f"\n\nCurrent reco variant: {current_reco_variant}\n\n")
-
-  step4_merged = f"step4{current_reco_variant}_merged" if current_reco_variant else "step4_merged"
-  samples_dir = f"{base_path}/{sample}/{campaign}/samples/{step4_merged}"
+  samples_dir = f"{base_path}/{sample}/{campaign}/samples/step4_merged"
   sample_pattern = re.compile(r"ntuple_0_([0-9a-f]{7,40}(?:-dirty-[0-9a-f]{8})?)\.root")
   samples = []
   for input_path in glob.glob(f"{samples_dir}/ntuple_0_*.root"):
@@ -346,9 +376,6 @@ def latest_versioned_sample():
 
   project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-  variant_output_component = f"{current_reco_variant}/" if current_reco_variant else ""
-  plots_dir = f"{project_dir}/plots/{variant_output_component}"
-
   version_pattern = re.compile(r"^v([0-9]+)_([^/_]+)(?:_([^/]+))?$")
   latest_version = 0
   existing_version_for_hash = None
@@ -363,7 +390,7 @@ def latest_versioned_sample():
     latest_version = max(latest_version, version_number)
     output_hash = match.group(2)
     output_variant = match.group(3) or ""
-    if output_hash == provenance_tag and output_variant == current_reco_variant:
+    if output_hash == provenance_tag and not output_variant:
       if existing_version_for_hash is None:
         existing_version_for_hash = version_number
       else:
@@ -377,10 +404,9 @@ nEvents = -1
 
 input_path, sample_version, provenance_tag = latest_versioned_sample()
 project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-variant_suffix = f"{reco_variant}" if reco_variant else ""
 
 inputFilePath = input_path
-histogramsOutputFilePath = f"{project_dir}/plots/v{sample_version}_{provenance_tag}{variant_suffix}/histograms.root"
+histogramsOutputFilePath = f"{project_dir}/plots/v{sample_version}_{provenance_tag}/histograms.root"
 
 info(f"Selected sample v{sample_version}_{provenance_tag}: {inputFilePath}")
 info(f"Histogram output: {histogramsOutputFilePath}")
