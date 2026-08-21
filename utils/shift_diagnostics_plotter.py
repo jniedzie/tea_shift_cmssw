@@ -553,10 +553,36 @@ def robust_resolution_summary(hist):
   return quantiles[1], 0.5 * (quantiles[2] - quantiles[0])
 
 
+def summary_category_fractions(spec, input_file):
+  """Return topology fractions and binomial uncertainties for a summary."""
+  reference_variable = spec["variables"][0][0]
+  category_entries = []
+  for category, _, display_name in spec["categories"]:
+    name = f"{spec['histogram_prefix']}{category}_{reference_variable}"
+    hist = input_file.Get(f"resolution/{name}")
+    entries = hist.GetEntries() if hist else 0.0
+    if not hist:
+      print(f"Warning: histogram '{name}' was not found for topology fractions")
+    category_entries.append((display_name, entries))
+
+  total_entries = sum(entries for _, entries in category_entries)
+  if total_entries <= 0.0:
+    print(f"Warning: no entries were found for {spec['object_name']} topology fractions")
+    return []
+
+  fractions = []
+  for display_name, entries in category_entries:
+    fraction = entries / total_entries
+    uncertainty = math.sqrt(fraction * (1.0 - fraction) / total_entries)
+    fractions.append((display_name, fraction, uncertainty))
+  return fractions
+
+
 def draw_scale_resolution_summary(canvas, spec, input_file):
   """Compare unconstrained and constrained direct summaries by topology."""
   objects = []
   categories = spec["categories"]
+  category_fractions = summary_category_fractions(spec, input_file)
   legend_graphs = None
   for pad_index, variables in enumerate(spec["variables"], 1):
     canvas.cd(pad_index)
@@ -669,7 +695,7 @@ def draw_scale_resolution_summary(canvas, spec, input_file):
   ROOT.gPad.SetRightMargin(0.06)
   ROOT.gPad.SetBottomMargin(0.06)
   ROOT.gPad.SetTopMargin(0.06)
-  legend = ROOT.TLegend(0.10, 0.30, 0.90, 0.70)
+  legend = ROOT.TLegend(0.10, 0.62, 0.90, 0.92)
   legend.SetBorderSize(0)
   legend.SetFillStyle(0)
   legend.SetTextFont(42)
@@ -679,6 +705,38 @@ def draw_scale_resolution_summary(canvas, spec, input_file):
   legend.AddEntry(legend_graphs[1], "Constrained: 1 + mean #pm RMS", "pe")
   legend.Draw()
   objects.append(legend)
+
+  fraction_labels = []
+  fraction_title = ROOT.TLatex()
+  fraction_title.SetNDC(True)
+  fraction_title.SetTextFont(62)
+  fraction_title.SetTextSize(0.052)
+  fraction_title.DrawLatex(0.10, 0.54, "Topology fractions")
+  fraction_labels.append(fraction_title)
+
+  fraction_note = ROOT.TLatex()
+  fraction_note.SetNDC(True)
+  fraction_note.SetTextFont(42)
+  fraction_note.SetTextSize(0.035)
+  fraction_note.DrawLatex(0.10, 0.49, "Unconstrained entries; binomial uncertainty")
+  fraction_labels.append(fraction_note)
+
+  for index, (display_name, fraction, uncertainty) in enumerate(category_fractions):
+    percentage = 100.0 * fraction
+    percentage_uncertainty = 100.0 * uncertainty
+    precision = 2 if percentage < 1.0 else 1
+    label = ROOT.TLatex()
+    label.SetNDC(True)
+    label.SetTextFont(42)
+    label.SetTextSize(0.043)
+    label.DrawLatex(
+        0.10,
+        0.42 - 0.073 * index,
+        f"{display_name}: {percentage:.{precision}f} #pm "
+        f"{percentage_uncertainty:.{precision}f}%",
+    )
+    fraction_labels.append(label)
+  objects.extend(fraction_labels)
 
   canvas.Update()
   return objects
