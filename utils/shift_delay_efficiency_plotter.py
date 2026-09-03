@@ -86,21 +86,27 @@ def read_provenance(input_file, path, expected_delay):
         raise RuntimeError(f"{path} is not a no-pileup same-SimHit control")
     try:
         stored_delay = float(provenance["delay_ns"])
-        source = provenance["source_step1"]
+        sources = provenance["source_step1"]
     except (KeyError, TypeError, ValueError) as error:
         raise RuntimeError(f"incomplete delay provenance in {path}") from error
     if not math.isclose(stored_delay, expected_delay, abs_tol=1.0e-9):
         raise RuntimeError(
             f"directory delay {expected_delay} ns disagrees with {stored_delay} ns in {path}"
         )
-    return source
+    if isinstance(sources, str):
+        sources = [sources]
+    if not isinstance(sources, list) or not sources or not all(
+        isinstance(source, str) for source in sources
+    ):
+        raise RuntimeError(f"invalid Step-1 source list in {path}")
+    return sources
 
 
 def count_file(path, counts, expected_delay):
     input_file = ROOT.TFile.Open(str(path))
     if not input_file or input_file.IsZombie():
         raise RuntimeError(f"cannot open {path}")
-    source = read_provenance(input_file, path, expected_delay)
+    sources = read_provenance(input_file, path, expected_delay)
     tree = input_file.Get("Events")
     if not tree:
         raise RuntimeError(f"Events tree is missing in {path}")
@@ -170,7 +176,7 @@ def count_file(path, counts, expected_delay):
             for category in matched_categories:
                 counts["dimuon"][category] += 1
     input_file.Close()
-    return source
+    return sources
 
 
 def empty_counts():
@@ -238,10 +244,13 @@ def main():
         counts = empty_counts()
         sources = set()
         for path in files:
-            source = count_file(path, counts, delay)
-            if source in sources:
-                raise RuntimeError(f"duplicate source Step-1 file at delay {delay} ns: {source}")
-            sources.add(source)
+            file_sources = count_file(path, counts, delay)
+            duplicated = sources.intersection(file_sources)
+            if duplicated:
+                raise RuntimeError(
+                    f"duplicate source Step-1 file at delay {delay} ns: {sorted(duplicated)[0]}"
+                )
+            sources.update(file_sources)
         points.append({"delay_ns": delay, "files": len(files), "sources": sources, **counts})
     reference_sources = points[0]["sources"]
     for point in points[1:]:
