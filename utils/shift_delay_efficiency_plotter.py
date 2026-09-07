@@ -7,6 +7,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import json
 import math
 import multiprocessing
+import os
 from pathlib import Path
 import re
 
@@ -15,6 +16,10 @@ import ROOT
 
 ROOT.gROOT.SetBatch(True)
 ROOT.gStyle.SetOptStat(0)
+# ROOT's PDF backend otherwise places a large canvas onto only part of its
+# default paper. Match the paper and canvas aspect ratios so the plot and its
+# external legend use the full landscape page.
+ROOT.gStyle.SetPaperSize(28.0, 19.8)
 
 MUON_CATEGORIES = [
     ("inclusive", "Inclusive", ROOT.kBlack),
@@ -37,17 +42,19 @@ DIMUON_CATEGORIES = [
     ("both_both", "Both Endcaps + Both Endcaps", ROOT.kGreen + 2),
     ("near_both", "Both Endcaps + Near Endcap Only", ROOT.kViolet + 1),
     ("both_far", "Both Endcaps + Far Endcap Only", ROOT.kCyan + 2),
-    ("near_far", "Near Endcap Only + Far Endcap Only", ROOT.kBlue + 1),
+    ("near_near", "Near Endcap Only + Near Endcap Only", ROOT.kOrange + 7),
+    ("far_far", "Far Endcap Only + Far Endcap Only", ROOT.kBlue + 1),
     ("other", "Other topologies", ROOT.kGray + 2),
 ]
 DIMUON_PLOT_CATEGORIES = [
     category for category in DIMUON_CATEGORIES if category[0] != "good"
 ]
 DIMUON_TOPOLOGY = {
+    (0, 0): "near_near",
     (0, 2): "near_both",
-    (0, 3): "near_far",
     (2, 2): "both_both",
     (2, 3): "both_far",
+    (3, 3): "far_far",
 }
 DELAY_PATTERN = re.compile(r"^delay_([mp])(\d+(?:p\d+)?)ns$")
 COUNT_BRANCHES = (
@@ -292,10 +299,14 @@ def make_plot(
     points, object_name, categories, output_path, *, x_minimum, x_maximum,
     show_errors=True, average_width=None,
 ):
-    canvas = ROOT.TCanvas(f"canvas_{object_name}", "", 1400, 700)
-    canvas.SetLeftMargin(0.13)
-    canvas.SetRightMargin(0.44)
+    # Match the A4-landscape aspect ratio used by ROOT's PDF backend. A much
+    # wider canvas is scaled into the top half of the PDF and wastes the lower
+    # half of the page.
+    canvas = ROOT.TCanvas(f"canvas_{object_name}", "", 1400, 990)
+    canvas.SetLeftMargin(0.16)
+    canvas.SetRightMargin(0.34)
     canvas.SetBottomMargin(0.13)
+    canvas.SetTopMargin(0.08)
     maximum = max(
         point[object_name][category] / point[object_name]["denominator"]
         if point[object_name]["denominator"] else 0.0
@@ -312,8 +323,8 @@ def make_plot(
     frame.GetYaxis().SetTitleSize(0.050)
     frame.GetXaxis().SetLabelSize(0.042)
     frame.GetYaxis().SetLabelSize(0.042)
-    legend = ROOT.TLegend(0.58, 0.50, 0.99, 0.88)
-    legend.SetTextSize(0.028)
+    legend = ROOT.TLegend(0.675, 0.50, 0.99, 0.90)
+    legend.SetTextSize(0.021)
     legend.SetBorderSize(0)
     legend.SetFillStyle(0)
     graphs = []
@@ -397,6 +408,23 @@ def load_cached_counts(path):
     return validate_cached_counts(data, path)
 
 
+def write_counts_atomic(path, points):
+    partial = path.parent / f".{path.name}.{os.getpid()}.partial"
+    try:
+        with partial.open("w", encoding="utf-8") as output_file:
+            json.dump(
+                {"format": "shift-delay-efficiencies-v1", "points": points},
+                output_file,
+                indent=2,
+                sort_keys=True,
+            )
+            output_file.write("\n")
+        os.replace(partial, path)
+    finally:
+        if partial.exists():
+            partial.unlink()
+
+
 def count_delay(delay, files):
     counts = empty_counts()
     sources = set()
@@ -474,8 +502,8 @@ def main():
         "--workers", type=int, default=4,
         help="parallel counting processes used when reading ROOT files (default: 4)",
     )
-    parser.add_argument("--delay-min", type=float, default=-200.0)
-    parser.add_argument("--delay-max", type=float, default=200.0)
+    parser.add_argument("--delay-min", type=float, default=-100.0)
+    parser.add_argument("--delay-max", type=float, default=150.0)
     parser.add_argument(
         "--dimuon-bin-width", type=float, default=10.0,
         help="delay-bin width used to average the dimuon curves (default: 10 ns)",
@@ -512,10 +540,7 @@ def main():
         print(message, flush=True)
     else:
         points = count_scan(scan_dir, args.workers)
-        with cache_path.open("w", encoding="utf-8") as output_file:
-            json.dump({"format": "shift-delay-efficiencies-v1", "points": points}, output_file,
-                      indent=2, sort_keys=True)
-            output_file.write("\n")
+        write_counts_atomic(cache_path, points)
         print(f"cached counts in {cache_path}", flush=True)
     visible_points = [
         point for point in points
