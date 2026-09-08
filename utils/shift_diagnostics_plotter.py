@@ -94,16 +94,16 @@ QOVERPT_REFERENCE_STYLES = [
      "displaced #mu (standard-muon reconstruction)"),
 ]
 MUON_RESOLUTION_VARIABLES = [
-    ("eta", "constrainedEta"),
-    ("phi", "constrainedPhi"),
+    ("deltaEta", "constrainedDeltaEta"),
+    ("deltaPhi", "constrainedDeltaPhi"),
     ("pz", "constrainedPz"),
     ("vz", "constrainedVz"),
     ("pt", "constrainedPt"),
     
 ]
 DIMUON_RESOLUTION_VARIABLES = [
-    ("eta", "constrainedEta"),
-    ("phi", "constrainedPhi"),
+    ("deltaEta", "constrainedDeltaEta"),
+    ("deltaPhi", "constrainedDeltaPhi"),
     ("pz", "constrainedPz"),
     ("vz", "constrainedVz"),
     ("pt", "constrainedPt"),
@@ -221,6 +221,8 @@ TITLES = {
 RESOLUTION_TITLES = {}
 
 MUON_RESOLUTION_LABELS = {
+    "deltaEta": "#eta",
+    "deltaPhi": "#phi",
     "eta": "#eta",
     "phi": "#phi",
     "pt": "p_{T}",
@@ -238,6 +240,8 @@ for muon_type, _, _ in MUON_RESOLUTION_TYPES:
         f"({quantity}^{{reco, constrained}} - {quantity}^{{gen}}) / {quantity}^{{gen}}")
 
 DIMUON_RESOLUTION_LABELS = {
+    "deltaEta": "#eta_{#mu#mu}",
+    "deltaPhi": "#phi_{#mu#mu}",
     "eta": "#eta_{#mu#mu}",
     "minv": "m_{#mu#mu}",
     "phi": "#phi_{#mu#mu}",
@@ -256,6 +260,15 @@ for dimuon_type, _, _ in DIMUON_RESOLUTION_TYPES:
         f"({quantity}^{{reco, constrained}} - {quantity}^{{gen}}) / {quantity}^{{gen}}")
 
 RESOLUTION_X_RANGES = {}
+for prefix, categories in (("MuonResolution", MUON_RESOLUTION_TYPES),
+                           ("DimuonResolution", DIMUON_RESOLUTION_TYPES)):
+  for category, _, _ in categories:
+    for variable, symbol in (("deltaEta", "#eta"), ("deltaPhi", "#phi")):
+      wrap = "wrapped " if variable == "deltaPhi" else ""
+      unit = " (rad)" if variable == "deltaPhi" else ""
+      RESOLUTION_TITLES[f"{prefix}{category}_{variable}"] = f"{wrap}({symbol}^{{reco}} - {symbol}^{{gen}}){unit}"
+      constrained_variable = "constrained" + variable[0].upper() + variable[1:]
+      RESOLUTION_TITLES[f"{prefix}{category}_{constrained_variable}"] = f"{wrap}({symbol}^{{reco, constrained}} - {symbol}^{{gen}}){unit}"
 for resolution_canvas in MUON_RESOLUTION_CANVASES:
   for name in resolution_canvas["names"]:
     if name.endswith(("_vx", "_vy", "_constrainedVx", "_constrainedVy")):
@@ -585,6 +598,7 @@ def draw_scale_resolution_summary(canvas, spec, input_file):
   category_fractions = summary_category_fractions(spec, input_file)
   legend_graphs = None
   for pad_index, variables in enumerate(spec["variables"], 1):
+    angular_variable = variables[0]
     canvas.cd(pad_index)
     ROOT.gPad.SetLeftMargin(0.20)
     ROOT.gPad.SetRightMargin(0.06)
@@ -621,7 +635,7 @@ def draw_scale_resolution_summary(canvas, spec, input_file):
           print(f"Warning: histogram '{name}' has no in-range entries")
           continue
 
-        scale = 1.0 + hist.GetMean()
+        scale = (0.0 if angular_variable.startswith("delta") else 1.0) + hist.GetMean()
         resolution = hist.GetStdDev()
         if not math.isfinite(scale) or not math.isfinite(resolution):
           print(f"Warning: histogram '{name}' has a non-finite direct summary")
@@ -632,7 +646,7 @@ def draw_scale_resolution_summary(canvas, spec, input_file):
         x_errors.append(0.0)
         y_errors.append(resolution)
 
-    reference_value = 1.0
+    reference_value = 0.0 if angular_variable.startswith("delta") else 1.0
     all_points = [
         (value, error)
         for _, y_values, _, y_errors in summaries.values()
@@ -648,7 +662,8 @@ def draw_scale_resolution_summary(canvas, spec, input_file):
     set_axes_titles(
         frame,
         f"{spec['object_name']} topology",
-        "RECO / GEN scale",
+        ("Angular residual mean (rad)" if angular_variable == "deltaPhi" else "Angular residual mean")
+        if angular_variable.startswith("delta") else "RECO / GEN scale",
     )
     frame.GetXaxis().SetLabelSize(0.050)
     frame.GetXaxis().SetLabelOffset(0.015)
@@ -701,8 +716,8 @@ def draw_scale_resolution_summary(canvas, spec, input_file):
   legend.SetTextFont(42)
   legend.SetTextSize(0.060)
   legend.SetHeader("Scale and resolution", "C")
-  legend.AddEntry(legend_graphs[0], "Unconstrained: 1 + mean #pm RMS", "pe")
-  legend.AddEntry(legend_graphs[1], "Constrained: 1 + mean #pm RMS", "pe")
+  legend.AddEntry(legend_graphs[0], "Unconstrained (#pm RMS)", "pe")
+  legend.AddEntry(legend_graphs[1], "Constrained (#pm RMS)", "pe")
   legend.Draw()
   objects.append(legend)
 

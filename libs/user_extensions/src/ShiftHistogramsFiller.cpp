@@ -3,6 +3,7 @@
 #include "ConfigManager.hpp"
 
 #include <map>
+#include <cmath>
 #include <set>
 
 using namespace std;
@@ -275,6 +276,11 @@ void ShiftHistogramsFiller::FillResolutionPlots(const shared_ptr<Event> event) {
       if (genPartIdx < 0 || genPartIdx >= genParticles->size()) continue;
       auto genMuon = asNanoGenParticle(genParticles->at(genPartIdx));
 
+      histogramsHandler->Fill("MuonResolution" + name + "_deltaEta",
+                              recoMuon->GetAs<float>("eta") - genMuon->GetAs<float>("eta"));
+      histogramsHandler->Fill("MuonResolution" + name + "_deltaPhi",
+                              std::remainder(recoMuon->GetAs<float>("phi") - genMuon->GetAs<float>("phi"), 2. * std::acos(-1.)));
+
       // CMS-DP-2015-015 uses the signed inverse-pT (curvature) residual.
       // PDG IDs +13/-13 denote mu-/mu+, hence the opposite sign for charge.
       double const genPt = genMuon->GetAs<float>("pt");
@@ -299,6 +305,10 @@ void ShiftHistogramsFiller::FillResolutionPlots(const shared_ptr<Event> event) {
       // Invalid constrained fits are stored as zeros in NanoAOD. Filling them would manufacture a spike at residual -1 and bias every constrained
       // scale plot, so require the explicit validity bit.
       if (recoMuon->GetAs<int>("constrainedValid")) {
+        histogramsHandler->Fill("MuonResolution" + name + "_constrainedDeltaEta",
+                                recoMuon->GetAs<float>("constrainedEta") - genMuon->GetAs<float>("eta"));
+        histogramsHandler->Fill("MuonResolution" + name + "_constrainedDeltaPhi",
+                                std::remainder(recoMuon->GetAs<float>("constrainedPhi") - genMuon->GetAs<float>("phi"), 2. * std::acos(-1.)));
         double const constrainedPt = recoMuon->GetAs<float>("constrainedPt");
         if (genPt > 0. && constrainedPt > 0.) {
           double const genQOverPt = genCharge / genPt;
@@ -344,6 +354,9 @@ void ShiftHistogramsFiller::FillResolutionPlots(const shared_ptr<Event> event) {
     auto const recoShiftDimuons = event->GetCollection("ShiftDimuonVertex" + category);
     for (auto const& recoDimuon : *recoShiftDimuons) {
       string const histogramPrefix = "DimuonResolution" + category + "_";
+      histogramsHandler->Fill(histogramPrefix + "deltaEta", recoDimuon->GetAs<float>("eta") - genJPsiVec.Eta());
+      histogramsHandler->Fill(histogramPrefix + "deltaPhi",
+                              std::remainder(recoDimuon->GetAs<float>("phi") - genJPsiVec.Phi(), 2. * std::acos(-1.)));
       histogramsHandler->Fill(histogramPrefix + "pt", (recoDimuon->GetAs<float>("pt") - genJPsiVec.Pt()) / genJPsiVec.Pt());
       histogramsHandler->Fill(histogramPrefix + "pz", (recoDimuon->GetAs<float>("pz") - genJPsiVec.Pz()) / genJPsiVec.Pz());
       histogramsHandler->Fill(histogramPrefix + "eta", (recoDimuon->GetAs<float>("eta") - genJPsiVec.Eta()) / genJPsiVec.Eta());
@@ -354,6 +367,10 @@ void ShiftHistogramsFiller::FillResolutionPlots(const shared_ptr<Event> event) {
       histogramsHandler->Fill(histogramPrefix + "vz", (recoDimuon->GetAs<float>("vz") - genJPsiVertex.Z()) / genJPsiVertex.Z());
 
       if (!recoDimuon->GetAs<int>("constrainedValid")) continue;
+
+      histogramsHandler->Fill(histogramPrefix + "constrainedDeltaEta", recoDimuon->GetAs<float>("constrainedEta") - genJPsiVec.Eta());
+      histogramsHandler->Fill(histogramPrefix + "constrainedDeltaPhi",
+                              std::remainder(recoDimuon->GetAs<float>("constrainedPhi") - genJPsiVec.Phi(), 2. * std::acos(-1.)));
 
       histogramsHandler->Fill(histogramPrefix + "constrainedPt", (recoDimuon->GetAs<float>("constrainedPt") - genJPsiVec.Pt()) / genJPsiVec.Pt());
       histogramsHandler->Fill(histogramPrefix + "constrainedPz", (recoDimuon->GetAs<float>("constrainedPz") - genJPsiVec.Pz()) / genJPsiVec.Pz());
