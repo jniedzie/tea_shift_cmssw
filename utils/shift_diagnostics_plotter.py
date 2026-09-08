@@ -591,14 +591,20 @@ def summary_category_fractions(spec, input_file):
   return fractions
 
 
-def draw_scale_resolution_summary(canvas, spec, input_file):
+def draw_scale_resolution_summary(canvas, spec, input_file, comparison=None, constrained=False):
   """Compare unconstrained and constrained direct summaries by topology."""
   objects = []
   categories = spec["categories"]
-  category_fractions = summary_category_fractions(spec, input_file)
+  category_fractions = summary_category_fractions(spec, input_file) if comparison is None else []
+  series = ([(label, source, 1 if constrained else 0, offset, color, marker)
+             for (label, source), offset, color, marker in zip(
+                 comparison, (-0.12, 0.12), (ROOT.kBlue + 1, ROOT.kOrange + 7), (20, 21))]
+            if comparison is not None else [
+                ("Unconstrained", input_file, 0, -0.12, ROOT.kBlue + 1, 20),
+                ("Constrained", input_file, 1, 0.12, ROOT.kOrange + 7, 21)])
   legend_graphs = None
   for pad_index, variables in enumerate(spec["variables"], 1):
-    angular_variable = variables[0]
+    variable = variables[0]
     canvas.cd(pad_index)
     ROOT.gPad.SetLeftMargin(0.20)
     ROOT.gPad.SetRightMargin(0.06)
@@ -617,17 +623,12 @@ def draw_scale_resolution_summary(canvas, spec, input_file):
     for bin_index, (_, _, display_name) in enumerate(categories, 1):
       frame.GetXaxis().SetBinLabel(bin_index, display_name)
 
-    summaries = {
-        "unconstrained": (array("d"), array("d"), array("d"), array("d")),
-        "constrained": (array("d"), array("d"), array("d"), array("d")),
-    }
+    summaries = {label: (array("d"), array("d"), array("d"), array("d"))
+                 for label, *_ in series}
     for bin_index, (category, _, _) in enumerate(categories, 1):
-      for strategy, variable, x_offset in (
-          ("unconstrained", variables[0], -0.12),
-          ("constrained", variables[1], 0.12),
-      ):
-        name = f"{spec['histogram_prefix']}{category}_{variable}"
-        hist = input_file.Get(f"resolution/{name}")
+      for strategy, source, variable_index, x_offset, _, _ in series:
+        name = f"{spec['histogram_prefix']}{category}_{variables[variable_index]}"
+        hist = source.Get(f"resolution/{name}")
         if not hist:
           print(f"Warning: histogram '{name}' was not found")
           continue
@@ -635,7 +636,7 @@ def draw_scale_resolution_summary(canvas, spec, input_file):
           print(f"Warning: histogram '{name}' has no in-range entries")
           continue
 
-        scale = (0.0 if angular_variable.startswith("delta") else 1.0) + hist.GetMean()
+        scale = (0.0 if variable.startswith("delta") else 1.0) + hist.GetMean()
         resolution = hist.GetStdDev()
         if not math.isfinite(scale) or not math.isfinite(resolution):
           print(f"Warning: histogram '{name}' has a non-finite direct summary")
@@ -646,7 +647,7 @@ def draw_scale_resolution_summary(canvas, spec, input_file):
         x_errors.append(0.0)
         y_errors.append(resolution)
 
-    reference_value = 0.0 if angular_variable.startswith("delta") else 1.0
+    reference_value = 0.0 if variable.startswith("delta") else 1.0
     all_points = [
         (value, error)
         for _, y_values, _, y_errors in summaries.values()
@@ -662,8 +663,8 @@ def draw_scale_resolution_summary(canvas, spec, input_file):
     set_axes_titles(
         frame,
         f"{spec['object_name']} topology",
-        ("Angular residual mean (rad)" if angular_variable == "deltaPhi" else "Angular residual mean")
-        if angular_variable.startswith("delta") else "RECO / GEN scale",
+        ("Angular residual mean (rad)" if variable == "deltaPhi" else "Angular residual mean")
+        if variable.startswith("delta") else "RECO / GEN scale",
     )
     frame.GetXaxis().SetLabelSize(0.050)
     frame.GetXaxis().SetLabelOffset(0.015)
@@ -679,10 +680,7 @@ def draw_scale_resolution_summary(canvas, spec, input_file):
     unity.Draw("same")
 
     graphs = []
-    for strategy, color, marker_style in (
-        ("unconstrained", ROOT.kBlue + 1, 20),
-        ("constrained", ROOT.kOrange + 7, 21),
-    ):
+    for strategy, _, _, _, color, marker_style in series:
       x_values, y_values, x_errors, y_errors = summaries[strategy]
       graph = ROOT.TGraphErrors(len(x_values), x_values, y_values, x_errors, y_errors)
       graph.SetName(f"graph_{spec['canvas_name']}_{variables[0]}_{strategy}")
@@ -715,11 +713,16 @@ def draw_scale_resolution_summary(canvas, spec, input_file):
   legend.SetFillStyle(0)
   legend.SetTextFont(42)
   legend.SetTextSize(0.060)
-  legend.SetHeader("Scale and resolution", "C")
-  legend.AddEntry(legend_graphs[0], "Unconstrained (#pm RMS)", "pe")
-  legend.AddEntry(legend_graphs[1], "Constrained (#pm RMS)", "pe")
+  legend.SetHeader(("Constrained" if constrained else "Unconstrained")
+                   if comparison is not None else "Scale and resolution", "C")
+  for graph, (label, *_) in zip(legend_graphs, series):
+    legend.AddEntry(graph, f"{label} (#pm RMS)", "pe")
   legend.Draw()
   objects.append(legend)
+
+  if comparison is not None:
+    canvas.Update()
+    return objects
 
   fraction_labels = []
   fraction_title = ROOT.TLatex()
@@ -996,7 +999,7 @@ def efficiency_prefix(object_name, category):
   return f"{object_name}{category}Efficiency"
 
 
-def draw_efficiencies(canvas, input_file, object_name, categories):
+def draw_efficiencies(canvas, input_file, object_name, categories, comparison=None):
   objects = []
   legend_entries = []
   is_dimuon = object_name == "ShiftDimuonVertex"
@@ -1010,10 +1013,13 @@ def draw_efficiencies(canvas, input_file, object_name, categories):
     ROOT.gPad.SetLogy(is_dimuon)
     curves = []
     frame = None
-    for category, label, color in categories:
+    series = ([("", label, color, source) for (label, source), color in zip(
+        comparison, (ROOT.kBlue + 1, ROOT.kOrange + 7))] if comparison is not None
+        else [(category, label, color, input_file) for category, label, color in categories])
+    for category, label, color, source in series:
       prefix = efficiency_prefix(object_name, category)
-      passed = input_file.Get(f"efficiency/{prefix}_{variable}_pass")
-      total = input_file.Get(f"efficiency/{prefix}_{variable}_total")
+      passed = source.Get(f"efficiency/{prefix}_{variable}_pass")
+      total = source.Get(f"efficiency/{prefix}_{variable}_total")
       if not passed or not total:
         print(f"Warning: efficiency pair '{prefix}_{variable}' was not found")
         continue
@@ -1080,6 +1086,150 @@ def draw_efficiencies(canvas, input_file, object_name, categories):
   return objects
 
 
+def write_comparison_table(output_dir, stem, title, labels, rows, note):
+  """Render a compact comparison table as a PDF."""
+  headers = ["Topology", *labels]
+  canvas = ROOT.TCanvas("canvas_" + stem, title, 1200, 650)
+  objects = []
+
+  def text(x, y, value, size=0.029, bold=False):
+    label = ROOT.TLatex()
+    label.SetNDC(True)
+    label.SetTextFont(62 if bold else 42)
+    label.SetTextSize(size)
+    label.DrawLatex(x, y, value.replace("±", "#pm"))
+    objects.append(label)
+
+  text(0.05, 0.92, title, 0.043, True)
+  text(0.05, 0.85, note, 0.024)
+  for x, header in zip((0.05, 0.51, 0.76), headers):
+    text(x, 0.74, header, 0.034, True)
+  for index, row in enumerate(rows):
+    y = 0.65 - index * 0.083
+    for x, value in zip((0.05, 0.51, 0.76), row):
+      text(x, y, value)
+  canvas.SaveAs(os.path.join(output_dir, stem + ".pdf"))
+  canvas.Close()
+
+
+def draw_comparison_table_pad(canvas, pad_number, title, labels, rows, note):
+  canvas.cd(pad_number)
+  ROOT.gPad.SetLeftMargin(0.06)
+  ROOT.gPad.SetRightMargin(0.04)
+  ROOT.gPad.SetTopMargin(0.06)
+  ROOT.gPad.SetBottomMargin(0.05)
+  objects = []
+
+  def text(x, y, value, size=0.030, bold=False):
+    label = ROOT.TLatex()
+    label.SetNDC(True)
+    label.SetTextFont(62 if bold else 42)
+    label.SetTextSize(size)
+    label.DrawLatex(x, y, value.replace("±", "#pm"))
+    objects.append(label)
+
+  text(0.05, 0.92, title, 0.055, True)
+  text(0.05, 0.85, note, 0.030)
+  columns = [0.05, 0.51, 0.76]
+  for x, header in zip(columns, ["Topology", *labels]):
+    text(x, 0.75, header, 0.048, True)
+  for index, row in enumerate(rows):
+    y = 0.67 - index * min(0.075, 0.58 / max(len(rows), 1))
+    for x, value in zip(columns, row):
+      text(x, y, value, 0.045)
+  return objects
+
+
+def format_efficiency_percentage(value):
+  if value >= 10.0:
+    return f"{value:.1f}%"
+  if value >= 1.0:
+    return f"{value:.2f}%"
+  return f"{value:.3f}%"
+
+
+def run_version_comparison(args):
+  versions = args.compare_versions
+  if min(versions) < 1 or versions[0] == versions[1]:
+    raise ValueError("comparison requires two distinct positive versions")
+  selections = [select_histogram_file(args.histograms_dir, version) for version in versions]
+  sources = []
+  try:
+    for path, version, _ in selections:
+      source = ROOT.TFile.Open(path, "READ")
+      if not source or source.IsZombie():
+        raise RuntimeError(f"could not open input ROOT file '{path}'")
+      sources.append(source)
+      print(f"Selected v{version}: {path}")
+    comparison = list(zip([f"v{version}" for version in versions], sources))
+    # Check all requested inputs before writing any comparison artifacts. Missing
+    # categories must not silently become zero fractions or efficiencies.
+    for label, source in comparison:
+      for spec in SUMMARY_CANVAS_SPECS:
+        for category, _, _ in spec["categories"]:
+          for variables in spec["variables"]:
+            for variable in variables:
+              path = f"resolution/{spec['histogram_prefix']}{category}_{variable}"
+              hist = source.Get(path)
+              if not hist or not hist.InheritsFrom("TH1") or hist.GetDimension() != 1:
+                raise RuntimeError(f"{label}: missing or invalid histogram {path}")
+      for object_name, categories in (("ShiftMuon", MUON_EFFICIENCY_TYPES),
+                                      ("ShiftDimuonVertex", DIMUON_EFFICIENCY_TYPES)):
+        for category, _, _ in categories:
+          for variable in EFFICIENCY_VARIABLES if category == "" else EFFICIENCY_VARIABLES[:1]:
+            prefix = f"efficiency/{efficiency_prefix(object_name, category)}_{variable}"
+            passed, total = source.Get(prefix + "_pass"), source.Get(prefix + "_total")
+            if not passed or not total or not ROOT.TEfficiency.CheckConsistency(passed, total):
+              raise RuntimeError(f"{label}: missing or inconsistent efficiency {prefix}")
+    output_dir = os.path.join(args.output_dir, "comparisons", "_vs_".join(label for label, _ in comparison))
+    os.makedirs(output_dir, exist_ok=True)
+    labels = [label for label, _ in comparison]
+    for spec in SUMMARY_CANVAS_SPECS:
+      for constrained in (False, True):
+        strategy = "constrained" if constrained else "unconstrained"
+        stem = spec["output_name"].removesuffix(".pdf") + "_" + strategy
+        canvas = ROOT.TCanvas("canvas_" + stem, stem, 1100, 1600)
+        canvas.Divide(2, 4)
+        objects = draw_scale_resolution_summary(canvas, spec, sources[0], comparison, constrained)
+        fractions = [summary_category_fractions(spec, source) for source in sources]
+        rows = []
+        for index, (_, _, display_name) in enumerate(spec["categories"]):
+          rows.append([display_name, *[
+              f"{100 * values[index][1]:.2f} ± {100 * values[index][2]:.2f}%" if values else "N/A"
+              for values in fractions]])
+        objects += draw_comparison_table_pad(
+            canvas, 8, spec["object_name"] + " topology fractions", labels, rows,
+            "Unconstrained entries; binomial uncertainty.")
+        canvas.SaveAs(os.path.join(output_dir, stem + ".pdf"))
+        canvas.Close()
+    for object_name, categories, stem in (
+        ("ShiftMuon", MUON_EFFICIENCY_TYPES, "shiftmuon_efficiency"),
+        ("ShiftDimuonVertex", DIMUON_EFFICIENCY_TYPES, "shiftdimuonvertex_efficiency"),
+    ):
+      canvas = ROOT.TCanvas("canvas_" + stem, stem, 1100, 1200)
+      canvas.Divide(2, 4)
+      objects = draw_efficiencies(canvas, sources[0], object_name, categories, comparison)
+      rows = []
+      for category, display_name, _ in categories:
+        values = []
+        for source in sources:
+          prefix = f"efficiency/{efficiency_prefix(object_name, category)}_{EFFICIENCY_VARIABLES[0]}"
+          passed, total = source.Get(prefix + "_pass"), source.Get(prefix + "_total")
+          n_pass = passed.Integral(0, passed.GetNbinsX() + 1)
+          n_total = total.Integral(0, total.GetNbinsX() + 1)
+          values.append(format_efficiency_percentage(100 * n_pass / n_total) if n_total else "N/A")
+        rows.append([display_name, *values])
+      objects += draw_comparison_table_pad(
+          canvas, 8, object_name + " total efficiencies", labels, rows,
+          "Passed / total truth objects, including underflow and overflow.")
+      canvas.SaveAs(os.path.join(output_dir, stem + "_inclusive.pdf"))
+      canvas.Close()
+    print(f"Comparison output directory: {output_dir}")
+  finally:
+    for source in sources:
+      source.Close()
+
+
 def parse_arguments():
   parser = argparse.ArgumentParser(description="Plot SHIFT reconstruction diagnostics")
   input_selection = parser.add_mutually_exclusive_group()
@@ -1092,6 +1242,11 @@ def parse_arguments():
       type=int,
       metavar="N",
       help="plot version vN from --histograms-dir instead of the highest version",
+  )
+  input_selection.add_argument(
+      "--compare-versions", nargs=2, type=lambda value: int(value.removeprefix("v")),
+      metavar=("VERSION_A", "VERSION_B"),
+      help="compare two versions, e.g. v40 v41; save under comparisons/v40_vs_v41",
   )
   parser.add_argument(
       "--histograms-dir",
@@ -1118,6 +1273,14 @@ def main():
   ROOT.gROOT.SetBatch(True)
 
   args = parse_arguments()
+  if args.compare_versions:
+    if args.rebin_2d:
+      raise SystemExit("error: --rebin-2d does not apply to version comparisons")
+    try:
+      run_version_comparison(args)
+    except (RuntimeError, ValueError) as error:
+      raise SystemExit(f"error: {error}") from error
+    return
   try:
     if args.input:
       input_path = args.input
