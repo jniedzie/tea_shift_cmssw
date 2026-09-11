@@ -21,16 +21,19 @@ int main(int argc, char** argv) {
   auto shiftHistogramsFiller = make_unique<ShiftHistogramsFiller>(histogramsHandler);
   auto nanoEventProcessor = make_unique<NanoEventProcessor>();
 
+  bool enableTruthDiagnostics = true;
+  ConfigManager::GetInstance().GetValue("enableTruthDiagnostics", enableTruthDiagnostics);
+
   for (int iEvent = 0; iEvent < eventReader->GetNevents(); iEvent++) {
     auto event = eventReader->GetEvent(iEvent);
 
-    map<string, float> weight = {{"default", nanoEventProcessor->GetGenWeight(asNanoEvent(event))}};    
+    map<string, float> weight = {{"default", enableTruthDiagnostics ? nanoEventProcessor->GetGenWeight(asNanoEvent(event)) : 1.f}};
     histogramsHandler->SetEventWeights(weight);
 
     histogramsFiller->FillDefaultVariables(event);
     shiftHistogramsFiller->Fill(event);
   }
-  
+
   histogramsHandler->SaveHistograms();
 
   auto& logger = Logger::GetInstance();

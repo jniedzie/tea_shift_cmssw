@@ -29,22 +29,54 @@ string GetDimuonTopologyCategory(int topologyMin, int topologyMax) {
 ShiftHistogramsFiller::ShiftHistogramsFiller(shared_ptr<HistogramsHandler> histogramsHandler_) : histogramsHandler(histogramsHandler_) {
   auto& config = ConfigManager::GetInstance();
   eventProcessor = make_unique<EventProcessor>();
+  config.GetValue("enableTruthDiagnostics", enableTruthDiagnostics);
 }
 
 ShiftHistogramsFiller::~ShiftHistogramsFiller() {}
 
 void ShiftHistogramsFiller::Fill(const shared_ptr<Event> event) {
-  FillGenLevel(event);
   FillRecoLevel(event);
-  FillRecoVsGen2D(event);
-  FillResolutionPlots(event);
-  FillEfficiencies(event);
   FillDetectorDiagnostics(event);
+  if (enableTruthDiagnostics) {
+    FillGenLevel(event);
+    FillRecoVsGen2D(event);
+    FillResolutionPlots(event);
+    FillEfficiencies(event);
+  }
+}
+
+int ShiftHistogramsFiller::HitTruthIndex(const shared_ptr<PhysicsObject>& muon) const {
+  if (!muon->HasBranch("hitGenPartIdx"))
+    throw runtime_error("SHIFT truth diagnostics require hitGenPartIdx; angular matching is not a fallback. "
+                        "For collision data set enableTruthDiagnostics=False.");
+  return muon->GetAs<int>("hitGenPartIdx");
+}
+
+const ShiftHistogramsFiller::GenJPsiCandidate* ShiftHistogramsFiller::MatchDimuon(
+    const shared_ptr<PhysicsObject>& dimuon, const shared_ptr<PhysicsObjects>& muons,
+    const vector<GenJPsiCandidate>& candidates) const {
+  int const i = dimuon->GetAs<int>("muonIdx1"), j = dimuon->GetAs<int>("muonIdx2");
+  if (i < 0 || j < 0 || i == j || size_t(i) >= muons->size() || size_t(j) >= muons->size()) return nullptr;
+  int const a = HitTruthIndex(muons->at(i)), b = HitTruthIndex(muons->at(j));
+  if (a < 0 || b < 0 || a == b) return nullptr;
+  for (auto const& candidate : candidates)
+    if ((a == candidate.muonMinusIdx && b == candidate.muonPlusIdx) ||
+        (b == candidate.muonMinusIdx && a == candidate.muonPlusIdx)) return &candidate;
+  return nullptr;
 }
 
 void ShiftHistogramsFiller::FillDetectorDiagnostics(const shared_ptr<Event> event) {
   auto muons = event->GetCollection("ShiftMuon");
   for (auto const& muon : *muons) {
+    histogramsHandler->FillUnweighted("TargetDiagnostics_constrainedStatus", muon->GetAs<int>("constrainedStatus"));
+    if (enableTruthDiagnostics) {
+      histogramsHandler->FillUnweighted("TruthDiagnostics_hitMatched", HitTruthIndex(muon) >= 0);
+      histogramsHandler->FillUnweighted("TruthDiagnostics_legacyMatched", muon->GetAs<int>("genPartIdx") >= 0);
+    }
+    for (string const variable : {"constrainedEtaErr", "constrainedPhiErr", "targetPredictedEtaErr",
+          "targetPredictedPhiErr", "targetResidualX", "targetResidualY", "targetPullX", "targetPullY"})
+      if (muon->HasBranch(variable) && muon->GetAs<int>("constrainedValid"))
+        histogramsHandler->Fill("TargetDiagnostics_" + variable, muon->GetAs<float>(variable));
     int const compatibleDT = muon->GetAs<int>("nCompatibleDTSegments");
     int const addedDT = muon->GetAs<int>("nAddedDTRefitHits");
     int const compatibleTracker = muon->GetAs<int>("nCompatiblePixelHits") +
@@ -53,7 +85,7 @@ void ShiftHistogramsFiller::FillDetectorDiagnostics(const shared_ptr<Event> even
     if (compatibleDT > 0)
       histogramsHandler->FillUnweighted("DetectorDiagnostics_dtAttachmentFraction",
                                         static_cast<double>(addedDT) / compatibleDT);
-    int const truthMatchedDT = muon->GetAs<int>("nAddedDTTruthChamberMatches");
+    int const truthMatchedDT = enableTruthDiagnostics ? muon->GetAs<int>("nAddedDTTruthChamberMatches") : -1;
     if (addedDT > 0 && truthMatchedDT >= 0)
       histogramsHandler->FillUnweighted("DetectorDiagnostics_dtTruthChamberPurity",
                                         static_cast<double>(truthMatchedDT) / addedDT);
@@ -87,7 +119,7 @@ void ShiftHistogramsFiller::FillEfficiencies(const shared_ptr<Event> event) {
 
   map<int, vector<size_t>> recoMuonIndicesByGenIndex;
   for (size_t recoIndex = 0; recoIndex < recoMuons->size(); ++recoIndex) {
-    int const genIndex = recoMuons->at(recoIndex)->GetAs<int>("genPartIdx");
+    int const genIndex = HitTruthIndex(recoMuons->at(recoIndex));
     if (genIndex >= 0 && static_cast<size_t>(genIndex) < genParticles->size())
       recoMuonIndicesByGenIndex[genIndex].push_back(recoIndex);
   }
@@ -161,8 +193,8 @@ void ShiftHistogramsFiller::FillEfficiencies(const shared_ptr<Event> event) {
           static_cast<size_t>(secondRecoIndex) >= recoMuons->size())
         continue;
       set<int> const recoGenIndices = {
-          recoMuons->at(firstRecoIndex)->GetAs<int>("genPartIdx"),
-          recoMuons->at(secondRecoIndex)->GetAs<int>("genPartIdx"),
+          HitTruthIndex(recoMuons->at(firstRecoIndex)),
+          HitTruthIndex(recoMuons->at(secondRecoIndex)),
       };
       set<int> const truthGenIndices = {candidate.muonMinusIdx, candidate.muonPlusIdx};
       if (recoGenIndices.size() != 2 || recoGenIndices != truthGenIndices)
@@ -182,16 +214,19 @@ void ShiftHistogramsFiller::FillEfficiencies(const shared_ptr<Event> event) {
 void ShiftHistogramsFiller::FillGenLevel(const shared_ptr<Event> event) {
   auto genParticles = event->GetCollection("GenPart");
 
-  auto [genDimuon, genDimuonVertex] = GetGenJPsiDimuonVector(genParticles);
+  for (auto const& candidate : GetGenJPsiCandidates(genParticles)) {
+    auto const& genDimuon = candidate.momentum;
+    auto const& genDimuonVertex = candidate.vertex;
 
-  histogramsHandler->Fill("GenDimuon_pt", genDimuon.Pt());
-  histogramsHandler->Fill("GenDimuon_pz", genDimuon.Pz());
-  histogramsHandler->Fill("GenDimuon_eta", genDimuon.Eta());
-  histogramsHandler->Fill("GenDimuon_phi", genDimuon.Phi());
-  histogramsHandler->Fill("GenDimuon_mass", genDimuon.M());
-  histogramsHandler->Fill("GenDimuon_vx", genDimuonVertex.X());
-  histogramsHandler->Fill("GenDimuon_vy", genDimuonVertex.Y());
-  histogramsHandler->Fill("GenDimuon_vz", genDimuonVertex.Z());
+    histogramsHandler->Fill("GenDimuon_pt", genDimuon.Pt());
+    histogramsHandler->Fill("GenDimuon_pz", genDimuon.Pz());
+    histogramsHandler->Fill("GenDimuon_eta", genDimuon.Eta());
+    histogramsHandler->Fill("GenDimuon_phi", genDimuon.Phi());
+    histogramsHandler->Fill("GenDimuon_mass", genDimuon.M());
+    histogramsHandler->Fill("GenDimuon_vx", genDimuonVertex.X());
+    histogramsHandler->Fill("GenDimuon_vy", genDimuonVertex.Y());
+    histogramsHandler->Fill("GenDimuon_vz", genDimuonVertex.Z());
+  }
 }
 
 void ShiftHistogramsFiller::FillRecoLevel(const shared_ptr<Event> event) {
@@ -204,7 +239,12 @@ void ShiftHistogramsFiller::FillRecoLevel(const shared_ptr<Event> event) {
   for (auto const& [category, index] : categoryIndices)
     labels[index] = category;
 
+  auto const recoMuons = event->GetCollection("ShiftMuon");
+  vector<GenJPsiCandidate> truthCandidates;
+  if (enableTruthDiagnostics) truthCandidates = GetGenJPsiCandidates(event->GetCollection("GenPart"));
   for (auto const& dimuon : *dimuons) {
+    if (enableTruthDiagnostics)
+      histogramsHandler->FillUnweighted("TruthDiagnostics_dimuonHitMatched", MatchDimuon(dimuon, recoMuons, truthCandidates) != nullptr);
     string const category = GetDimuonTopologyCategory(
         dimuon->GetAs<int>("topologyMin"), dimuon->GetAs<int>("topologyMax"));
     histogramsHandler->Fill("ShiftDimuonVertex_topologyCategory", categoryIndices.at(category));
@@ -220,11 +260,8 @@ void ShiftHistogramsFiller::FillRecoVsGen2D(const shared_ptr<Event> event) {
 
   for (size_t i = 0; i < recoShiftMuons->size(); i++) {
     auto recoMuon = recoShiftMuons->at(i);
-    int genPartIdx = recoMuon->Get("genPartIdx");
-    if (genPartIdx < 0) {
-      warn() << "Reco muon has no corresponding gen muon, skipping." << endl;
-      continue;
-    }
+    int genPartIdx = HitTruthIndex(recoMuon);
+    if (genPartIdx < 0 || size_t(genPartIdx) >= genParticles->size()) continue;
     auto genMuon = genParticles->at(genPartIdx);
 
     histogramsHandler->Fill("RecoVsGenMuon_pt", recoMuon->GetAs<float>("pt"), genMuon->GetAs<float>("pt"));
@@ -237,12 +274,15 @@ void ShiftHistogramsFiller::FillRecoVsGen2D(const shared_ptr<Event> event) {
   }
 
   // dimuon
-  auto [genJPsiVec, genJPsiVertex] = GetGenJPsiDimuonVector(genParticles);
-  if (genJPsiVec.Pt() == 0) return;
+  auto const genCandidates = GetGenJPsiCandidates(genParticles);
 
   auto recoShiftDimuons = event->GetCollection("ShiftDimuonVertex");
   for (size_t i = 0; i < recoShiftDimuons->size(); i++) {
     auto recoDimuon = recoShiftDimuons->at(i);
+    auto const match = MatchDimuon(recoDimuon, recoShiftMuons, genCandidates);
+    if (!match) continue;
+    auto const& genJPsiVec = match->momentum;
+    auto const& genJPsiVertex = match->vertex;
 
     histogramsHandler->Fill("RecoVsGenDimuon_pt", recoDimuon->GetAs<float>("pt"), genJPsiVec.Pt());
     histogramsHandler->Fill("RecoVsGenDimuon_pz", recoDimuon->GetAs<float>("pz"), genJPsiVec.Pz());
@@ -272,9 +312,28 @@ void ShiftHistogramsFiller::FillResolutionPlots(const shared_ptr<Event> event) {
   for (const auto& [name, recoCollection] : recoShiftMuons) {
     for (size_t i = 0; i < recoCollection->size(); i++) {
       auto recoMuon = recoCollection->at(i);
-      int genPartIdx = recoMuon->Get("genPartIdx");
+      int genPartIdx = HitTruthIndex(recoMuon);
       if (genPartIdx < 0 || genPartIdx >= genParticles->size()) continue;
       auto genMuon = asNanoGenParticle(genParticles->at(genPartIdx));
+      double const de = recoMuon->GetAs<float>("eta") - genMuon->GetAs<float>("eta");
+      double const dp = remainder(recoMuon->GetAs<float>("phi") - genMuon->GetAs<float>("phi"), 2. * acos(-1.));
+      double const re = -recoMuon->GetAs<float>("eta") - genMuon->GetAs<float>("eta");
+      double const rp = remainder(recoMuon->GetAs<float>("phi") + acos(-1.) - genMuon->GetAs<float>("phi"), 2. * acos(-1.));
+      bool const reverse = hypot(re, rp) < hypot(de, dp);
+      string const diagnostics = "MuonResolution" + name + "_";
+      histogramsHandler->Fill(diagnostics + "directionReversed", reverse);
+      histogramsHandler->Fill(diagnostics + "axisDeltaEta", reverse ? re : de);
+      histogramsHandler->Fill(diagnostics + "axisDeltaPhi", reverse ? rp : dp);
+      // This is a diagnostic axis comparison only: NEVER flip or cut the reco state.
+      if (recoMuon->GetAs<int>("constrainedValid") && recoMuon->HasBranch("constrainedEtaErr")) {
+        for (string const angle : {"Eta", "Phi"}) {
+          double const error = recoMuon->GetAs<float>("constrained" + angle + "Err");
+          double residual = recoMuon->GetAs<float>("constrained" + angle) -
+                            genMuon->GetAs<float>(angle == "Eta" ? "eta" : "phi");
+          if (angle == "Phi") residual = remainder(residual, 2. * acos(-1.));
+          if (error > 0.) histogramsHandler->Fill(diagnostics + "constrained" + angle + "Pull", residual / error);
+        }
+      }
 
       histogramsHandler->Fill("MuonResolution" + name + "_deltaEta",
                               recoMuon->GetAs<float>("eta") - genMuon->GetAs<float>("eta"));
@@ -287,6 +346,7 @@ void ShiftHistogramsFiller::FillResolutionPlots(const shared_ptr<Event> event) {
       double const recoPt = recoMuon->GetAs<float>("pt");
       int const genCharge = genMuon->GetPdgId() > 0 ? -1 : 1;
       int const recoCharge = recoMuon->GetAs<int>("charge");
+      histogramsHandler->Fill(diagnostics + "chargeMisidentified", recoCharge != genCharge);
       if (genPt > 0. && recoPt > 0.) {
         double const genQOverPt = genCharge / genPt;
         double const recoQOverPt = recoCharge / recoPt;
@@ -331,7 +391,7 @@ void ShiftHistogramsFiller::FillResolutionPlots(const shared_ptr<Event> event) {
   // only its qOverPt histogram keeps all other resolution products unchanged.
   auto const singleEndcapMuons = event->GetCollection("ShiftMuonSingleEndcap");
   for (auto const& recoMuon : *singleEndcapMuons) {
-    int const genPartIdx = recoMuon->GetAs<int>("genPartIdx");
+    int const genPartIdx = HitTruthIndex(recoMuon);
     if (genPartIdx < 0 || static_cast<size_t>(genPartIdx) >= genParticles->size())
       continue;
     auto const genMuon = asNanoGenParticle(genParticles->at(genPartIdx));
@@ -347,12 +407,17 @@ void ShiftHistogramsFiller::FillResolutionPlots(const shared_ptr<Event> event) {
                             (recoQOverPt - genQOverPt) / genQOverPt);
   }
 
-  // Fill dimuon resolution plots
-  auto [genJPsiVec, genJPsiVertex] = GetGenJPsiDimuonVector(genParticles);
+  // Pair identity comes from recorded hits, independently of fit residuals.
+  auto const genCandidates = GetGenJPsiCandidates(genParticles);
+  auto const recoMuons = event->GetCollection("ShiftMuon");
 
   for (auto const& category : dimuonCategories) {
     auto const recoShiftDimuons = event->GetCollection("ShiftDimuonVertex" + category);
     for (auto const& recoDimuon : *recoShiftDimuons) {
+      auto const match = MatchDimuon(recoDimuon, recoMuons, genCandidates);
+      if (!match) continue;
+      auto const& genJPsiVec = match->momentum;
+      auto const& genJPsiVertex = match->vertex;
       string const histogramPrefix = "DimuonResolution" + category + "_";
       histogramsHandler->Fill(histogramPrefix + "deltaEta", recoDimuon->GetAs<float>("eta") - genJPsiVec.Eta());
       histogramsHandler->Fill(histogramPrefix + "deltaPhi",
@@ -395,7 +460,15 @@ vector<ShiftHistogramsFiller::GenJPsiCandidate> ShiftHistogramsFiller::GetGenJPs
     auto const particle = asNanoGenParticle(genParticles->at(index));
     if (abs(particle->GetPdgId()) != 13 || particle->GetAs<int>("status") != 1)
       continue;
-    int const motherIndex = particle->GetMotherIndex();
+    int motherIndex = particle->GetMotherIndex();
+    // A final-state muon can follow one or more same-PDG copies after photon
+    // radiation. Follow ancestry, never angular proximity, to its J/psi.
+    set<int> visited{static_cast<int>(index)};
+    while (motherIndex >= 0 && static_cast<size_t>(motherIndex) < genParticles->size() &&
+           genParticles->at(motherIndex)->GetAs<int>("pdgId") == particle->GetPdgId()) {
+      if (!visited.insert(motherIndex).second) { motherIndex = -1; break; }
+      motherIndex = asNanoGenParticle(genParticles->at(motherIndex))->GetMotherIndex();
+    }
     if (motherIndex < 0 || static_cast<size_t>(motherIndex) >= genParticles->size())
       continue;
     if (abs(genParticles->at(motherIndex)->GetAs<int>("pdgId")) != 443)
@@ -426,15 +499,4 @@ vector<ShiftHistogramsFiller::GenJPsiCandidate> ShiftHistogramsFiller::GetGenJPs
     candidates.push_back({motherIndex, minusIndex, plusIndex, minus, plus, momentum, vertex});
   }
   return candidates;
-}
-
-pair<TLorentzVector, TVector3> ShiftHistogramsFiller::GetGenJPsiDimuonVector(const shared_ptr<PhysicsObjects> genParticles) {
-  auto const candidates = GetGenJPsiCandidates(genParticles);
-  if (candidates.empty()) {
-    warn() << "Could not find both muons from JPsi decay." << endl;
-    return make_pair(TLorentzVector(), TVector3());  // return a zero vector and zero vertex
-  }
-  if (candidates.size() > 1)
-    warn() << "Found more than one generator J/psi -> mu+mu- candidate; legacy single-candidate plots use the first." << endl;
-  return make_pair(candidates.front().momentum, candidates.front().vertex);
 }

@@ -27,6 +27,10 @@ class ShiftHistogramsFiller {
 
   std::shared_ptr<HistogramsHandler> histogramsHandler;
   std::unique_ptr<EventProcessor> eventProcessor;
+  bool enableTruthDiagnostics = true;
+  int HitTruthIndex(const std::shared_ptr<PhysicsObject>& muon) const;
+  const GenJPsiCandidate* MatchDimuon(const std::shared_ptr<PhysicsObject>& dimuon,
+      const std::shared_ptr<PhysicsObjects>& muons, const std::vector<GenJPsiCandidate>& candidates) const;
   
   void FillGenLevel(const std::shared_ptr<Event> event);
   void FillRecoLevel(const std::shared_ptr<Event> event);
@@ -36,7 +40,6 @@ class ShiftHistogramsFiller {
   void FillDetectorDiagnostics(const std::shared_ptr<Event> event);
   
   std::vector<GenJPsiCandidate> GetGenJPsiCandidates(const std::shared_ptr<PhysicsObjects> genParticles);
-  std::pair<TLorentzVector, TVector3> GetGenJPsiDimuonVector(const std::shared_ptr<PhysicsObjects> genParticles);
 };
 
 #endif /* ShiftHistogramsFiller_hpp */

@@ -43,7 +43,7 @@ extraEventCollections = {
         "isOS": (1, 1),
         # "chi2": (0., 10.),
         "dcaValid": (1, 1),
-        "dca": (50., 9999999.),
+        "dca": (0., 50.),
     },
 }
 

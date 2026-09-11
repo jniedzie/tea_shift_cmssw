@@ -9,6 +9,9 @@ import re
 import glob
 import os
 
+# Truth is used only for MC performance evaluation, never reco selection.
+enableTruthDiagnostics = True
+
 defaultHistParams = (
     ("ShiftMuon",  "topology", 5, -.5, 4.5, "muon"),
     ("ShiftMuon",  "recoAlgorithm", 3, -.5, 2.5, "muon"),
@@ -245,9 +248,9 @@ for name in dimuonCategories:
       (f"DimuonResolution{name}", "pt", 50, -1, 1, "resolution"),
       (f"DimuonResolution{name}", "pz", 50, -1, 1, "resolution"),
       (f"DimuonResolution{name}", "eta", 50, -1, 1, "resolution"),
-      (f"DimuonResolution{name}", "deltaEta", 2000, -1, 1, "resolution"),
+      (f"DimuonResolution{name}", "deltaEta", 2400, -12, 12, "resolution"),
       (f"DimuonResolution{name}", "deltaPhi", 2000, -3.142, 3.142, "resolution"),
-      (f"DimuonResolution{name}", "constrainedDeltaEta", 2000, -1, 1, "resolution"),
+      (f"DimuonResolution{name}", "constrainedDeltaEta", 2400, -12, 12, "resolution"),
       (f"DimuonResolution{name}", "constrainedDeltaPhi", 2000, -3.142, 3.142, "resolution"),
       (f"DimuonResolution{name}", "phi", 50, -1, 1, "resolution"),
       (f"DimuonResolution{name}", "minv", 50, -1, 1, "resolution"),
@@ -273,9 +276,9 @@ for name in muonCategories:
       (f"MuonResolution{name}", "pt", 50, -1, 1,     "resolution"),
       (f"MuonResolution{name}", "pz", 50, -1, 1,     "resolution"),
       (f"MuonResolution{name}", "eta", 50, -1, 1,     "resolution"),
-      (f"MuonResolution{name}", "deltaEta", 2000, -1, 1, "resolution"),
+      (f"MuonResolution{name}", "deltaEta", 2400, -12, 12, "resolution"),
       (f"MuonResolution{name}", "deltaPhi", 2000, -3.142, 3.142, "resolution"),
-      (f"MuonResolution{name}", "constrainedDeltaEta", 2000, -1, 1, "resolution"),
+      (f"MuonResolution{name}", "constrainedDeltaEta", 2400, -12, 12, "resolution"),
       (f"MuonResolution{name}", "constrainedDeltaPhi", 2000, -3.142, 3.142, "resolution"),
       (f"MuonResolution{name}", "phi", 50, -1, 1,     "resolution"),
       (f"MuonResolution{name}", "vx", 100, -5000, 5000,     "resolution"),
@@ -410,7 +413,11 @@ def latest_versioned_sample():
 
 nEvents = -1
 
-input_path, sample_version, provenance_tag = latest_versioned_sample()
+if globals().get("recoDataMode", False):
+  # Input/output are supplied by the command line; do not scan an MC campaign.
+  input_path, sample_version, provenance_tag = "", 0, "data"
+else:
+  input_path, sample_version, provenance_tag = latest_versioned_sample()
 project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 inputFilePath = input_path
@@ -424,3 +431,21 @@ eventsTreeNames = ["Events",]
 specialBranchSizes = {
     "Particle": "Event_numberP",
 }
+
+# Independent truth coverage and angular-tail diagnostics.
+for variable in ("hitMatched", "legacyMatched", "dimuonHitMatched"):
+  histParams += (("TruthDiagnostics", variable, 2, -.5, 1.5, "truth_diagnostics"),)
+for category in muonCategories:
+  for variable, bins, lo, hi in (
+      ("directionReversed", 2, -.5, 1.5),
+      ("chargeMisidentified", 2, -.5, 1.5),
+      ("axisDeltaEta", 400, -2., 2.), ("axisDeltaPhi", 400, -3.142, 3.142),
+      ("constrainedEtaPull", 400, -20., 20.), ("constrainedPhiPull", 400, -20., 20.)):
+    histParams += ((f"MuonResolution{category}", variable, bins, lo, hi, "truth_diagnostics"),)
+for variable, lo, hi in (
+    ("constrainedEtaErr", 0., 1.), ("constrainedPhiErr", 0., 1.),
+    ("targetPredictedEtaErr", 0., 1.), ("targetPredictedPhiErr", 0., 1.),
+    ("targetResidualX", -1000., 1000.), ("targetResidualY", -1000., 1000.),
+    ("targetPullX", -20., 20.), ("targetPullY", -20., 20.)):
+  histParams += (("TargetDiagnostics", variable, 200, lo, hi, "target_diagnostics"),)
+histParams += (("TargetDiagnostics", "constrainedStatus", 14, -10.5, 3.5, "target_diagnostics"),)
