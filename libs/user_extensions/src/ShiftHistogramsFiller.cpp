@@ -69,6 +69,9 @@ void ShiftHistogramsFiller::FillDetectorDiagnostics(const shared_ptr<Event> even
   auto muons = event->GetCollection("ShiftMuon");
   for (auto const& muon : *muons) {
     histogramsHandler->FillUnweighted("TargetDiagnostics_constrainedStatus", muon->GetAs<int>("constrainedStatus"));
+    for (string const variable : {"targetForwardStatus", "targetForwardIterations"})
+      if (muon->HasBranch(variable))
+        histogramsHandler->FillUnweighted("TargetDiagnostics_" + variable, muon->GetAs<float>(variable));
     if (enableTruthDiagnostics) {
       histogramsHandler->FillUnweighted("TruthDiagnostics_hitMatched", HitTruthIndex(muon) >= 0);
       histogramsHandler->FillUnweighted("TruthDiagnostics_legacyMatched", muon->GetAs<int>("genPartIdx") >= 0);

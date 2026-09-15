@@ -448,7 +448,9 @@ for variable, lo, hi in (
     ("targetResidualX", -1000., 1000.), ("targetResidualY", -1000., 1000.),
     ("targetPullX", -20., 20.), ("targetPullY", -20., 20.)):
   histParams += (("TargetDiagnostics", variable, 200, lo, hi, "target_diagnostics"),)
-histParams += (("TargetDiagnostics", "constrainedStatus", 14, -10.5, 3.5, "target_diagnostics"),)
+histParams += (("TargetDiagnostics", "constrainedStatus", 16, -11.5, 4.5, "target_diagnostics"),)
+histParams += (("TargetDiagnostics", "targetForwardStatus", 12, -10.5, 1.5, "target_diagnostics"),)
+histParams += (("TargetDiagnostics", "targetForwardIterations", 66, -1.5, 64.5, "target_diagnostics"),)
 for variable, lo, hi in (("massErr", 0., 10.), ("massRelativeErr", 0., 5.), ("minQoverPSignificance", 0., 20.)):
   histParams += (("VertexRefitDiagnostics", variable, 200, lo, hi, "vertex_refit_diagnostics"),)
 for category in dimuonCategories:
