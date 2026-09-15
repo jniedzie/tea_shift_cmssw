@@ -11,7 +11,7 @@ defaultHistParams = tuple(h for h in defaultHistParams if not h[0].startswith("G
     and not h[1].startswith(("nGen", "sim", "gen", "sameGen", "chargeMatchesGen", "nAddedDTTruth"))
     and "sim" not in h[1].lower() and "signalMuon" not in h[1])
 # Book only quantities observable in data; generator-dependent plots are absent.
-histParams = tuple(h for h in histParams if h[0] in ("ShiftDimuonVertex", "TargetDiagnostics", "DetectorDiagnostics")
+histParams = tuple(h for h in histParams if h[0] in ("ShiftDimuonVertex", "TargetDiagnostics", "DetectorDiagnostics", "VertexRefitDiagnostics")
     and "Truth" not in h[1])
-histParams2D = ()
+histParams2D = tuple(h for h in histParams2D if h[0].startswith("VertexRefitDiagnostics_"))
 irregularHistParams = ()

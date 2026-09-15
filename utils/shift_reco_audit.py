@@ -71,6 +71,9 @@ def analyze(path, label, ordinal, max_events):
         h1(name, 100, 0., 1.)
     for name in ('massScale', 'constrainedMassScale', 'vertexRefitMassScale'):
         h1(name, 160, 0., 4.)
+    h1('vertexRefitMassPull', 200, -20., 20.)
+    h1('vertexRefitMinQoverPSignificance', 100, 0., 20.)
+    h1('vertexRefitMassRelativeErr', 100, 0., 5.)
     for name in ('topology', 'matchedTopology', 'reverseTopology'):
         h1(name, 5, -.5, 4.5)
     for name in ('recoP',):
@@ -90,6 +93,8 @@ def analyze(path, label, ordinal, max_events):
                        'constrainedPhiVsP': (25, 0., 250., 100, -math.pi, math.pi),
                        'constrainedEtaVsP': (25, 0., 250., 120, -3., 3.),
                        'reverseVsAlgorithm': (3, -.5, 2.5, 2, -.5, 1.5),
+                       'vertexMassScaleVsCurvature': (40,0.,20.,100,0.,5.),
+                       'vertexMassPullVsCurvature': (40,0.,20.,200,-20.,20.),
                        'reverseVsTiming': (3, -1.5, 1.5, 2, -.5, 1.5)}.items():
         hist[name] = ROOT.TH2D(f'{ordinal}_{name}', name, *bins)
     def fill(name, value):
@@ -188,6 +193,15 @@ def analyze(path, label, ordinal, max_events):
             if bool(get('constrainedValid')): fill('constrainedMassScale',float(get('constrainedMass'))/mass)
             if 'ShiftDimuonVertex_refittedMass' in branches and int(get('refitStatus')) == 1:
                 fill('vertexRefitMassScale',float(get('refittedMass'))/mass)
+                if 'ShiftDimuonVertex_refittedMassErr' in branches:
+                    error = float(get('refittedMassErr'))
+                    if error > 0.: fill('vertexRefitMassPull',(float(get('refittedMass'))-mass)/error)
+                    if error >= 0. and float(get('refittedMass')) > 0.:
+                        fill('vertexRefitMassRelativeErr',error/float(get('refittedMass')))
+                    fill('vertexRefitMinQoverPSignificance',float(get('refittedMinQoverPSignificance')))
+                    significance=float(get('refittedMinQoverPSignificance'))
+                    hist['vertexMassScaleVsCurvature'].Fill(significance,float(get('refittedMass'))/mass)
+                    if error>0.: hist['vertexMassPullVsCurvature'].Fill(significance,(float(get('refittedMass'))-mass)/error)
     f.Close()
     result = dict(label=label, input=path, counts=dict(counts), statistics={k:stats(v) for k,v in values.items()})
     result['histogramFlows'] = {k: {'underflow':h.GetBinContent(0), 'overflow':h.GetBinContent(h.GetNbinsX()+1)}
@@ -224,9 +238,12 @@ def plot(results, output):
     overlay(['massScale','constrainedMassScale','etaErr','phiErr'],'Independent pair identity; target uncertainties where stored')
     overlay(['etaPull','phiPull','targetPullX','targetPullY'],'Target-state pulls; target X/Y use innovation uncertainties')
     overlay(['massScale','constrainedMassScale','vertexRefitMassScale','topology'],'Same independently identified pair; separate unconstrained, target and vertex hypotheses')
+    overlay(['vertexRefitMassScale','vertexRefitMassPull','vertexRefitMassRelativeErr','vertexRefitMinQoverPSignificance'],
+            'Joint vertex refit: correlated mass uncertainty and curvature significance; no quality or truth-residual cuts')
     for names, heading in (
         (('phiVsP','constrainedPhiVsP'), 'Unfolded #Delta#phi versus true momentum; no residual selection'),
         (('constrainedEtaVsP','reverseVsAlgorithm'), 'Target #Delta#eta versus momentum; orientation by reconstruction algorithm'),
+        (('vertexMassScaleVsCurvature','vertexMassPullVsCurvature'), 'Vertex-refit mass versus measured curvature significance; no quality cuts'),
         (('reverseVsTiming',), 'Orientation diagnostic versus measured timing direction')):
         canvas.Clear(); canvas.Divide(2,len(names))
         for row,name in enumerate(names):
@@ -237,6 +254,8 @@ def plot(results, output):
                       'constrainedPhiVsP':('p_{gen} [GeV]','target #Delta#phi [rad]'),
                       'constrainedEtaVsP':('p_{gen} [GeV]','target #Delta#eta'),
                       'reverseVsAlgorithm':('reconstruction algorithm','reversed direction closer'),
+                      'vertexMassScaleVsCurvature':('minimum |q/p| / #sigma(q/p)','refitted m / m_{gen}'),
+                      'vertexMassPullVsCurvature':('minimum |q/p| / #sigma(q/p)','refitted mass pull'),
                       'reverseVsTiming':('measured timing sign','reversed direction closer')}
                 x,y=axes[name]; h.SetTitle(result['label'] + ';' + x + ';' + y)
                 if name.startswith('reverseVs'):

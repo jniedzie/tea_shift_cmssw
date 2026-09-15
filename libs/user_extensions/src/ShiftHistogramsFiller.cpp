@@ -243,6 +243,18 @@ void ShiftHistogramsFiller::FillRecoLevel(const shared_ptr<Event> event) {
   vector<GenJPsiCandidate> truthCandidates;
   if (enableTruthDiagnostics) truthCandidates = GetGenJPsiCandidates(event->GetCollection("GenPart"));
   for (auto const& dimuon : *dimuons) {
+    if (dimuon->HasBranch("refittedMassErr") && dimuon->GetAs<int>("refitStatus") == 1) {
+      double const error = dimuon->GetAs<float>("refittedMassErr");
+      double const mass = dimuon->GetAs<float>("refittedMass");
+      if (error >= 0.) {
+        histogramsHandler->Fill("VertexRefitDiagnostics_massErr", error);
+        if (mass > 0.) histogramsHandler->Fill("VertexRefitDiagnostics_massRelativeErr", error/mass);
+      }
+      histogramsHandler->Fill("VertexRefitDiagnostics_minQoverPSignificance",
+          dimuon->GetAs<float>("refittedMinQoverPSignificance"));
+      histogramsHandler->Fill("VertexRefitDiagnostics_massVsCurvature",
+          dimuon->GetAs<float>("refittedMinQoverPSignificance"), mass);
+    }
     if (enableTruthDiagnostics)
       histogramsHandler->FillUnweighted("TruthDiagnostics_dimuonHitMatched", MatchDimuon(dimuon, recoMuons, truthCandidates) != nullptr);
     string const category = GetDimuonTopologyCategory(
@@ -419,6 +431,17 @@ void ShiftHistogramsFiller::FillResolutionPlots(const shared_ptr<Event> event) {
       auto const& genJPsiVec = match->momentum;
       auto const& genJPsiVertex = match->vertex;
       string const histogramPrefix = "DimuonResolution" + category + "_";
+      if (recoDimuon->HasBranch("refittedMassErr") && recoDimuon->GetAs<int>("refitStatus") == 1) {
+        double const error = recoDimuon->GetAs<float>("refittedMassErr");
+        if (error > 0.) {
+          double const pull=(recoDimuon->GetAs<float>("refittedMass")-genJPsiVec.M())/error;
+          histogramsHandler->Fill(histogramPrefix + "refittedMassPull", pull);
+          histogramsHandler->Fill(histogramPrefix + "refittedMassPullVsCurvature",
+              recoDimuon->GetAs<float>("refittedMinQoverPSignificance"), pull);
+        }
+        if (genJPsiVec.M()>0.) histogramsHandler->Fill(histogramPrefix + "refittedMassScaleVsCurvature",
+            recoDimuon->GetAs<float>("refittedMinQoverPSignificance"), recoDimuon->GetAs<float>("refittedMass")/genJPsiVec.M());
+      }
       histogramsHandler->Fill(histogramPrefix + "deltaEta", recoDimuon->GetAs<float>("eta") - genJPsiVec.Eta());
       histogramsHandler->Fill(histogramPrefix + "deltaPhi",
                               std::remainder(recoDimuon->GetAs<float>("phi") - genJPsiVec.Phi(), 2. * std::acos(-1.)));

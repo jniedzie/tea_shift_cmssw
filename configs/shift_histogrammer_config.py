@@ -449,3 +449,11 @@ for variable, lo, hi in (
     ("targetPullX", -20., 20.), ("targetPullY", -20., 20.)):
   histParams += (("TargetDiagnostics", variable, 200, lo, hi, "target_diagnostics"),)
 histParams += (("TargetDiagnostics", "constrainedStatus", 14, -10.5, 3.5, "target_diagnostics"),)
+for variable, lo, hi in (("massErr", 0., 10.), ("massRelativeErr", 0., 5.), ("minQoverPSignificance", 0., 20.)):
+  histParams += (("VertexRefitDiagnostics", variable, 200, lo, hi, "vertex_refit_diagnostics"),)
+for category in dimuonCategories:
+  histParams += ((f"DimuonResolution{category}", "refittedMassPull", 400, -20., 20., "truth_diagnostics"),)
+  histParams2D += (
+      (f"DimuonResolution{category}_refittedMassPullVsCurvature",40,0.,20.,200,-20.,20.,"truth_diagnostics"),
+      (f"DimuonResolution{category}_refittedMassScaleVsCurvature",40,0.,20.,100,0.,5.,"truth_diagnostics"),)
+histParams2D += (("VertexRefitDiagnostics_massVsCurvature",40,0.,20.,100,0.,10.,"vertex_refit_diagnostics"),)
