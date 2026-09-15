@@ -47,7 +47,7 @@ def stats(values):
 
 def analyze(path, label, ordinal, max_events):
     f = ROOT.TFile.Open(path)
-    if not f or f.IsZombie():
+    if not f or f.IsZombie() or f.TestBit(ROOT.TFile.kRecovered):
         raise RuntimeError(f'Unreadable input: {path}')
     tree = f.Get('Events')
     if not tree or not tree.GetBranch('ShiftMuon_hitGenPartIdx'):
@@ -69,6 +69,10 @@ def analyze(path, label, ordinal, max_events):
         h1(name, 200, -20., 20.)
     for name in ('etaErr', 'phiErr'):
         h1(name, 100, 0., 1.)
+    h1('constrainedStatus', 16, -11.5, 4.5)
+    h1('targetForwardStatus', 12, -10.5, 1.5)
+    h1('targetForwardIterations', 66, -1.5, 64.5)
+    h1('constrainedTargetChi2', 102, -1.5, 100.5)
     for name in ('massScale', 'constrainedMassScale', 'vertexRefitMassScale'):
         h1(name, 160, 0., 4.)
     h1('vertexRefitMassPull', 200, -20., 20.)
@@ -116,6 +120,12 @@ def analyze(path, label, ordinal, max_events):
             fill('recoPhi', float(get('phi')))
             valid = bool(get('constrainedValid'))
             counts['constraintValid'] += valid
+            for name in ('constrainedStatus', 'targetForwardStatus', 'targetForwardIterations', 'constrainedTargetChi2'):
+                if 'ShiftMuon_' + name in branches:
+                    value = float(get(name))
+                    fill(name, value)
+                    if name.endswith('Status'):
+                        counts[f'{name}_{int(value)}'] += 1
             idx, legacy = int(get('hitGenPartIdx')), int(get('genPartIdx'))
             counts['legacyMatched'] += legacy >= 0
             if valid and 'ShiftMuon_constrainedEtaErr' in branches:
@@ -233,6 +243,8 @@ def plot(results, output):
             leg.Draw(); keep.append(leg)
         canvas.cd(); title(heading); canvas.Print(pdf)
     overlay(['recoP','recoEta','recoPhi','topology'],'All reconstructed rows; no truth requirement')
+    overlay(['constrainedStatus','targetForwardStatus','targetForwardIterations','constrainedTargetChi2'],
+            'Fit status and convergence: every reconstructed row, including failed and unattempted fits')
     overlay(['eta','phi','constrainedEta','constrainedPhi'],'Hit-associated residuals; no direction or residual cuts; failures retained in coverage')
     overlay(['axisEta','axisPhi','matchedTopology','reverseTopology'],'Axis-only diagnostic folds orientation; canonical residuals above remain unfolded')
     overlay(['massScale','constrainedMassScale','etaErr','phiErr'],'Independent pair identity; target uncertainties where stored')
