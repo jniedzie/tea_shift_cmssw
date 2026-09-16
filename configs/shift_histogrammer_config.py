@@ -243,61 +243,64 @@ histParams = (
     ("ShiftDimuonVertex", "topologyCategory", 5, -.5, 4.5, "dimuon"),
 )
 
+
+def resolution_bin_edges(core_half_width, core_bins, tail_limit=1.e9):
+  """Fine linear core plus symmetric logarithmic tails, without axis growth."""
+  core_step = 2. * core_half_width / core_bins
+  core = [-core_half_width + index * core_step for index in range(core_bins + 1)]
+  positive_tail = []
+  edge = 2. * core_half_width
+  while edge < tail_limit:
+    positive_tail.append(edge)
+    edge *= 2.
+  positive_tail.append(tail_limit)
+  negative_tail = [-edge for edge in reversed(positive_tail)]
+  return negative_tail + core + positive_tail
+
+
+relativeResolutionBinEdges = resolution_bin_edges(1., 100)
+qOverPtResolutionBinEdges = resolution_bin_edges(2., 200)
+vertexResolutionBinEdges = resolution_bin_edges(5000., 200)
+irregularHistParams = ()
+
+
+def add_resolution_histograms(prefix, variables, bin_edges):
+  global irregularHistParams
+  irregularHistParams += tuple(
+      (prefix, variable, bin_edges, "resolution") for variable in variables)
+
 for name in dimuonCategories:
+  prefix = f"DimuonResolution{name}"
+  add_resolution_histograms(prefix, (
+      "pt", "pz", "eta", "phi", "minv", "vz",
+      "constrainedPt", "constrainedPz", "constrainedEta", "constrainedPhi",
+      "constrainedMinv", "constrainedVz"), relativeResolutionBinEdges)
+  add_resolution_histograms(prefix, (
+      "vx", "vy", "constrainedVx", "constrainedVy"), vertexResolutionBinEdges)
   histParams += (
-      (f"DimuonResolution{name}", "pt", 50, -1, 1, "resolution"),
-      (f"DimuonResolution{name}", "pz", 50, -1, 1, "resolution"),
-      (f"DimuonResolution{name}", "eta", 50, -1, 1, "resolution"),
       (f"DimuonResolution{name}", "deltaEta", 2400, -12, 12, "resolution"),
       (f"DimuonResolution{name}", "deltaPhi", 2000, -3.142, 3.142, "resolution"),
       (f"DimuonResolution{name}", "constrainedDeltaEta", 2400, -12, 12, "resolution"),
       (f"DimuonResolution{name}", "constrainedDeltaPhi", 2000, -3.142, 3.142, "resolution"),
-      (f"DimuonResolution{name}", "phi", 50, -1, 1, "resolution"),
-      (f"DimuonResolution{name}", "minv", 50, -1, 1, "resolution"),
-      (f"DimuonResolution{name}", "vx", 100, -5000, 5000, "resolution"),
-      (f"DimuonResolution{name}", "vy", 100, -5000, 5000, "resolution"),
-      (f"DimuonResolution{name}", "vz", 50, -1, 1, "resolution"),
-
-      (f"DimuonResolution{name}", "constrainedPt", 50, -1, 1, "resolution"),
-      (f"DimuonResolution{name}", "constrainedPz", 50, -1, 1, "resolution"),
-      (f"DimuonResolution{name}", "constrainedEta", 50, -1, 1, "resolution"),
-      (f"DimuonResolution{name}", "constrainedPhi", 50, -1, 1, "resolution"),
-      (f"DimuonResolution{name}", "constrainedMinv", 50, -1, 1, "resolution"),
-      (f"DimuonResolution{name}", "constrainedVx", 100, -5000, 5000, "resolution"),
-      (f"DimuonResolution{name}", "constrainedVy", 100, -5000, 5000, "resolution"),
-      (f"DimuonResolution{name}", "constrainedVz", 50, -1, 1, "resolution"),
   )
 
 for name in muonCategories:
+  prefix = f"MuonResolution{name}"
+  add_resolution_histograms(prefix, (
+      "pt", "pz", "eta", "phi", "vz",
+      "constrainedPt", "constrainedPz", "constrainedEta", "constrainedPhi",
+      "constrainedVz"), relativeResolutionBinEdges)
+  add_resolution_histograms(prefix, ("qOverPt", "constrainedQOverPt"), qOverPtResolutionBinEdges)
+  add_resolution_histograms(prefix, (
+      "vx", "vy", "constrainedVx", "constrainedVy"), vertexResolutionBinEdges)
   histParams += (
-      # Signed-curvature residual used in CMS-DP-2015-015.  With 200 bins over
-      # [-2, 2], every bin has the same 0.02 width as the published reference.
-      (f"MuonResolution{name}", "qOverPt", 200, -2, 2,     "resolution"),
-      (f"MuonResolution{name}", "pt", 50, -1, 1,     "resolution"),
-      (f"MuonResolution{name}", "pz", 50, -1, 1,     "resolution"),
-      (f"MuonResolution{name}", "eta", 50, -1, 1,     "resolution"),
       (f"MuonResolution{name}", "deltaEta", 2400, -12, 12, "resolution"),
       (f"MuonResolution{name}", "deltaPhi", 2000, -3.142, 3.142, "resolution"),
       (f"MuonResolution{name}", "constrainedDeltaEta", 2400, -12, 12, "resolution"),
       (f"MuonResolution{name}", "constrainedDeltaPhi", 2000, -3.142, 3.142, "resolution"),
-      (f"MuonResolution{name}", "phi", 50, -1, 1,     "resolution"),
-      (f"MuonResolution{name}", "vx", 100, -5000, 5000,     "resolution"),
-      (f"MuonResolution{name}", "vy", 100, -5000, 5000,     "resolution"),
-      (f"MuonResolution{name}", "vz", 50, -1, 1,     "resolution"),
-
-      (f"MuonResolution{name}", "constrainedPt", 50, -1, 1,     "resolution"),
-      (f"MuonResolution{name}", "constrainedQOverPt", 200, -2, 2,     "resolution"),
-      (f"MuonResolution{name}", "constrainedPz", 50, -1, 1,     "resolution"),
-      (f"MuonResolution{name}", "constrainedEta", 50, -1, 1,     "resolution"),
-      (f"MuonResolution{name}", "constrainedPhi", 50, -1, 1,     "resolution"),
-      (f"MuonResolution{name}", "constrainedVx", 100, -5000, 5000,     "resolution"),
-      (f"MuonResolution{name}", "constrainedVy", 100, -5000, 5000,     "resolution"),
-      (f"MuonResolution{name}", "constrainedVz", 50, -1, 1,     "resolution"),
   )
 
-histParams += (
-    ("MuonResolutionSingleEndcap", "qOverPt", 200, -2, 2, "resolution"),
-)
+add_resolution_histograms("MuonResolutionSingleEndcap", ("qOverPt",), qOverPtResolutionBinEdges)
 
 # ============================================================
 # Generator-coordinate reconstruction efficiencies
@@ -333,7 +336,6 @@ muonEfficiencyPrefixes = ["ShiftMuonEfficiency"] + [f"ShiftMuon{category}Efficie
 
 dimuonEfficiencyPrefixes = [f"ShiftDimuonVertex{category}Efficiency" for category in dimuonCategories]
 
-irregularHistParams = ()
 for prefixes, binning in (
     (muonEfficiencyPrefixes, muonEfficiencyBinning),
     (dimuonEfficiencyPrefixes, dimuonEfficiencyBinning),

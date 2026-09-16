@@ -85,6 +85,7 @@ QOVERPT_SHIFT_REBIN = {
     "SingleEndcap": 5,
     "Unclassified": 20,
 }
+MIN_RESOLUTION_SUMMARY_ENTRIES = 20
 QOVERPT_REFERENCE_STYLES = [
     ("prompt_tracker_muon", ROOT.kBlack, 1, "prompt #mu, tracker+muon"),
     ("prompt_muon_only", ROOT.TColor.GetColor("#E69F00"), 1, "prompt #mu, muon-only"),
@@ -316,6 +317,36 @@ def select_histogram_file(histograms_dir, requested_version=None):
 
   version, _, path, provenance_tag = selected_candidates[0]
   return path, version, provenance_tag
+
+
+def comparison_labels(selections):
+  labels = []
+  for _, version, tag in selections:
+    suffix = tag.partition("_")[2]
+    labels.append(suffix.replace("_", " ") if suffix else f"v{version}")
+  # Distinguish repeated recipes without discarding their descriptive names.
+  return [f"{label} (v{selection[1]})" if labels.count(label) > 1 else label
+          for label, selection in zip(labels, selections)]
+
+
+def comparison_styles(count):
+  colors = [ROOT.TColor.GetColor(color) for color in
+            ("#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9", "#000000", "#999933")]
+  markers = (20, 21, 22, 23, 33, 34, 24, 25, 26, 32, 27, 28)
+  return [((index - (count - 1) / 2) * min(0.24, 0.7 / max(count - 1, 1)),
+           colors[index % len(colors)], markers[index % len(markers)])
+          for index in range(count)]
+
+
+def require_complete_resolution(hist):
+  """Old flow bins have counts, but no recoverable tail values or moments."""
+  hist.GetXaxis().SetRange(0, 0)
+  flow_bins = (0, hist.GetNbinsX() + 1)
+  if any(hist.GetBinContent(i) != 0 or hist.GetBinError(i) != 0 for i in flow_bins):
+    raise RuntimeError(
+        f"{hist.GetName()}: underflow/overflow entries prevent a full-distribution summary. "
+        "Rerun shift_histogrammer on the existing NanoAOD with the updated wide-range "
+        "resolution histograms; rerunning reconstruction is unnecessary.")
 
 
 def parse_rebin_specs(specs, dimensions):
@@ -560,6 +591,7 @@ def fit_resolution(hist, name):
 
 
 def robust_resolution_summary(hist):
+  """Return the median and central-68% half-width of a complete histogram."""
   probabilities = array("d", (0.16, 0.50, 0.84))
   quantiles = array("d", (0.0, 0.0, 0.0))
   hist.GetQuantiles(len(probabilities), quantiles, probabilities)
@@ -597,8 +629,8 @@ def draw_scale_resolution_summary(canvas, spec, input_file, comparison=None, con
   categories = spec["categories"]
   category_fractions = summary_category_fractions(spec, input_file) if comparison is None else []
   series = ([(label, source, 1 if constrained else 0, offset, color, marker)
-             for (label, source), offset, color, marker in zip(
-                 comparison, (-0.12, 0.12), (ROOT.kBlue + 1, ROOT.kOrange + 7), (20, 21))]
+             for (label, source), (offset, color, marker) in zip(
+                 comparison, comparison_styles(len(comparison)))]
             if comparison is not None else [
                 ("Unconstrained", input_file, 0, -0.12, ROOT.kBlue + 1, 20),
                 ("Constrained", input_file, 1, 0.12, ROOT.kOrange + 7, 21)])
@@ -632,12 +664,20 @@ def draw_scale_resolution_summary(canvas, spec, input_file, comparison=None, con
         if not hist:
           print(f"Warning: histogram '{name}' was not found")
           continue
+        require_complete_resolution(hist)
         if hist.Integral(1, hist.GetNbinsX()) <= 0.0:
           print(f"Warning: histogram '{name}' has no in-range entries")
           continue
+        if (hist.GetEntries() < MIN_RESOLUTION_SUMMARY_ENTRIES or
+            hist.GetEffectiveEntries() < MIN_RESOLUTION_SUMMARY_ENTRIES):
+          print(
+              f"Warning: histogram '{name}' has too few entries for a resolution summary "
+              f"({hist.GetEntries():g} entries, {hist.GetEffectiveEntries():g} effective); "
+              f"need at least {MIN_RESOLUTION_SUMMARY_ENTRIES}")
+          continue
 
-        scale = (0.0 if variable.startswith("delta") else 1.0) + hist.GetMean()
-        resolution = hist.GetStdDev()
+        center, resolution = robust_resolution_summary(hist)
+        scale = (0.0 if variable.startswith("delta") else 1.0) + center
         if not math.isfinite(scale) or not math.isfinite(resolution):
           print(f"Warning: histogram '{name}' has a non-finite direct summary")
           continue
@@ -708,15 +748,15 @@ def draw_scale_resolution_summary(canvas, spec, input_file, comparison=None, con
   ROOT.gPad.SetRightMargin(0.06)
   ROOT.gPad.SetBottomMargin(0.06)
   ROOT.gPad.SetTopMargin(0.06)
-  legend = ROOT.TLegend(0.10, 0.62, 0.90, 0.92)
+  legend = ROOT.TLegend(0.10, 0.08 if comparison is not None else 0.62, 0.95, 0.92)
   legend.SetBorderSize(0)
   legend.SetFillStyle(0)
   legend.SetTextFont(42)
-  legend.SetTextSize(0.060)
+  legend.SetTextSize(min(0.060, 0.65 / (len(series) + 1)))
   legend.SetHeader(("Constrained" if constrained else "Unconstrained")
                    if comparison is not None else "Scale and resolution", "C")
   for graph, (label, *_) in zip(legend_graphs, series):
-    legend.AddEntry(graph, f"{label} (#pm RMS)", "pe")
+    legend.AddEntry(graph, f"{label} (#pm #sigma_{{68}})", "pe")
   legend.Draw()
   objects.append(legend)
 
@@ -813,11 +853,15 @@ def draw_resolutions(canvas, names, input_file, rebin_factor):
     if not hist:
       print(f"Warning: histogram '{name}' was not found")
       continue
+    require_complete_resolution(hist)
+    # Work on a detached clone: rebinning must never alter later summaries.
+    hist = hist.Clone(name + "_display")
+    hist.SetDirectory(0)
+    objects.append(hist)
     if rebin_factor > 1:
       hist.Rebin(rebin_factor)
     set_axes_titles(hist, RESOLUTION_TITLES[name], "Entries")
-    if name in RESOLUTION_X_RANGES:
-      hist.GetXaxis().SetRangeUser(*RESOLUTION_X_RANGES[name])
+    hist.GetXaxis().SetRange(0, 0)
     hist.SetMarkerStyle(20)
     hist.SetMarkerSize(0.8)
     hist.Draw("E1")
@@ -912,6 +956,7 @@ def draw_qoverpt_comparison(canvas, input_file, reference_path):
       if not source_hist:
         print(f"Warning: histogram '{name}' was not found")
         continue
+      require_complete_resolution(source_hist)
       hist = source_hist.Clone(f"draw_{name}")
       hist.SetDirectory(0)
       rebin_factor = QOVERPT_SHIFT_REBIN[muon_type]
@@ -921,11 +966,11 @@ def draw_qoverpt_comparison(canvas, input_file, reference_path):
       print(f"q/pT rebin {name}: factor={rebin_factor}, "
             f"bins={source_bin_count}->{hist.GetNbinsX()}, "
             f"width={hist.GetBinWidth(1):g}")
-      area = hist.Integral(1, hist.GetNbinsX(), "width")
+      area = hist.Integral(1, hist.GetNbinsX())
       if area <= 0.0:
-        print(f"Warning: histogram '{name}' has no entries in [-2, 2]")
+        print(f"Warning: histogram '{name}' has no entries")
         continue
-      hist.Scale(1.0 / area)
+      hist.Scale(1.0 / area, "width")
       x_values = array("d", (hist.GetBinCenter(index) for index in range(1, hist.GetNbinsX() + 1)))
       y_values = array("d", (hist.GetBinContent(index) for index in range(1, hist.GetNbinsX() + 1)))
       curve = ROOT.TGraph(hist.GetNbinsX(), x_values, y_values)
@@ -947,7 +992,12 @@ def draw_qoverpt_comparison(canvas, input_file, reference_path):
       default=1.0,
   )
   y_max = max(shift_y_max, reference_y_max)
-  frame = canvas.DrawFrame(-2.0, 5.0e-3, 2.0, max(10.0, 3.0 * y_max))
+  all_curves = [curve for _, curve, _ in shift_curves] + list(reference_graphs.values())
+  all_x = [curve.GetX()[index] for curve in all_curves for index in range(curve.GetN())]
+  positive_y = [curve.GetY()[index] for curve in all_curves for index in range(curve.GetN())
+                if curve.GetY()[index] > 0]
+  frame = canvas.DrawFrame(min([-2.0, *all_x]), 0.5 * min([5.0e-3, *positive_y]),
+                           max([2.0, *all_x]), max(10.0, 3.0 * y_max))
   set_axes_titles(
       frame,
       "[(q/p_{T})_{reco} - (q/p_{T})_{gen}] / (q/p_{T})_{gen}",
@@ -1013,10 +1063,10 @@ def draw_efficiencies(canvas, input_file, object_name, categories, comparison=No
     ROOT.gPad.SetLogy(is_dimuon)
     curves = []
     frame = None
-    series = ([("", label, color, source) for (label, source), color in zip(
-        comparison, (ROOT.kBlue + 1, ROOT.kOrange + 7))] if comparison is not None
-        else [(category, label, color, input_file) for category, label, color in categories])
-    for category, label, color, source in series:
+    series = ([("", label, color, marker, source) for (label, source), (_, color, marker) in zip(
+        comparison, comparison_styles(len(comparison)))] if comparison is not None
+        else [(category, label, color, 20, input_file) for category, label, color in categories])
+    for category, label, color, marker, source in series:
       prefix = efficiency_prefix(object_name, category)
       passed = source.Get(f"efficiency/{prefix}_{variable}_pass")
       total = source.Get(f"efficiency/{prefix}_{variable}_total")
@@ -1047,7 +1097,7 @@ def draw_efficiencies(canvas, input_file, object_name, categories, comparison=No
       graph = efficiency.CreateGraph()
       graph.SetLineColor(color)
       graph.SetMarkerColor(color)
-      graph.SetMarkerStyle(20)
+      graph.SetMarkerStyle(marker)
       graph.SetMarkerSize(0.75)
       graph.Draw("P SAME")
       curves.append((efficiency, graph, label))
@@ -1077,39 +1127,13 @@ def draw_efficiencies(canvas, input_file, object_name, categories, comparison=No
   legend.SetBorderSize(0)
   legend.SetFillStyle(0)
   legend.SetTextFont(42)
-  legend.SetTextSize(0.045 if is_dimuon else 0.055)
+  legend.SetTextSize(min(0.045 if is_dimuon else 0.055, 0.65 / max(len(legend_entries), 1)))
   for graph, label in legend_entries:
     legend.AddEntry(graph, label, "pe")
   legend.Draw()
   objects.append(legend)
   canvas.Update()
   return objects
-
-
-def write_comparison_table(output_dir, stem, title, labels, rows, note):
-  """Render a compact comparison table as a PDF."""
-  headers = ["Topology", *labels]
-  canvas = ROOT.TCanvas("canvas_" + stem, title, 1200, 650)
-  objects = []
-
-  def text(x, y, value, size=0.029, bold=False):
-    label = ROOT.TLatex()
-    label.SetNDC(True)
-    label.SetTextFont(62 if bold else 42)
-    label.SetTextSize(size)
-    label.DrawLatex(x, y, value.replace("±", "#pm"))
-    objects.append(label)
-
-  text(0.05, 0.92, title, 0.043, True)
-  text(0.05, 0.85, note, 0.024)
-  for x, header in zip((0.05, 0.51, 0.76), headers):
-    text(x, 0.74, header, 0.034, True)
-  for index, row in enumerate(rows):
-    y = 0.65 - index * 0.083
-    for x, value in zip((0.05, 0.51, 0.76), row):
-      text(x, y, value)
-  canvas.SaveAs(os.path.join(output_dir, stem + ".pdf"))
-  canvas.Close()
 
 
 def draw_comparison_table_pad(canvas, pad_number, title, labels, rows, note):
@@ -1130,13 +1154,21 @@ def draw_comparison_table_pad(canvas, pad_number, title, labels, rows, note):
 
   text(0.05, 0.92, title, 0.055, True)
   text(0.05, 0.85, note, 0.030)
-  columns = [0.05, 0.51, 0.76]
-  for x, header in zip(columns, ["Topology", *labels]):
-    text(x, 0.75, header, 0.048, True)
-  for index, row in enumerate(rows):
-    y = 0.67 - index * min(0.075, 0.58 / max(len(rows), 1))
-    for x, value in zip(columns, row):
-      text(x, y, value, 0.045)
+  # Keep all versions readable by stacking blocks of at most three columns.
+  # The canvas gives the table a full-width row for larger comparisons.
+  blocks = [labels[index:index + 3] for index in range(0, len(labels), 3)]
+  block_height = 0.68 / max(len(blocks), 1)
+  for block_index, block in enumerate(blocks):
+    columns = [0.05, *[0.47 + index * 0.50 / len(block) for index in range(len(block))]]
+    y_top = 0.75 - block_index * block_height
+    row_height = block_height / (len(rows) + 1.5)
+    size = min(0.045, row_height * 0.65)
+    for x, header in zip(columns, ["Topology", *block]):
+      text(x, y_top, header, size, True)
+    for index, row in enumerate(rows):
+      values = [row[0], *row[1 + 3 * block_index:1 + 3 * block_index + len(block)]]
+      for x, value in zip(columns, values):
+        text(x, y_top - (index + 1) * row_height, value, size)
   return objects
 
 
@@ -1148,10 +1180,26 @@ def format_efficiency_percentage(value):
   return f"{value:.3f}%"
 
 
+def comparison_canvas(stem, version_count, height):
+  table_blocks = math.ceil(version_count / 3)
+  canvas = ROOT.TCanvas("canvas_" + stem, stem, 1400 if version_count > 2 else 1100,
+                       height + 220 * (table_blocks - 1))
+  canvas.Divide(2, 4)
+  if version_count > 2:
+    table_height = min(0.55, 0.18 * table_blocks)
+    row_height = (1.0 - table_height) / 4
+    for index in range(1, 8):
+      column, row = (index - 1) % 2, (index - 1) // 2
+      canvas.GetPad(index).SetPad(0.5 * column, 1 - (row + 1) * row_height,
+                                 0.5 * (column + 1), 1 - row * row_height)
+    canvas.GetPad(8).SetPad(0, 0, 1, table_height)
+  return canvas
+
+
 def run_version_comparison(args):
   versions = args.compare_versions
-  if min(versions) < 1 or versions[0] == versions[1]:
-    raise ValueError("comparison requires two distinct positive versions")
+  if len(versions) < 2 or min(versions) < 1 or len(set(versions)) != len(versions):
+    raise ValueError("comparison requires at least two distinct positive versions")
   selections = [select_histogram_file(args.histograms_dir, version) for version in versions]
   sources = []
   try:
@@ -1161,7 +1209,7 @@ def run_version_comparison(args):
         raise RuntimeError(f"could not open input ROOT file '{path}'")
       sources.append(source)
       print(f"Selected v{version}: {path}")
-    comparison = list(zip([f"v{version}" for version in versions], sources))
+    comparison = list(zip(comparison_labels(selections), sources))
     # Check all requested inputs before writing any comparison artifacts. Missing
     # categories must not silently become zero fractions or efficiencies.
     for label, source in comparison:
@@ -1173,6 +1221,7 @@ def run_version_comparison(args):
               hist = source.Get(path)
               if not hist or not hist.InheritsFrom("TH1") or hist.GetDimension() != 1:
                 raise RuntimeError(f"{label}: missing or invalid histogram {path}")
+              require_complete_resolution(hist)
       for object_name, categories in (("ShiftMuon", MUON_EFFICIENCY_TYPES),
                                       ("ShiftDimuonVertex", DIMUON_EFFICIENCY_TYPES)):
         for category, _, _ in categories:
@@ -1181,15 +1230,14 @@ def run_version_comparison(args):
             passed, total = source.Get(prefix + "_pass"), source.Get(prefix + "_total")
             if not passed or not total or not ROOT.TEfficiency.CheckConsistency(passed, total):
               raise RuntimeError(f"{label}: missing or inconsistent efficiency {prefix}")
-    output_dir = os.path.join(args.output_dir, "comparisons", "_vs_".join(label for label, _ in comparison))
+    output_dir = os.path.join(args.output_dir, "comparisons", "_vs_".join(f"v{version}" for version in versions))
     os.makedirs(output_dir, exist_ok=True)
     labels = [label for label, _ in comparison]
     for spec in SUMMARY_CANVAS_SPECS:
       for constrained in (False, True):
         strategy = "constrained" if constrained else "unconstrained"
         stem = spec["output_name"].removesuffix(".pdf") + "_" + strategy
-        canvas = ROOT.TCanvas("canvas_" + stem, stem, 1100, 1600)
-        canvas.Divide(2, 4)
+        canvas = comparison_canvas(stem, len(versions), 1600)
         objects = draw_scale_resolution_summary(canvas, spec, sources[0], comparison, constrained)
         fractions = [summary_category_fractions(spec, source) for source in sources]
         rows = []
@@ -1206,8 +1254,7 @@ def run_version_comparison(args):
         ("ShiftMuon", MUON_EFFICIENCY_TYPES, "shiftmuon_efficiency"),
         ("ShiftDimuonVertex", DIMUON_EFFICIENCY_TYPES, "shiftdimuonvertex_efficiency"),
     ):
-      canvas = ROOT.TCanvas("canvas_" + stem, stem, 1100, 1200)
-      canvas.Divide(2, 4)
+      canvas = comparison_canvas(stem, len(versions), 1600)
       objects = draw_efficiencies(canvas, sources[0], object_name, categories, comparison)
       rows = []
       for category, display_name, _ in categories:
@@ -1244,9 +1291,9 @@ def parse_arguments():
       help="plot version vN from --histograms-dir instead of the highest version",
   )
   input_selection.add_argument(
-      "--compare-versions", nargs=2, type=lambda value: int(value.removeprefix("v")),
-      metavar=("VERSION_A", "VERSION_B"),
-      help="compare two versions, e.g. v40 v41; save under comparisons/v40_vs_v41",
+      "--compare-versions", nargs="+", type=lambda value: int(value.removeprefix("v")),
+      metavar="VERSION",
+      help="compare two or more versions, e.g. 44 45 46 47; labels come from directory suffixes",
   )
   parser.add_argument(
       "--histograms-dir",
@@ -1306,6 +1353,16 @@ def main():
   input_file = ROOT.TFile.Open(input_path, "READ")
   if not input_file or input_file.IsZombie():
     raise SystemExit(f"error: could not open input ROOT file '{input_path}'")
+  try:
+    directory = input_file.GetDirectory("resolution")
+    if directory:
+      for key in directory.GetListOfKeys():
+        hist = directory.Get(key.GetName())
+        if hist.InheritsFrom("TH1") and hist.GetDimension() == 1:
+          require_complete_resolution(hist)
+  except RuntimeError as error:
+    input_file.Close()
+    raise SystemExit(f"error: {error}") from error
   output_dir = f"{args.output_dir}/v{version}_{provenance_tag}"
   os.makedirs(output_dir, exist_ok=True)
   print(f"Output directory: {output_dir}")
@@ -1344,8 +1401,7 @@ def main():
   drawn_objects = []
   drawn_objects += draw_2d(correlation_canvases[0][0], MUON_CORRELATIONS, input_file, correlation_rebin)
   drawn_objects += draw_2d(correlation_canvases[1][0], DIMUON_CORRELATIONS, input_file, correlation_rebin)
-  # Summarize the native-bin histograms before the detailed resolution plots
-  # apply their display rebinning in place.
+  # Summaries use robust quantiles from the native bins; display rebinning uses clones.
   for summary_spec, (canvas, _, _) in zip(SUMMARY_CANVAS_SPECS, summary_canvases):
     drawn_objects += draw_scale_resolution_summary(canvas, summary_spec, input_file)
   for canvas_spec, (canvas, _, _) in zip(MUON_RESOLUTION_CANVASES, muon_resolution_canvases):
