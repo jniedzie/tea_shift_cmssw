@@ -1,7 +1,12 @@
 # base_path = "/pnfs/iihe/cms/store/user/jniedzie/shift_cmssw"  # t2b
 base_path = "/eos/home-j/jniedzie/shift_cmssw/"  # lxplus
 
+# ==========================
+# J/Psi samples
+# ==========================
+
 sample = "jpsi"
+
 # campaign = "larger_test_condor_run"
 # campaign = "small_test"
 # campaign = "Charmonium_pThat_50to100GeV_13p6TeV_smallSample"
@@ -23,4 +28,18 @@ sample = "jpsi"
 # campaign = "lssPaired_field_10k_2023_v3"
 # campaign = "lssPaired_materialField_10k_2023_v3"
 
-campaign = "lssPaired_field_10k_2023_v4"
+# campaign = "lssPaired_field_10k_2023_v4"
+
+campaign = "SamplingScan_jpsi_pThat_1to2_scan_20260921_v1"
+# campaign = "SamplingScan_jpsi_pThat_2to5_scan_20260921_v1"
+# campaign = "SamplingScan_jpsi_pThat_5to10_scan_20260921_v1"
+# campaign = "SamplingScan_jpsi_pThat_10to20_scan_20260921_v1"
+# campaign = "SamplingScan_jpsi_pThat_20to-1_scan_20260921_v1"
+
+
+# ==========================
+# QCD samples
+# ==========================
+
+# sample = "qcd"
+# campaign = "QCD_MuEnriched_FixedTarget_pThat_1to5GeV_ATLASproxy_10k_2023_v1"
