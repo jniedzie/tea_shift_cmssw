@@ -16,6 +16,7 @@ int main(int argc, char** argv) {
   ConfigManager::Initialize(args);
 
   auto eventReader = make_shared<EventReader>();
+  auto cutFlowManager = make_shared<CutFlowManager>(eventReader);
   auto histogramsHandler = make_shared<HistogramsHandler>();
   auto histogramsFiller = make_unique<HistogramsFiller>(histogramsHandler);
   auto shiftHistogramsFiller = make_unique<ShiftHistogramsFiller>(histogramsHandler);
@@ -24,17 +25,25 @@ int main(int argc, char** argv) {
   bool enableTruthDiagnostics = true;
   ConfigManager::GetInstance().GetValue("enableTruthDiagnostics", enableTruthDiagnostics);
 
+  cutFlowManager->RegisterCut("initial");
+
   for (int iEvent = 0; iEvent < eventReader->GetNevents(); iEvent++) {
     auto event = eventReader->GetEvent(iEvent);
 
-    map<string, float> weight = {{"default", enableTruthDiagnostics ? nanoEventProcessor->GetGenWeight(asNanoEvent(event)) : 1.f}};
+    cutFlowManager->UpdateCutFlow("initial");
+
+    map<string, float> weight = {
+        {"default", enableTruthDiagnostics ? nanoEventProcessor->GetGenWeight(asNanoEvent(event)) : 1.f}};
     histogramsHandler->SetEventWeights(weight);
 
     histogramsFiller->FillDefaultVariables(event);
     shiftHistogramsFiller->Fill(event);
   }
 
+  histogramsFiller->FillCutFlow(cutFlowManager);
   histogramsHandler->SaveHistograms();
+
+  cutFlowManager->Print();
 
   auto& logger = Logger::GetInstance();
   logger.Print();
