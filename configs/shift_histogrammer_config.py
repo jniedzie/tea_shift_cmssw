@@ -5,6 +5,7 @@
 from Logger import info
 from shift_paths import base_path, campaign, sample
 from shift_extra_collections import extraEventCollections
+from shift_sample_paths import latest_merged_sample
 import re
 import glob
 import os
@@ -209,7 +210,7 @@ for name in dimuonCategories:
       (f"ShiftDimuonVertex{name}", "vy", 100, -300, 300, "dimuon"),
       (f"ShiftDimuonVertex{name}", "vz", 100, -20000, 20000, "dimuon"),
       (f"ShiftDimuonVertex{name}", "chi2", 100, -1, 100, "dimuon"),
-      (f"ShiftDimuonVertex{name}", "normalizedChi2", 100, -1, 100, "dimuon"),
+      (f"ShiftDimuonVertex{name}", "normalizedChi2", 1000, -1, 100, "dimuon"),
       (f"ShiftDimuonVertex{name}", "dca", 100, 0, 1500, "dimuon"),
       (f"ShiftDimuonVertex{name}", "dcaValid", 20, -10, 10, "dimuon"),
 
@@ -268,6 +269,7 @@ def add_resolution_histograms(prefix, variables, bin_edges):
   global irregularHistParams
   irregularHistParams += tuple(
       (prefix, variable, bin_edges, "resolution") for variable in variables)
+
 
 for name in dimuonCategories:
   prefix = f"DimuonResolution{name}"
@@ -373,19 +375,7 @@ for name in ["RecoVsGenMuon", "RecoVsGenDimuon"]:
 
 def latest_versioned_sample():
   samples_dir = f"{base_path}/{sample}/{campaign}/samples/step4_merged"
-  sample_pattern = re.compile(r"ntuple_0_([0-9a-f]{7,40}(?:-dirty-[0-9a-f]{8})?)\.root")
-  samples = []
-  for input_path in glob.glob(f"{samples_dir}/ntuple_0_*.root"):
-    file_name = os.path.basename(input_path)
-    match = sample_pattern.fullmatch(file_name)
-    if match:
-      samples.append((os.stat(input_path).st_mtime_ns, file_name, input_path, match.group(1)))
-
-  if not samples:
-    raise RuntimeError(f"No versioned ntuple_0_<hash>.root files found in '{samples_dir}'")
-
-  samples.sort()
-  _, _, input_path, provenance_tag = samples[-1]
+  input_path, provenance_tag = latest_merged_sample(samples_dir)
 
   project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -442,13 +432,13 @@ for category in muonCategories:
       ("directionReversed", 2, -.5, 1.5),
       ("chargeMisidentified", 2, -.5, 1.5),
       ("axisDeltaEta", 400, -2., 2.), ("axisDeltaPhi", 400, -3.142, 3.142),
-      ("constrainedEtaPull", 400, -20., 20.), ("constrainedPhiPull", 400, -20., 20.)):
+          ("constrainedEtaPull", 400, -20., 20.), ("constrainedPhiPull", 400, -20., 20.)):
     histParams += ((f"MuonResolution{category}", variable, bins, lo, hi, "truth_diagnostics"),)
 for variable, lo, hi in (
     ("constrainedEtaErr", 0., 1.), ("constrainedPhiErr", 0., 1.),
     ("targetPredictedEtaErr", 0., 1.), ("targetPredictedPhiErr", 0., 1.),
     ("targetResidualX", -1000., 1000.), ("targetResidualY", -1000., 1000.),
-    ("targetPullX", -20., 20.), ("targetPullY", -20., 20.)):
+        ("targetPullX", -20., 20.), ("targetPullY", -20., 20.)):
   histParams += (("TargetDiagnostics", variable, 200, lo, hi, "target_diagnostics"),)
 histParams += (("TargetDiagnostics", "constrainedStatus", 16, -11.5, 4.5, "target_diagnostics"),)
 histParams += (("TargetDiagnostics", "targetForwardStatus", 12, -10.5, 1.5, "target_diagnostics"),)
@@ -458,6 +448,6 @@ for variable, lo, hi in (("massErr", 0., 10.), ("massRelativeErr", 0., 5.), ("mi
 for category in dimuonCategories:
   histParams += ((f"DimuonResolution{category}", "refittedMassPull", 400, -20., 20., "truth_diagnostics"),)
   histParams2D += (
-      (f"DimuonResolution{category}_refittedMassPullVsCurvature",40,0.,20.,200,-20.,20.,"truth_diagnostics"),
-      (f"DimuonResolution{category}_refittedMassScaleVsCurvature",40,0.,20.,100,0.,5.,"truth_diagnostics"),)
-histParams2D += (("VertexRefitDiagnostics_massVsCurvature",40,0.,20.,100,0.,10.,"vertex_refit_diagnostics"),)
+      (f"DimuonResolution{category}_refittedMassPullVsCurvature", 40, 0., 20., 200, -20., 20., "truth_diagnostics"),
+      (f"DimuonResolution{category}_refittedMassScaleVsCurvature", 40, 0., 20., 100, 0., 5., "truth_diagnostics"),)
+histParams2D += (("VertexRefitDiagnostics_massVsCurvature", 40, 0., 20., 100, 0., 10., "vertex_refit_diagnostics"),)

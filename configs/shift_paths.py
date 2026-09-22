@@ -1,11 +1,19 @@
 # base_path = "/pnfs/iihe/cms/store/user/jniedzie/shift_cmssw"  # t2b
 base_path = "/eos/home-j/jniedzie/shift_cmssw/"  # lxplus
 
+# sample = "jpsi"
+sample = "qcd"
+
+# pt_bin = "1to2"
+# pt_bin = "2to5"
+pt_bin = "5to10"
+# pt_bin = "10to20"
+# pt_bin = "20to-1"
+
 # ==========================
 # J/Psi samples
 # ==========================
 
-sample = "jpsi"
 
 # campaign = "larger_test_condor_run"
 # campaign = "small_test"
@@ -30,16 +38,45 @@ sample = "jpsi"
 
 # campaign = "lssPaired_field_10k_2023_v4"
 
-campaign = "SamplingScan_jpsi_pThat_1to2_scan_20260921_v1"
-# campaign = "SamplingScan_jpsi_pThat_2to5_scan_20260921_v1"
-# campaign = "SamplingScan_jpsi_pThat_5to10_scan_20260921_v1"
-# campaign = "SamplingScan_jpsi_pThat_10to20_scan_20260921_v1"
-# campaign = "SamplingScan_jpsi_pThat_20to-1_scan_20260921_v1"
+jpsi_campaign_base = "SamplingScan_jpsi_pThat_{}_analysis1k_chunk50_20260921_v1"
 
+# campaign = jpsi_campaign_base.format("1to2")
+# campaign = jpsi_campaign_base.format("2to5")
+# campaign = jpsi_campaign_base.format("5to10")
+# campaign = jpsi_campaign_base.format("10to20")
 
 # ==========================
 # QCD samples
 # ==========================
 
-# sample = "qcd"
+qcd_campaign_base = "WeightedReplay_qcdmu_pThat_{}_p10floor0p1_5k_chunk50_20260921_v1"
+
 # campaign = "QCD_MuEnriched_FixedTarget_pThat_1to5GeV_ATLASproxy_10k_2023_v1"
+
+campaign_base = jpsi_campaign_base if sample == "jpsi" else qcd_campaign_base
+campaign = campaign_base.format(pt_bin)
+
+pt_bins = [
+    "1to2",
+    "2to5",
+    "5to10",
+    # "10to20",
+    # "20to-1"
+]
+
+cross_sections = {
+    "jpsi": {
+        "1to2": 6.178e+05,  # pb
+        "2to5": 1.167e+05,  # pb
+        "5to10": 2.045e+03,  # pb
+        "10to20": 2.436e+01,  # pb
+        "20to-1": 4.381e-02,  # pb
+    },
+    "qcd": {
+        "1to2": 3.488e+10,  # pb
+        "2to5": 3.453e+09,  # pb
+        "5to10": 3.927e+07,  # pb
+        "10to20": -1,  # pb
+        "20to-1": -1,  # pb
+    },
+}

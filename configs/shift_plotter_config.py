@@ -4,50 +4,86 @@ from Legend import Legend
 from Histogram import Histogram
 from HistogramNormalizer import NormalizationType
 from CmsLabelsManager import CmsLabel
+from shift_sample_paths import single_root_file
 
-from shift_paths import base_path, sample, campaign
+from shift_paths import base_path, sample, campaign, pt_bins, cross_sections, jpsi_campaign_base, qcd_campaign_base
 
-samples = (
-    Sample(
-        name="jpsi",
-        file_path="../plots/v51_ca5af1024788/histograms.root",
-        type=SampleType.background,
-        cross_section=5.856e+05,  # pb
-        line_alpha=0.0,
-        fill_color=ROOT.kRed - 2,
-        fill_alpha=0.7,
-        marker_size=0.0,
-        legend_description="J/#Psi",
-    ),
-    Sample(
-        name="qcd",
-        file_path="../plots/v50_fcbd49caa94d/histograms.root",
-        type=SampleType.background,
-        cross_section=4.023e+10,  # pb
-        line_alpha=0.0,
-        fill_color=ROOT.kGreen+2,
-        fill_alpha=0.7,
-        marker_size=0.0,
-        legend_description="QCD",
-    ),
-)
+samples = []
+
+jpsi_colors = {
+    "1to2": ROOT.TColor.GetColor("#D62728"),  # red
+    "2to5": ROOT.TColor.GetColor("#FF7F0E"),  # orange
+    "5to10": ROOT.TColor.GetColor("#BCBD22"),  # olive
+    "10to20": ROOT.TColor.GetColor("#9467BD"),  # purple
+    "20to-1": ROOT.TColor.GetColor("#E377C2"),  # pink
+}
+
+qcd_colors = {
+    "1to2": ROOT.TColor.GetColor("#1F77B4"),  # blue
+    "2to5": ROOT.TColor.GetColor("#17BECF"),  # cyan
+    "5to10": ROOT.TColor.GetColor("#2CA02C"),  # green
+    "10to20": ROOT.TColor.GetColor("#8C564B"),  # brown
+    "20to-1": ROOT.TColor.GetColor("#4D4D4D"),  # dark gray
+}
+
+for pt_bin in pt_bins:
+  samples.append(
+      Sample(
+          name=f"jpsi_{pt_bin}",
+          file_path=single_root_file(f"{base_path}/jpsi/{jpsi_campaign_base.format(pt_bin)}/histograms"),
+          type=SampleType.background,
+          cross_section=cross_sections["jpsi"][pt_bin],
+          line_alpha=0.0,
+          fill_color=jpsi_colors[pt_bin],
+          fill_alpha=0.7,
+          marker_size=0.0,
+          legend_description=f"J/#Psi pThat {pt_bin} GeV",
+      )
+  )
+
+  # samples.append(
+  #     Sample(
+  #         name=f"qcd_{pt_bin}",
+  #         file_path=single_root_file(f"{base_path}/qcd/{qcd_campaign_base.format(pt_bin)}/histograms"),
+  #         type=SampleType.background,
+  #         cross_section=cross_sections["qcd"][pt_bin],
+  #         line_alpha=0.0,
+  #         fill_color=qcd_colors[pt_bin],
+  #         fill_alpha=0.7,
+  #         marker_size=0.0,
+  #         legend_description=f"QCD pThat {pt_bin} GeV",
+  #     )
+  # )
 
 output_path = "../plots/plots/"
 
+muon_categories = ["", "BothEndcaps"]
 dimuon_categories = ["", "Both-Both"]
+
 histograms = []
 # fmt: off
+
+for category in muon_categories:
+  histograms.extend([
+    Histogram(f"event/Event_nShiftMuon{category}", "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "n_{#mu}"            , "# events"),
+  ])
+
 for category in dimuon_categories:
   # name        title         logx   logy   norm_type                  rebin  xmin  xmax  ymin  ymax  xlabel         ylabel
   histograms.extend([
-      Histogram(f"dimuon/ShiftDimuonVertex{category}_pt"   , "", False, True , NormalizationType.to_lumi,     5, None, None, None, None, "p_{T}^{#mu#mu} [GeV]", "# events"),
-      Histogram(f"dimuon/ShiftDimuonVertex{category}_mass" , "", False, True , NormalizationType.to_lumi,     5, None, None, None, None, "m_{#mu#mu} [GeV]"    , "# events"),
+      Histogram(f"event/Event_nShiftDimuonVertex{category}", "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "n_{#mu#mu}"        , "# events"),
+
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_pt"   , "", False, True , NormalizationType.to_lumi,     4, None, None, None, None, "p_{T}^{#mu#mu} [GeV]", "# events"),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_mass" , "", False, False , NormalizationType.to_lumi,     4, None, None, None, None, "m_{#mu#mu} [GeV]"    , "# events"),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_eta"  , "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "#eta^{#mu#mu}"       , "# events"),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_phi"  , "", False, True , NormalizationType.to_lumi,     4, None, None, None, None, "#phi^{#mu#mu}"       , "# events"),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_normalizedChi2", "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "#chi^{2}/ndof"       , "# events"),
   ])
 # fmt: on
 luminosity = 300000.0  # pb^-1 (Run 3)
 
 legends = {
-    SampleType.background: Legend(0.7, 0.8, 0.85, 0.85, "f"),
+    SampleType.background: Legend(0.7, 0.6, 0.8, 0.9, "f"),
 }
 
 plotting_options = {
