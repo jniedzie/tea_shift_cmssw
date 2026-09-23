@@ -6,7 +6,7 @@ from HistogramNormalizer import NormalizationType
 from CmsLabelsManager import CmsLabel
 from shift_sample_paths import single_root_file
 
-from shift_paths import base_path, sample, campaign, pt_bins, cross_sections, jpsi_campaign_base, qcd_campaign_base
+from shift_paths import base_path, sample, campaign, cross_sections, jpsi_campaign_base, qcd_campaign_base
 
 samples = []
 
@@ -26,7 +26,7 @@ qcd_colors = {
     "20to-1": ROOT.TColor.GetColor("#4D4D4D"),  # dark gray
 }
 
-for pt_bin in pt_bins:
+for pt_bin in cross_sections["jpsi"]:
   samples.append(
       Sample(
           name=f"jpsi_{pt_bin}",
@@ -41,19 +41,20 @@ for pt_bin in pt_bins:
       )
   )
 
-  # samples.append(
-  #     Sample(
-  #         name=f"qcd_{pt_bin}",
-  #         file_path=single_root_file(f"{base_path}/qcd/{qcd_campaign_base.format(pt_bin)}/histograms"),
-  #         type=SampleType.background,
-  #         cross_section=cross_sections["qcd"][pt_bin],
-  #         line_alpha=0.0,
-  #         fill_color=qcd_colors[pt_bin],
-  #         fill_alpha=0.7,
-  #         marker_size=0.0,
-  #         legend_description=f"QCD pThat {pt_bin} GeV",
-  #     )
-  # )
+for pt_bin in cross_sections["qcd"]:
+  samples.append(
+      Sample(
+          name=f"qcd_{pt_bin}",
+          file_path=single_root_file(f"{base_path}/qcd/{qcd_campaign_base.format(pt_bin)}/histograms"),
+          type=SampleType.background,
+          cross_section=cross_sections["qcd"][pt_bin],
+          line_alpha=0.0,
+          fill_color=qcd_colors[pt_bin],
+          fill_alpha=0.7,
+          marker_size=0.0,
+          legend_description=f"QCD pThat {pt_bin} GeV",
+      )
+  )
 
 output_path = "../plots/plots/"
 
@@ -66,6 +67,20 @@ histograms = []
 for category in muon_categories:
   histograms.extend([
     Histogram(f"event/Event_nShiftMuon{category}", "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "n_{#mu}"            , "# events"),
+
+    Histogram(f"muon/ShiftMuon{category}_pt"   , "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "p_{T}^{#mu} [GeV]", "# events"),
+    Histogram(f"muon/ShiftMuon{category}_pz"   , "", False, True , NormalizationType.to_lumi,     1, None, 200 , None, None, "p_{Z}^{#mu} [GeV]", "# events"),
+    Histogram(f"muon/ShiftMuon{category}_eta"  , "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "#eta^{#mu}"       , "# events"),
+    Histogram(f"muon/ShiftMuon{category}_phi"  , "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "#phi^{#mu}"       , "# events"),
+
+    Histogram(f"muon/ShiftMuon{category}_vx" , "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "v_{x}^{#mu} [cm]"    , "# events"),
+    Histogram(f"muon/ShiftMuon{category}_vy" , "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "v_{y}^{#mu} [cm]"    , "# events"),
+    Histogram(f"muon/ShiftMuon{category}_vz" , "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "v_{z}^{#mu} [cm]"    , "# events"),
+    Histogram(f"muon/ShiftMuon{category}_dz" , "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "d_{z}^{#mu} [cm]"    , "# events"),
+
+    Histogram(f"muon/ShiftMuon{category}_nCSCHits" , "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "n_{CSCHits}^{#mu}"    , "# events"),
+    Histogram(f"muon/ShiftMuon{category}_nDTHits"  , "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "n_{DTHits}^{#mu}"    , "# events"),
+    Histogram(f"muon/ShiftMuon{category}_nRPCHits" , "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "n_{RPCHits}^{#mu}"    , "# events"),
   ])
 
 for category in dimuon_categories:
@@ -74,10 +89,21 @@ for category in dimuon_categories:
       Histogram(f"event/Event_nShiftDimuonVertex{category}", "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "n_{#mu#mu}"        , "# events"),
 
       Histogram(f"dimuon/ShiftDimuonVertex{category}_pt"   , "", False, True , NormalizationType.to_lumi,     4, None, None, None, None, "p_{T}^{#mu#mu} [GeV]", "# events"),
-      Histogram(f"dimuon/ShiftDimuonVertex{category}_mass" , "", False, False , NormalizationType.to_lumi,     4, None, None, None, None, "m_{#mu#mu} [GeV]"    , "# events"),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_pz"   , "", False, True , NormalizationType.to_lumi,     4, None, None, None, None, "p_{Z}^{#mu#mu} [GeV]", "# events"),
       Histogram(f"dimuon/ShiftDimuonVertex{category}_eta"  , "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "#eta^{#mu#mu}"       , "# events"),
       Histogram(f"dimuon/ShiftDimuonVertex{category}_phi"  , "", False, True , NormalizationType.to_lumi,     4, None, None, None, None, "#phi^{#mu#mu}"       , "# events"),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_mass" , "", False, True , NormalizationType.to_lumi,     4, None, None, None, None, "m_{#mu#mu} [GeV]"    , "# events"),
+
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_vx" , "", False, True , NormalizationType.to_lumi,     4, None, None, None, None, "v_{x}^{#mu#mu} [GeV]"    , "# events"),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_vy" , "", False, True , NormalizationType.to_lumi,     4, None, None, None, None, "v_{y}^{#mu#mu} [GeV]"    , "# events"),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_vz" , "", False, True , NormalizationType.to_lumi,     4, None, None, None, None, "v_{z}^{#mu#mu} [GeV]"    , "# events"),
+
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_chi2", "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "#chi^{2}"       , "# events"),
       Histogram(f"dimuon/ShiftDimuonVertex{category}_normalizedChi2", "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "#chi^{2}/ndof"       , "# events"),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_dca", "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "DCA [cm]"       , "# events"),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_dcaValid", "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "DCA valid"       , "# events"),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_isOS", "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "isOS"       , "# events"),
+
   ])
 # fmt: on
 luminosity = 300000.0  # pb^-1 (Run 3)
