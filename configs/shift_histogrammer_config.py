@@ -13,375 +13,148 @@ import os
 # Truth is used only for MC performance evaluation, never reco selection.
 enableTruthDiagnostics = True
 
+# fmt: off
 defaultHistParams = (
-    ("ShiftMuon", "topology", 5, -0.5, 4.5, "muon"),
-    ("ShiftMuon", "recoAlgorithm", 3, -0.5, 2.5, "muon"),
-    ("ShiftDimuonVertex", "topologyMin", 5, -0.5, 4.5, "dimuon"),
-    ("ShiftDimuonVertex", "topologyMax", 5, -0.5, 4.5, "dimuon"),
+    ("ShiftMuon"        , "topology"     , 5, -0.5, 4.5, "muon"  ),
+    ("ShiftMuon"        , "recoAlgorithm", 3, -0.5, 2.5, "muon"  ),
+    ("ShiftDimuonVertex", "topologyMin"  , 5, -0.5, 4.5, "dimuon"),
+    ("ShiftDimuonVertex", "topologyMax"  , 5, -0.5, 4.5, "dimuon"),
 )
+# fmt: on
 
+# fmt: off
 defaultHistParams += (
-    ("ShiftMuon", "simDTHits", 50, 0, 50, "detector_diagnostics"),
-    ("ShiftMuon", "simPixelHits", 50, 0, 50, "detector_diagnostics"),
-    ("ShiftMuon", "simStripHits", 100, 0, 100, "detector_diagnostics"),
-    ("ShiftMuon", "simGEMHits", 20, 0, 20, "detector_diagnostics"),
-    ("ShiftMuon", "trackerMatchValid", 2, -0.5, 1.5, "detector_diagnostics"),
-    ("ShiftMuon", "trackerValidHits", 30, 0, 30, "detector_diagnostics"),
-    ("ShiftMuon", "combinedTrackValid", 2, -0.5, 1.5, "detector_diagnostics"),
-    ("ShiftMuon", "combinedTrackerHits", 30, 0, 30, "detector_diagnostics"),
-    ("ShiftMuon", "combinedTargetPt", 200, 0, 20, "detector_diagnostics"),
-    ("ShiftMuon", "combinedTargetPz", 200, -1000, 100, "detector_diagnostics"),
-    ("ShiftMuon", "combinedTargetDca", 100, -1, 500, "detector_diagnostics"),
-    ("ShiftMuon", "simHcalHits", 50, -2, 48, "detector_diagnostics"),
-    ("ShiftMuon", "simHBHEHits", 100, 0, 100, "detector_diagnostics"),
-    ("ShiftMuon", "simHFHits", 100, 0, 100, "detector_diagnostics"),
-    ("ShiftMuon", "simHOHits", 100, 0, 100, "detector_diagnostics"),
-    ("ShiftMuon", "simHcalEnergy", 100, -2, 2, "detector_diagnostics"),
-    ("ShiftMuon", "simZDCHits", 50, -2, 48, "detector_diagnostics"),
-    ("ShiftMuon", "simZDCEnergy", 100, -2, 2, "detector_diagnostics"),
-    ("ShiftMuon", "simZDCFirstTime", 120, -600, 0, "detector_diagnostics"),
-    ("ShiftMuon", "nCompatibleDTSegments", 20, 0, 20, "detector_diagnostics"),
-    ("ShiftMuon", "nPropagatedDTSegments", 100, 0, 100, "detector_diagnostics"),
-    ("ShiftMuon", "nPropagatedPixelHits", 100, 0, 100, "detector_diagnostics"),
-    ("ShiftMuon", "nPropagatedStripHits", 200, 0, 200, "detector_diagnostics"),
-    ("ShiftMuon", "nCompatiblePixelHits", 30, 0, 30, "detector_diagnostics"),
-    ("ShiftMuon", "nCompatibleStripHits", 50, 0, 50, "detector_diagnostics"),
-    ("ShiftMuon", "nAddedDTRefitHits", 20, 0, 20, "detector_diagnostics"),
-    ("ShiftMuon", "nAddedTrackerRefitHits", 50, 0, 50, "detector_diagnostics"),
-    ("ShiftMuon", "nAddedDTTruthChamberMatches", 20, -1, 19, "detector_diagnostics"),
-    ("ShiftMuon", "minDTResidual", 200, -1, 999, "detector_diagnostics"),
-    ("ShiftMuon", "minDTEstimatorChi2", 200, -1, 999, "detector_diagnostics"),
-    ("ShiftMuon", "minTrackerResidual", 200, -1, 199, "detector_diagnostics"),
-    ("ShiftMuon", "minTrackerEstimatorChi2", 200, -1, 999, "detector_diagnostics"),
-    ("ShiftMuon", "trackerMatchRawValid", 2, -0.5, 1.5, "detector_diagnostics"),
-    ("ShiftMuon", "trackerMatchValid", 2, -0.5, 1.5, "detector_diagnostics"),
-    ("ShiftMuon", "trackerMatchLineDistance", 200, -1, 999, "detector_diagnostics"),
-    ("ShiftMuon", "trackerMatchAxisAngle", 160, -0.01, 1.59, "detector_diagnostics"),
-    ("ShiftMuon", "nMatchedEcalRecHits", 50, 0, 50, "detector_diagnostics"),
-    ("ShiftMuon", "nMatchedHBHERecHits", 50, 0, 50, "detector_diagnostics"),
-    ("ShiftMuon", "nMatchedHFRecHits", 50, 0, 50, "detector_diagnostics"),
-    ("ShiftMuon", "nMatchedHORecHits", 50, 0, 50, "detector_diagnostics"),
-    ("ShiftMuon", "nMatchedZDCRecHits", 30, 0, 30, "detector_diagnostics"),
-    ("ShiftMuon", "matchedEcalEnergy", 100, 0, 20, "detector_diagnostics"),
-    ("ShiftMuon", "matchedHBHEEnergy", 100, 0, 20, "detector_diagnostics"),
-    ("ShiftMuon", "matchedHFEnergy", 100, 0, 20, "detector_diagnostics"),
-    ("ShiftMuon", "matchedHOEnergy", 100, 0, 20, "detector_diagnostics"),
-    ("ShiftMuon", "nCrossedHBHEIds", 30, 0, 30, "detector_diagnostics"),
-    ("ShiftMuon", "nCrossedHBHERecHits", 30, 0, 30, "detector_diagnostics"),
-    ("ShiftMuon", "nValidCrossedHBHETimes", 30, 0, 30, "detector_diagnostics"),
-    ("ShiftMuon", "crossedHBHEEnergy", 100, 0, 20, "detector_diagnostics"),
-    ("ShiftMuon", "hbhe3x3Energy", 100, 0, 20, "detector_diagnostics"),
-    ("ShiftMuon", "maxCrossedHBHEEnergy", 100, 0, 10, "detector_diagnostics"),
-    ("ShiftMuon", "maxCrossedHBHETime", 160, -1000, 200, "detector_diagnostics"),
-    ("ShiftMuon", "nCrossedHOIds", 30, 0, 30, "detector_diagnostics"),
-    ("ShiftMuon", "nCrossedHORecHits", 30, 0, 30, "detector_diagnostics"),
-    ("ShiftMuon", "nValidCrossedHOTimes", 30, 0, 30, "detector_diagnostics"),
-    ("ShiftMuon", "hcalAssociationDirection", 4, -0.5, 3.5, "detector_diagnostics"),
-    ("ShiftMuon", "crossedHOEnergy", 100, 0, 20, "detector_diagnostics"),
-    ("ShiftMuon", "ho3x3Energy", 100, 0, 20, "detector_diagnostics"),
-    ("ShiftMuon", "maxCrossedHOEnergy", 100, 0, 10, "detector_diagnostics"),
-    ("ShiftMuon", "maxCrossedHOTime", 160, -1000, 200, "detector_diagnostics"),
-    ("ShiftMuon", "matchedZDCEnergy", 100, 0, 10, "detector_diagnostics"),
-    ("ShiftMuon", "nCaloTimingMeasurements", 10, 0, 10, "detector_diagnostics"),
-    ("ShiftMuon", "caloTimingDirectionSign", 3, -1.5, 1.5, "detector_diagnostics"),
-    ("ShiftMuon", "caloTimingDeltaChi2", 100, 0, 100, "detector_diagnostics"),
-    ("ShiftMuon", "combinedTimingDirectionSign", 3, -1.5, 1.5, "detector_diagnostics"),
-    ("ShiftMuon", "nCombinedTimingMeasurements", 20, 0, 20, "detector_diagnostics"),
-    ("ShiftMuon", "combinedTimingDeltaChi2", 100, 0, 100, "detector_diagnostics"),
-    ("ShiftMuon", "combinedTimingAgreesWithMuon", 3, -1.5, 1.5, "detector_diagnostics"),
-    (
-        "Event",
-        "ShiftRecoDiag_enableDTMeasurement",
-        2,
-        -0.5,
-        1.5,
-        "detector_diagnostics",
-    ),
-    ("Event", "ShiftRecoDiag_dtNavigationMode", 3, -0.5, 2.5, "detector_diagnostics"),
-    (
-        "Event",
-        "ShiftRecoDiag_enableGEMMeasurement",
-        2,
-        -0.5,
-        1.5,
-        "detector_diagnostics",
-    ),
-    ("Event", "ShiftRecoDiag_trackerMode", 3, -0.5, 2.5, "detector_diagnostics"),
-    (
-        "Event",
-        "ShiftRecoDiag_enableHcalDiagnostics",
-        2,
-        -0.5,
-        1.5,
-        "detector_diagnostics",
-    ),
-    (
-        "Event",
-        "ShiftRecoDiag_enableZDCDiagnostics",
-        2,
-        -0.5,
-        1.5,
-        "detector_diagnostics",
-    ),
-    ("Event", "ShiftRecoDiag_nDTSimHits", 100, 0, 100, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nDTSegments", 50, 0, 50, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nGEMSimHits", 20, 0, 20, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nGEMSegments", 20, 0, 20, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nGeneralTracks", 50, 0, 50, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nTrackerSeeds", 30, 0, 30, "detector_diagnostics"),
-    (
-        "Event",
-        "ShiftRecoDiag_nTrackerTrackCandidates",
-        30,
-        0,
-        30,
-        "detector_diagnostics",
-    ),
-    ("Event", "ShiftRecoDiag_nTrackerRawTracks", 30, 0, 30, "detector_diagnostics"),
-    (
-        "Event",
-        "ShiftRecoDiag_nTrackerSelectedTracks",
-        30,
-        0,
-        30,
-        "detector_diagnostics",
-    ),
-    (
-        "Event",
-        "ShiftRecoDiag_nTrackerLHCTrackCandidates",
-        30,
-        0,
-        30,
-        "detector_diagnostics",
-    ),
-    ("Event", "ShiftRecoDiag_nTrackerLHCTracks", 30, 0, 30, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nSignalMuonSimTracks", 10, 0, 10, "detector_diagnostics"),
-    (
-        "Event",
-        "ShiftRecoDiag_nSignalMuonWithTrackerSimHits",
-        10,
-        0,
-        10,
-        "detector_diagnostics",
-    ),
-    (
-        "Event",
-        "ShiftRecoDiag_nSignalMuonWithMuonSystemSimHits",
-        10,
-        0,
-        10,
-        "detector_diagnostics",
-    ),
-    (
-        "Event",
-        "ShiftRecoDiag_nSignalMuonWithTrackerAndMuonSystemSimHits",
-        10,
-        0,
-        10,
-        "detector_diagnostics",
-    ),
-    ("Event", "ShiftRecoDiag_nDSATrackerMatches", 10, 0, 10, "detector_diagnostics"),
-    (
-        "Event",
-        "ShiftRecoDiag_nTraversingTrackerMatches",
-        10,
-        0,
-        10,
-        "detector_diagnostics",
-    ),
-    (
-        "Event",
-        "ShiftRecoDiag_nSignalMuonHcalSimHits",
-        50,
-        -2,
-        48,
-        "detector_diagnostics",
-    ),
-    (
-        "Event",
-        "ShiftRecoDiag_signalMuonHcalSimEnergy",
-        100,
-        -2,
-        2,
-        "detector_diagnostics",
-    ),
-    (
-        "Event",
-        "ShiftRecoDiag_nSignalMuonZDCSimHits",
-        50,
-        -2,
-        48,
-        "detector_diagnostics",
-    ),
-    (
-        "Event",
-        "ShiftRecoDiag_signalMuonZDCSimEnergy",
-        100,
-        -2,
-        2,
-        "detector_diagnostics",
-    ),
-    (
-        "Event",
-        "ShiftRecoDiag_signalMuonZDCFirstTime",
-        120,
-        -600,
-        0,
-        "detector_diagnostics",
-    ),
-    ("Event", "ShiftRecoDiag_nPixelRecHits", 200, -1, 199, "detector_diagnostics"),
-    (
-        "Event",
-        "ShiftRecoDiag_nStripMatchedRecHits",
-        500,
-        -1,
-        499,
-        "detector_diagnostics",
-    ),
-    (
-        "Event",
-        "ShiftRecoDiag_nStripRphiRecHits",
-        3000,
-        -1,
-        2999,
-        "detector_diagnostics",
-    ),
-    (
-        "Event",
-        "ShiftRecoDiag_nStripRphiUnmatchedRecHits",
-        2000,
-        -1,
-        1999,
-        "detector_diagnostics",
-    ),
-    (
-        "Event",
-        "ShiftRecoDiag_nStripStereoRecHits",
-        1500,
-        -1,
-        1499,
-        "detector_diagnostics",
-    ),
-    (
-        "Event",
-        "ShiftRecoDiag_nStripStereoUnmatchedRecHits",
-        1000,
-        -1,
-        999,
-        "detector_diagnostics",
-    ),
-    ("Event", "ShiftRecoDiag_nHBHEQIE11Digis", 200, 0, 20000, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nHFQIE10Digis", 200, 0, 5000, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nHODigis", 200, 0, 3000, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nZDCDigis", 30, -1, 29, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nEcalBarrelRecHits", 200, -1, 199, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nEcalEndcapRecHits", 200, -1, 199, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nHBHERecHits", 200, -1, 3999, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nHFRecHits", 200, -1, 1999, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nHORecHits", 200, -1, 2999, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nZDCRecHits", 50, -1, 49, "detector_diagnostics"),
-    (
-        "Event",
-        "ShiftRecoDiag_nZDCRecHitsAboveThreshold",
-        30,
-        -1,
-        29,
-        "detector_diagnostics",
-    ),
-    (
-        "Event",
-        "ShiftRecoDiag_ZDCPositiveRecEnergy",
-        100,
-        -1,
-        20,
-        "detector_diagnostics",
-    ),
-    ("Event", "ShiftRecoDiag_ZDCMaxRecEnergy", 100, -1, 5, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_ZDCMaxRecTime", 160, -600, 200, "detector_diagnostics"),
-    (
-        "Event",
-        "ShiftRecoDiag_nHBHERecHitsAboveThreshold",
-        200,
-        -1,
-        3999,
-        "detector_diagnostics",
-    ),
-    (
-        "Event",
-        "ShiftRecoDiag_HBHEPositiveRecEnergy",
-        200,
-        -1,
-        200,
-        "detector_diagnostics",
-    ),
-    (
-        "Event",
-        "ShiftRecoDiag_nHFRecHitsAboveThreshold",
-        200,
-        -1,
-        1999,
-        "detector_diagnostics",
-    ),
-    (
-        "Event",
-        "ShiftRecoDiag_HFPositiveRecEnergy",
-        200,
-        -1,
-        200,
-        "detector_diagnostics",
-    ),
-    (
-        "Event",
-        "ShiftRecoDiag_nEcalBarrelRecHitsAboveThreshold",
-        200,
-        -1,
-        399,
-        "detector_diagnostics",
-    ),
-    (
-        "Event",
-        "ShiftRecoDiag_EcalBarrelPositiveRecEnergy",
-        200,
-        -1,
-        100,
-        "detector_diagnostics",
-    ),
-    (
-        "Event",
-        "ShiftRecoDiag_nEcalEndcapRecHitsAboveThreshold",
-        200,
-        -1,
-        399,
-        "detector_diagnostics",
-    ),
-    (
-        "Event",
-        "ShiftRecoDiag_EcalEndcapPositiveRecEnergy",
-        200,
-        -1,
-        100,
-        "detector_diagnostics",
-    ),
-    (
-        "Event",
-        "ShiftRecoDiag_nHORecHitsAboveThreshold",
-        200,
-        -1,
-        2999,
-        "detector_diagnostics",
-    ),
-    (
-        "Event",
-        "ShiftRecoDiag_HOPositiveRecEnergy",
-        200,
-        -1,
-        200,
-        "detector_diagnostics",
-    ),
-    ("Event", "ShiftRecoDiag_nBCM1FSimHits", 50, -1, 49, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nBHMSimHits", 50, -1, 49, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nPLTSimHits", 50, -1, 49, "detector_diagnostics"),
+    ("ShiftMuon", "simDTHits"                                               ,   50,     0,    50, "detector_diagnostics"),
+    ("ShiftMuon", "simPixelHits"                                            ,   50,     0,    50, "detector_diagnostics"),
+    ("ShiftMuon", "simStripHits"                                            ,  100,     0,   100, "detector_diagnostics"),
+    ("ShiftMuon", "simGEMHits"                                              ,   20,     0,    20, "detector_diagnostics"),
+    ("ShiftMuon", "trackerMatchValid"                                       ,    2,  -0.5,   1.5, "detector_diagnostics"),
+    ("ShiftMuon", "trackerValidHits"                                        ,   30,     0,    30, "detector_diagnostics"),
+    ("ShiftMuon", "combinedTrackValid"                                      ,    2,  -0.5,   1.5, "detector_diagnostics"),
+    ("ShiftMuon", "combinedTrackerHits"                                     ,   30,     0,    30, "detector_diagnostics"),
+    ("ShiftMuon", "combinedTargetPt"                                        ,  200,     0,    20, "detector_diagnostics"),
+    ("ShiftMuon", "combinedTargetPz"                                        ,  200, -1000,   100, "detector_diagnostics"),
+    ("ShiftMuon", "combinedTargetDca"                                       ,  100,    -1,   500, "detector_diagnostics"),
+    ("ShiftMuon", "simHcalHits"                                             ,   50,    -2,    48, "detector_diagnostics"),
+    ("ShiftMuon", "simHBHEHits"                                             ,  100,     0,   100, "detector_diagnostics"),
+    ("ShiftMuon", "simHFHits"                                               ,  100,     0,   100, "detector_diagnostics"),
+    ("ShiftMuon", "simHOHits"                                               ,  100,     0,   100, "detector_diagnostics"),
+    ("ShiftMuon", "simHcalEnergy"                                           ,  100,    -2,     2, "detector_diagnostics"),
+    ("ShiftMuon", "simZDCHits"                                              ,   50,    -2,    48, "detector_diagnostics"),
+    ("ShiftMuon", "simZDCEnergy"                                            ,  100,    -2,     2, "detector_diagnostics"),
+    ("ShiftMuon", "simZDCFirstTime"                                         ,  120,  -600,     0, "detector_diagnostics"),
+    ("ShiftMuon", "nCompatibleDTSegments"                                   ,   20,     0,    20, "detector_diagnostics"),
+    ("ShiftMuon", "nPropagatedDTSegments"                                   ,  100,     0,   100, "detector_diagnostics"),
+    ("ShiftMuon", "nPropagatedPixelHits"                                    ,  100,     0,   100, "detector_diagnostics"),
+    ("ShiftMuon", "nPropagatedStripHits"                                    ,  200,     0,   200, "detector_diagnostics"),
+    ("ShiftMuon", "nCompatiblePixelHits"                                    ,   30,     0,    30, "detector_diagnostics"),
+    ("ShiftMuon", "nCompatibleStripHits"                                    ,   50,     0,    50, "detector_diagnostics"),
+    ("ShiftMuon", "nAddedDTRefitHits"                                       ,   20,     0,    20, "detector_diagnostics"),
+    ("ShiftMuon", "nAddedTrackerRefitHits"                                  ,   50,     0,    50, "detector_diagnostics"),
+    ("ShiftMuon", "nAddedDTTruthChamberMatches"                             ,   20,    -1,    19, "detector_diagnostics"),
+    ("ShiftMuon", "minDTResidual"                                           ,  200,    -1,   999, "detector_diagnostics"),
+    ("ShiftMuon", "minDTEstimatorChi2"                                      ,  200,    -1,   999, "detector_diagnostics"),
+    ("ShiftMuon", "minTrackerResidual"                                      ,  200,    -1,   199, "detector_diagnostics"),
+    ("ShiftMuon", "minTrackerEstimatorChi2"                                 ,  200,    -1,   999, "detector_diagnostics"),
+    ("ShiftMuon", "trackerMatchRawValid"                                    ,    2,  -0.5,   1.5, "detector_diagnostics"),
+    ("ShiftMuon", "trackerMatchValid"                                       ,    2,  -0.5,   1.5, "detector_diagnostics"),
+    ("ShiftMuon", "trackerMatchLineDistance"                                ,  200,    -1,   999, "detector_diagnostics"),
+    ("ShiftMuon", "trackerMatchAxisAngle"                                   ,  160, -0.01,  1.59, "detector_diagnostics"),
+    ("ShiftMuon", "nMatchedEcalRecHits"                                     ,   50,     0,    50, "detector_diagnostics"),
+    ("ShiftMuon", "nMatchedHBHERecHits"                                     ,   50,     0,    50, "detector_diagnostics"),
+    ("ShiftMuon", "nMatchedHFRecHits"                                       ,   50,     0,    50, "detector_diagnostics"),
+    ("ShiftMuon", "nMatchedHORecHits"                                       ,   50,     0,    50, "detector_diagnostics"),
+    ("ShiftMuon", "nMatchedZDCRecHits"                                      ,   30,     0,    30, "detector_diagnostics"),
+    ("ShiftMuon", "matchedEcalEnergy"                                       ,  100,     0,    20, "detector_diagnostics"),
+    ("ShiftMuon", "matchedHBHEEnergy"                                       ,  100,     0,    20, "detector_diagnostics"),
+    ("ShiftMuon", "matchedHFEnergy"                                         ,  100,     0,    20, "detector_diagnostics"),
+    ("ShiftMuon", "matchedHOEnergy"                                         ,  100,     0,    20, "detector_diagnostics"),
+    ("ShiftMuon", "nCrossedHBHEIds"                                         ,   30,     0,    30, "detector_diagnostics"),
+    ("ShiftMuon", "nCrossedHBHERecHits"                                     ,   30,     0,    30, "detector_diagnostics"),
+    ("ShiftMuon", "nValidCrossedHBHETimes"                                  ,   30,     0,    30, "detector_diagnostics"),
+    ("ShiftMuon", "crossedHBHEEnergy"                                       ,  100,     0,    20, "detector_diagnostics"),
+    ("ShiftMuon", "hbhe3x3Energy"                                           ,  100,     0,    20, "detector_diagnostics"),
+    ("ShiftMuon", "maxCrossedHBHEEnergy"                                    ,  100,     0,    10, "detector_diagnostics"),
+    ("ShiftMuon", "maxCrossedHBHETime"                                      ,  160, -1000,   200, "detector_diagnostics"),
+    ("ShiftMuon", "nCrossedHOIds"                                           ,   30,     0,    30, "detector_diagnostics"),
+    ("ShiftMuon", "nCrossedHORecHits"                                       ,   30,     0,    30, "detector_diagnostics"),
+    ("ShiftMuon", "nValidCrossedHOTimes"                                    ,   30,     0,    30, "detector_diagnostics"),
+    ("ShiftMuon", "hcalAssociationDirection"                                ,    4,  -0.5,   3.5, "detector_diagnostics"),
+    ("ShiftMuon", "crossedHOEnergy"                                         ,  100,     0,    20, "detector_diagnostics"),
+    ("ShiftMuon", "ho3x3Energy"                                             ,  100,     0,    20, "detector_diagnostics"),
+    ("ShiftMuon", "maxCrossedHOEnergy"                                      ,  100,     0,    10, "detector_diagnostics"),
+    ("ShiftMuon", "maxCrossedHOTime"                                        ,  160, -1000,   200, "detector_diagnostics"),
+    ("ShiftMuon", "matchedZDCEnergy"                                        ,  100,     0,    10, "detector_diagnostics"),
+    ("ShiftMuon", "nCaloTimingMeasurements"                                 ,   10,     0,    10, "detector_diagnostics"),
+    ("ShiftMuon", "caloTimingDirectionSign"                                 ,    3,  -1.5,   1.5, "detector_diagnostics"),
+    ("ShiftMuon", "caloTimingDeltaChi2"                                     ,  100,     0,   100, "detector_diagnostics"),
+    ("ShiftMuon", "combinedTimingDirectionSign"                             ,    3,  -1.5,   1.5, "detector_diagnostics"),
+    ("ShiftMuon", "nCombinedTimingMeasurements"                             ,   20,     0,    20, "detector_diagnostics"),
+    ("ShiftMuon", "combinedTimingDeltaChi2"                                 ,  100,     0,   100, "detector_diagnostics"),
+    ("ShiftMuon", "combinedTimingAgreesWithMuon"                            ,    3,  -1.5,   1.5, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_enableDTMeasurement"                       ,    2,  -0.5,   1.5, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_dtNavigationMode"                          ,    3,  -0.5,   2.5, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_enableGEMMeasurement"                      ,    2,  -0.5,   1.5, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_trackerMode"                               ,    3,  -0.5,   2.5, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_enableHcalDiagnostics"                     ,    2,  -0.5,   1.5, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_enableZDCDiagnostics"                      ,    2,  -0.5,   1.5, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nDTSimHits"                                ,  100,     0,   100, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nDTSegments"                               ,   50,     0,    50, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nGEMSimHits"                               ,   20,     0,    20, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nGEMSegments"                              ,   20,     0,    20, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nGeneralTracks"                            ,   50,     0,    50, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nTrackerSeeds"                             ,   30,     0,    30, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nTrackerTrackCandidates"                   ,   30,     0,    30, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nTrackerRawTracks"                         ,   30,     0,    30, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nTrackerSelectedTracks"                    ,   30,     0,    30, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nTrackerLHCTrackCandidates"                ,   30,     0,    30, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nTrackerLHCTracks"                         ,   30,     0,    30, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nSignalMuonSimTracks"                      ,   10,     0,    10, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nSignalMuonWithTrackerSimHits"             ,   10,     0,    10, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nSignalMuonWithMuonSystemSimHits"          ,   10,     0,    10, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nSignalMuonWithTrackerAndMuonSystemSimHits",   10,     0,    10, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nDSATrackerMatches"                        ,   10,     0,    10, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nTraversingTrackerMatches"                 ,   10,     0,    10, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nSignalMuonHcalSimHits"                    ,   50,    -2,    48, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_signalMuonHcalSimEnergy"                   ,  100,    -2,     2, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nSignalMuonZDCSimHits"                     ,   50,    -2,    48, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_signalMuonZDCSimEnergy"                    ,  100,    -2,     2, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_signalMuonZDCFirstTime"                    ,  120,  -600,     0, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nPixelRecHits"                             ,  200,    -1,   199, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nStripMatchedRecHits"                      ,  500,    -1,   499, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nStripRphiRecHits"                         , 3000,    -1,  2999, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nStripRphiUnmatchedRecHits"                , 2000,    -1,  1999, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nStripStereoRecHits"                       , 1500,    -1,  1499, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nStripStereoUnmatchedRecHits"              , 1000,    -1,   999, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nHBHEQIE11Digis"                           ,  200,     0, 20000, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nHFQIE10Digis"                             ,  200,     0,  5000, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nHODigis"                                  ,  200,     0,  3000, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nZDCDigis"                                 ,   30,    -1,    29, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nEcalBarrelRecHits"                        ,  200,    -1,   199, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nEcalEndcapRecHits"                        ,  200,    -1,   199, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nHBHERecHits"                              ,  200,    -1,  3999, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nHFRecHits"                                ,  200,    -1,  1999, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nHORecHits"                                ,  200,    -1,  2999, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nZDCRecHits"                               ,   50,    -1,    49, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nZDCRecHitsAboveThreshold"                 ,   30,    -1,    29, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_ZDCPositiveRecEnergy"                      ,  100,    -1,    20, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_ZDCMaxRecEnergy"                           ,  100,    -1,     5, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_ZDCMaxRecTime"                             ,  160,  -600,   200, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nHBHERecHitsAboveThreshold"                ,  200,    -1,  3999, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_HBHEPositiveRecEnergy"                     ,  200,    -1,   200, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nHFRecHitsAboveThreshold"                  ,  200,    -1,  1999, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_HFPositiveRecEnergy"                       ,  200,    -1,   200, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nEcalBarrelRecHitsAboveThreshold"          ,  200,    -1,   399, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_EcalBarrelPositiveRecEnergy"               ,  200,    -1,   100, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nEcalEndcapRecHitsAboveThreshold"          ,  200,    -1,   399, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_EcalEndcapPositiveRecEnergy"               ,  200,    -1,   100, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nHORecHitsAboveThreshold"                  ,  200,    -1,  2999, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_HOPositiveRecEnergy"                       ,  200,    -1,   200, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nBCM1FSimHits"                             ,   50,    -1,    49, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nBHMSimHits"                               ,   50,    -1,    49, "detector_diagnostics"),
+    ("Event"    , "ShiftRecoDiag_nPLTSimHits"                               ,   50,    -1,    49, "detector_diagnostics"),
 )
+# fmt: on
 
 muonCategories = [
     "NearEndcapOnly",
@@ -394,38 +167,42 @@ muonCategories = [
 for name in ["GenMuon", "ShiftMuon"] + [
     f"ShiftMuon{category}" for category in muonCategories
 ]:
+    # fmt: off
     defaultHistParams += (
-        ("Event", f"n{name}", 10, 0, 10, "event"),
-        (f"{name}", "pt", 500, 0, 50, "muon"),
-        (f"{name}", "pz", 500, -2000, 100, "muon"),
-        (f"{name}", "eta", 1000, -10, 10, "muon"),
-        (f"{name}", "phi", 100, -3.2, 3.2, "muon"),
-        (f"{name}", "vx", 1000, -300, 300, "muon"),
-        (f"{name}", "vy", 1000, -300, 300, "muon"),
-        (f"{name}", "vz", 1000, -20000, 40000, "muon"),
+        ("Event"  , f"n{name}",   10,      0,    10, "event"),
+        (f"{name}", "pt"      ,  500,      0,    50, "muon" ),
+        (f"{name}", "pz"      ,  500,  -2000,   100, "muon" ),
+        (f"{name}", "eta"     , 1000,    -10,    10, "muon" ),
+        (f"{name}", "phi"     ,  100,   -3.2,   3.2, "muon" ),
+        (f"{name}", "vx"      , 1000,   -300,   300, "muon" ),
+        (f"{name}", "vy"      , 1000,   -300,   300, "muon" ),
+        (f"{name}", "vz"      , 1000, -20000, 40000, "muon" ),
     )
+    # fmt: on
 
     if "Gen" in name:
         continue
 
+    # fmt: off
     defaultHistParams += (
-        (f"{name}", "constrainedPt", 500, 0, 50, "muon"),
-        (f"{name}", "constrainedPz", 500, -2000, 100, "muon"),
-        (f"{name}", "constrainedEta", 100, -10, 10, "muon"),
-        (f"{name}", "constrainedPhi", 100, -3.2, 3.2, "muon"),
-        (f"{name}", "constrainedVx", 1000, -300, 300, "muon"),
-        (f"{name}", "constrainedVy", 1000, -300, 300, "muon"),
-        (f"{name}", "constrainedVz", 1000, -20000, 40000, "muon"),
-        (f"{name}", "nCSCHits", 50, 0, 50, "muon"),
-        (f"{name}", "nDTHits", 50, 0, 50, "muon"),
-        (f"{name}", "nRPCHits", 50, 0, 50, "muon"),
-        (f"{name}", "nGEMHits", 50, 0, 50, "muon"),
-        (f"{name}", "nME0Hits", 50, 0, 50, "muon"),
-        (f"{name}", "dz", 500, -20000, 40000, "muon"),
-        (f"{name}", "linePcaZ", 100, -20000, 20000, "muon"),
-        (f"{name}", "trackVz", 100, -20000, 20000, "muon"),
-        (f"{name}", "genPartIdx", 30, -10, 20, "muon"),
+        (f"{name}", "constrainedPt" ,  500,      0,    50, "muon"),
+        (f"{name}", "constrainedPz" ,  500,  -2000,   100, "muon"),
+        (f"{name}", "constrainedEta",  100,    -10,    10, "muon"),
+        (f"{name}", "constrainedPhi",  100,   -3.2,   3.2, "muon"),
+        (f"{name}", "constrainedVx" , 1000,   -300,   300, "muon"),
+        (f"{name}", "constrainedVy" , 1000,   -300,   300, "muon"),
+        (f"{name}", "constrainedVz" , 1000, -20000, 40000, "muon"),
+        (f"{name}", "nCSCHits"      ,  200,      0,   200, "muon"),
+        (f"{name}", "nDTHits"       ,  100,      0,   100, "muon"),
+        (f"{name}", "nRPCHits"      ,  100,      0,   100, "muon"),
+        (f"{name}", "nGEMHits"      ,  100,      0,   100, "muon"),
+        (f"{name}", "nME0Hits"      ,  100,      0,   100, "muon"),
+        (f"{name}", "dz"            ,  500, -20000, 40000, "muon"),
+        (f"{name}", "linePcaZ"      ,  100, -20000, 20000, "muon"),
+        (f"{name}", "trackVz"       ,  100, -20000, 20000, "muon"),
+        (f"{name}", "genPartIdx"    ,   30,    -10,    20, "muon"),
     )
+    # fmt: on
 
 # ============================================================
 # Default dimuon histograms
@@ -442,89 +219,70 @@ dimuonCategories = [
 ]
 
 for name in dimuonCategories:
+    # fmt: off
     defaultHistParams += (
-        ("Event", f"nShiftDimuonVertex{name}", 10, 0, 10, "event"),
-        (f"ShiftDimuonVertex{name}", "pt", 200, 0, 20, "dimuon"),
-        (f"ShiftDimuonVertex{name}", "pz", 200, -1000, 100, "dimuon"),
-        (f"ShiftDimuonVertex{name}", "eta", 1000, -10, 10, "dimuon"),
-        (f"ShiftDimuonVertex{name}", "phi", 100, -3.2, 3.2, "dimuon"),
-        (f"ShiftDimuonVertex{name}", "mass", 1000, 0, 100, "dimuon"),
-        (f"ShiftDimuonVertex{name}", "vx", 100, -300, 300, "dimuon"),
-        (f"ShiftDimuonVertex{name}", "vy", 100, -300, 300, "dimuon"),
-        (f"ShiftDimuonVertex{name}", "vz", 1000, -20000, 20000, "dimuon"),
-        (f"ShiftDimuonVertex{name}", "chi2", 1000, -1, 100, "dimuon"),
-        (f"ShiftDimuonVertex{name}", "normalizedChi2", 1000, -1, 100, "dimuon"),
-        (f"ShiftDimuonVertex{name}", "dca", 1000, 0, 1500, "dimuon"),
-        (f"ShiftDimuonVertex{name}", "dcaValid", 20, -10, 10, "dimuon"),
-        (f"ShiftDimuonVertex{name}", "isOS", 20, -10, 10, "dimuon"),
-        (f"ShiftDimuonVertex{name}", "genIsOS", 20, -10, 10, "dimuon"),
-        (f"ShiftDimuonVertex{name}", "sameGenMuon", 20, -10, 10, "dimuon"),
+        ("Event"                   , f"nShiftDimuonVertex{name}",   10,      0,    10, "event" ),
+        (f"ShiftDimuonVertex{name}", "pt"                       ,  200,      0,    20, "dimuon"),
+        (f"ShiftDimuonVertex{name}", "pz"                       ,  200,  -1000,   100, "dimuon"),
+        (f"ShiftDimuonVertex{name}", "eta"                      , 1000,    -10,    10, "dimuon"),
+        (f"ShiftDimuonVertex{name}", "phi"                      ,  100,   -3.2,   3.2, "dimuon"),
+        (f"ShiftDimuonVertex{name}", "mass"                     , 1000,      0,   100, "dimuon"),
+        (f"ShiftDimuonVertex{name}", "vx"                       , 1000,   -300,   300, "dimuon"),
+        (f"ShiftDimuonVertex{name}", "vy"                       , 1000,   -300,   300, "dimuon"),
+        (f"ShiftDimuonVertex{name}", "vz"                       , 1000, -20000, 20000, "dimuon"),
+        (f"ShiftDimuonVertex{name}", "chi2"                     , 1000,     -1,   100, "dimuon"),
+        (f"ShiftDimuonVertex{name}", "normalizedChi2"           , 5000,     -1,    50, "dimuon"),
+        (f"ShiftDimuonVertex{name}", "dca"                      , 1000,      0,  1500, "dimuon"),
+        (f"ShiftDimuonVertex{name}", "dcaValid"                 ,   20,    -10,    10, "dimuon"),
+        (f"ShiftDimuonVertex{name}", "isOS"                     ,   20,    -10,    10, "dimuon"),
+        (f"ShiftDimuonVertex{name}", "genIsOS"                  ,   20,    -10,    10, "dimuon"),
+        (f"ShiftDimuonVertex{name}", "sameGenMuon"              ,   20,    -10,    10, "dimuon"),
     )
+    # fmt: on
 
 # ============================================================
 # Custom 1D histograms
 # ============================================================
 
+# fmt: off
 histParams = (
-    (
-        "DetectorDiagnostics",
-        "dtAttachmentFraction",
-        51,
-        0,
-        1.02,
-        "detector_diagnostics",
-    ),
-    (
-        "DetectorDiagnostics",
-        "trackerAttachmentFraction",
-        51,
-        0,
-        1.02,
-        "detector_diagnostics",
-    ),
-    (
-        "DetectorDiagnostics",
-        "dtTruthChamberPurity",
-        51,
-        0,
-        1.02,
-        "detector_diagnostics",
-    ),
-    ("DetectorDiagnostics", "timingMeasurements", 20, 0, 20, "detector_diagnostics"),
-    ("DetectorDiagnostics", "timingDeltaChi2", 100, 0, 100, "detector_diagnostics"),
-    (
-        "DetectorDiagnostics",
-        "combinedTimingDeltaChi2",
-        100,
-        0,
-        100,
-        "detector_diagnostics",
-    ),
-    (
-        "DetectorDiagnostics",
-        "hbheValidTimeFraction",
-        51,
-        0,
-        1.02,
-        "detector_diagnostics",
-    ),
-    ("DetectorDiagnostics", "hoValidTimeFraction", 51, 0, 1.02, "detector_diagnostics"),
-    (f"GenDimuon", "pt", 200, 0, 20, "dimuon"),
-    (f"GenDimuon", "pz", 200, -1000, 100, "dimuon"),
-    (f"GenDimuon", "eta", 100, -10, 10, "dimuon"),
-    (f"GenDimuon", "phi", 100, -3.2, 3.2, "dimuon"),
-    (f"GenDimuon", "mass", 100, 0, 10, "dimuon"),
-    (f"GenDimuon", "vx", 100, -300, 300, "dimuon"),
-    (f"GenDimuon", "vy", 100, -300, 300, "dimuon"),
-    (f"GenDimuon", "vz", 100, -20000, 20000, "dimuon"),
-    ("ShiftDimuonVertex", "topologyCategory", 5, -0.5, 4.5, "dimuon"),
+    ("DetectorDiagnostics", "dtAttachmentFraction"     ,  51,      0,  1.02, "detector_diagnostics"),
+    ("DetectorDiagnostics", "trackerAttachmentFraction",  51,      0,  1.02, "detector_diagnostics"),
+    ("DetectorDiagnostics", "dtTruthChamberPurity"     ,  51,      0,  1.02, "detector_diagnostics"),
+    ("DetectorDiagnostics", "timingMeasurements"       ,  20,      0,    20, "detector_diagnostics"),
+    ("DetectorDiagnostics", "timingDeltaChi2"          , 100,      0,   100, "detector_diagnostics"),
+    ("DetectorDiagnostics", "combinedTimingDeltaChi2"  , 100,      0,   100, "detector_diagnostics"),
+    ("DetectorDiagnostics", "hbheValidTimeFraction"    ,  51,      0,  1.02, "detector_diagnostics"),
+    ("DetectorDiagnostics", "hoValidTimeFraction"      ,  51,      0,  1.02, "detector_diagnostics"),
+    (f"GenDimuon"         , "pt"                       , 200,      0,    20, "dimuon"              ),
+    (f"GenDimuon"         , "pz"                       , 200,  -1000,   100, "dimuon"              ),
+    (f"GenDimuon"         , "eta"                      , 100,    -10,    10, "dimuon"              ),
+    (f"GenDimuon"         , "phi"                      , 100,   -3.2,   3.2, "dimuon"              ),
+    (f"GenDimuon"         , "mass"                     , 100,      0,    10, "dimuon"              ),
+    (f"GenDimuon"         , "vx"                       , 100,   -300,   300, "dimuon"              ),
+    (f"GenDimuon"         , "vy"                       , 100,   -300,   300, "dimuon"              ),
+    (f"GenDimuon"         , "vz"                       , 100, -20000, 20000, "dimuon"              ),
+    ("ShiftDimuonVertex"  , "topologyCategory"         ,   5,   -0.5,   4.5, "dimuon"              ),
 )
+# fmt: on
 
 # MC-only origin diagnostic. Each dimuon contributes exactly one categorical
 # entry: its common immediate non-muon mother species, "different mothers",
 # or "unmatched". ShiftHistogramsFiller assigns human-readable bin labels.
 for name in dimuonCategories:
     histParams += ((f"ShiftDimuonVertex{name}", "genPid", 13, -0.5, 12.5, "dimuon"),)
+    # When the two reconstructed muons have different immediate mothers, the
+    # filler records one entry per mother in the reduced 11-species scheme.
+    histParams += (
+        (
+            f"ShiftDimuonVertex{name}",
+            "genPidDifferentMothers",
+            11,
+            -0.5,
+            10.5,
+            "dimuon",
+        ),
+    )
 
 
 def resolution_bin_edges(core_half_width, core_bins, tail_limit=1.0e9):
@@ -545,6 +303,55 @@ relativeResolutionBinEdges = resolution_bin_edges(1.0, 100)
 qOverPtResolutionBinEdges = resolution_bin_edges(2.0, 200)
 vertexResolutionBinEdges = resolution_bin_edges(5000.0, 200)
 irregularHistParams = ()
+
+# Retain the original fine peak resolution, then widen before the sparse
+# tails begin to fluctuate. These remain companions to the fixed-bin spectra.
+muonPtVariableBinEdges = (
+    tuple(index / 10.0 for index in range(61))
+    + tuple(6.5 + 0.5 * index for index in range(8))
+    + tuple(11.0 + index for index in range(10))
+    + tuple(22.0 + 2.0 * index for index in range(15))
+)
+muonPzVariableBinEdges = (
+    -2000.0, -1360.0, -880.0, -560.0, -400.0, -320.0, -280.0, -260.0,
+    -240.0, -220.0, -200.0, -180.0, -160.0, -140.0, -120.0, -100.0, -80.0,
+) + tuple(-75.8 + 4.2 * index for index in range(43))
+muonPVariableBinEdges = (
+    tuple(4.2 * index for index in range(25))
+    + (120.0, 140.0, 160.0, 180.0, 200.0, 240.0, 280.0, 320.0, 400.0,
+       480.0, 560.0, 880.0, 1360.0, 2000.0)
+)
+
+# The dimuon spectrum becomes sparse earlier than the single-muon spectrum.
+dimuonPtVariableBinEdges = (
+    tuple(index / 10.0 for index in range(41))
+    + tuple(4.25 + 0.25 * index for index in range(8))
+    + tuple(6.5 + 0.5 * index for index in range(8))
+    + tuple(11.0 + index for index in range(10))
+)
+dimuonPzVariableBinEdges = (
+    -1000.0, -680.0, -440.0, -280.0, -200.0, -160.0, -140.0, -120.0, -100.0,
+) + tuple(-94.5 + 5.5 * index for index in range(37))
+dimuonPVariableBinEdges = (
+    tuple(5.5 * index for index in range(19))
+    + (120.0, 140.0, 160.0, 200.0, 240.0, 280.0, 360.0, 440.0, 680.0, 1000.0)
+)
+
+irregularDefaultHistParams = ()
+for name in ["GenMuon", "ShiftMuon"] + [
+    f"ShiftMuon{category}" for category in muonCategories
+]:
+    irregularDefaultHistParams += (
+        (name, "pt_variable", muonPtVariableBinEdges, "muon"),
+        (name, "pz_variable", muonPzVariableBinEdges, "muon"),
+        (name, "p_variable", muonPVariableBinEdges, "muon"),
+    )
+for name in [f"ShiftDimuonVertex{category}" for category in dimuonCategories]:
+    irregularDefaultHistParams += (
+        (name, "pt_variable", dimuonPtVariableBinEdges, "dimuon"),
+        (name, "pz_variable", dimuonPzVariableBinEdges, "dimuon"),
+        (name, "p_variable", dimuonPVariableBinEdges, "dimuon"),
+    )
 
 
 def add_resolution_histograms(prefix, variables, bin_edges):
@@ -577,19 +384,14 @@ for name in dimuonCategories:
     add_resolution_histograms(
         prefix, ("vx", "vy", "constrainedVx", "constrainedVy"), vertexResolutionBinEdges
     )
+    # fmt: off
     histParams += (
-        (f"DimuonResolution{name}", "deltaEta", 2400, -12, 12, "resolution"),
-        (f"DimuonResolution{name}", "deltaPhi", 2000, -3.142, 3.142, "resolution"),
-        (f"DimuonResolution{name}", "constrainedDeltaEta", 2400, -12, 12, "resolution"),
-        (
-            f"DimuonResolution{name}",
-            "constrainedDeltaPhi",
-            2000,
-            -3.142,
-            3.142,
-            "resolution",
-        ),
+        (f"DimuonResolution{name}", "deltaEta"           , 2400,    -12,    12, "resolution"),
+        (f"DimuonResolution{name}", "deltaPhi"           , 2000, -3.142, 3.142, "resolution"),
+        (f"DimuonResolution{name}", "constrainedDeltaEta", 2400,    -12,    12, "resolution"),
+        (f"DimuonResolution{name}", "constrainedDeltaPhi", 2000, -3.142, 3.142, "resolution"),
     )
+    # fmt: on
 
 for name in muonCategories:
     prefix = f"MuonResolution{name}"
@@ -615,19 +417,14 @@ for name in muonCategories:
     add_resolution_histograms(
         prefix, ("vx", "vy", "constrainedVx", "constrainedVy"), vertexResolutionBinEdges
     )
+    # fmt: off
     histParams += (
-        (f"MuonResolution{name}", "deltaEta", 2400, -12, 12, "resolution"),
-        (f"MuonResolution{name}", "deltaPhi", 2000, -3.142, 3.142, "resolution"),
-        (f"MuonResolution{name}", "constrainedDeltaEta", 2400, -12, 12, "resolution"),
-        (
-            f"MuonResolution{name}",
-            "constrainedDeltaPhi",
-            2000,
-            -3.142,
-            3.142,
-            "resolution",
-        ),
+        (f"MuonResolution{name}", "deltaEta"           , 2400,    -12,    12, "resolution"),
+        (f"MuonResolution{name}", "deltaPhi"           , 2000, -3.142, 3.142, "resolution"),
+        (f"MuonResolution{name}", "constrainedDeltaEta", 2400,    -12,    12, "resolution"),
+        (f"MuonResolution{name}", "constrainedDeltaPhi", 2000, -3.142, 3.142, "resolution"),
     )
+    # fmt: on
 
 add_resolution_histograms(
     "MuonResolutionSingleEndcap", ("qOverPt",), qOverPtResolutionBinEdges
@@ -722,16 +519,18 @@ for prefixes, binning in (
 histParams2D = ()
 
 for name in ["RecoVsGenMuon", "RecoVsGenDimuon"]:
+    # fmt: off
     histParams2D += (
-        (f"{name}_pt", 1000, 0, 60, 1000, 0, 60, "correlations"),
-        (f"{name}_pz", 500, -500, 100, 500, -500, 100, "correlations"),
-        (f"{name}_eta", 1000, -10, 10, 1000, -10, 10, "correlations"),
-        (f"{name}_phi", 100, -3.2, 3.2, 100, -3.2, 3.2, "correlations"),
-        (f"{name}_minv", 100, 0, 10, 100, 0, 10, "correlations"),
-        (f"{name}_vx", 200, -300, 300, 200, -10, 10, "correlations"),
-        (f"{name}_vy", 200, -300, 300, 200, -10, 10, "correlations"),
-        (f"{name}_vz", 200, 0, 20000, 2000, 0, 20000, "correlations"),
+        (f"{name}_pt"  , 1000,    0,    60, 1000,    0,    60, "correlations"),
+        (f"{name}_pz"  ,  500, -500,   100,  500, -500,   100, "correlations"),
+        (f"{name}_eta" , 1000,  -10,    10, 1000,  -10,    10, "correlations"),
+        (f"{name}_phi" ,  100, -3.2,   3.2,  100, -3.2,   3.2, "correlations"),
+        (f"{name}_minv",  100,    0,    10,  100,    0,    10, "correlations"),
+        (f"{name}_vx"  ,  200, -300,   300,  200,  -10,    10, "correlations"),
+        (f"{name}_vy"  ,  200, -300,   300,  200,  -10,    10, "correlations"),
+        (f"{name}_vz"  ,  200,    0, 20000, 2000,    0, 20000, "correlations"),
     )
+    # fmt: on
 
 # ============================================================
 # Other stuff
