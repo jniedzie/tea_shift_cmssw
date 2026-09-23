@@ -1,8 +1,8 @@
 # base_path = "/pnfs/iihe/cms/store/user/jniedzie/shift_cmssw"  # t2b
 base_path = "/eos/home-j/jniedzie/shift_cmssw/"  # lxplus
 
-sample = "jpsi"
-# sample = "qcd"
+# sample = "jpsi"
+sample = "qcd"
 
 pt_bin = "1to2"
 # pt_bin = "2to5"

@@ -14,10 +14,10 @@ import os
 enableTruthDiagnostics = True
 
 defaultHistParams = (
-    ("ShiftMuon",  "topology", 5, -.5, 4.5, "muon"),
-    ("ShiftMuon",  "recoAlgorithm", 3, -.5, 2.5, "muon"),
-    ("ShiftDimuonVertex", "topologyMin", 5, -.5, 4.5, "dimuon"),
-    ("ShiftDimuonVertex", "topologyMax", 5, -.5, 4.5, "dimuon"),
+    ("ShiftMuon", "topology", 5, -0.5, 4.5, "muon"),
+    ("ShiftMuon", "recoAlgorithm", 3, -0.5, 2.5, "muon"),
+    ("ShiftDimuonVertex", "topologyMin", 5, -0.5, 4.5, "dimuon"),
+    ("ShiftDimuonVertex", "topologyMax", 5, -0.5, 4.5, "dimuon"),
 )
 
 defaultHistParams += (
@@ -25,9 +25,9 @@ defaultHistParams += (
     ("ShiftMuon", "simPixelHits", 50, 0, 50, "detector_diagnostics"),
     ("ShiftMuon", "simStripHits", 100, 0, 100, "detector_diagnostics"),
     ("ShiftMuon", "simGEMHits", 20, 0, 20, "detector_diagnostics"),
-    ("ShiftMuon", "trackerMatchValid", 2, -.5, 1.5, "detector_diagnostics"),
+    ("ShiftMuon", "trackerMatchValid", 2, -0.5, 1.5, "detector_diagnostics"),
     ("ShiftMuon", "trackerValidHits", 30, 0, 30, "detector_diagnostics"),
-    ("ShiftMuon", "combinedTrackValid", 2, -.5, 1.5, "detector_diagnostics"),
+    ("ShiftMuon", "combinedTrackValid", 2, -0.5, 1.5, "detector_diagnostics"),
     ("ShiftMuon", "combinedTrackerHits", 30, 0, 30, "detector_diagnostics"),
     ("ShiftMuon", "combinedTargetPt", 200, 0, 20, "detector_diagnostics"),
     ("ShiftMuon", "combinedTargetPz", 200, -1000, 100, "detector_diagnostics"),
@@ -53,8 +53,8 @@ defaultHistParams += (
     ("ShiftMuon", "minDTEstimatorChi2", 200, -1, 999, "detector_diagnostics"),
     ("ShiftMuon", "minTrackerResidual", 200, -1, 199, "detector_diagnostics"),
     ("ShiftMuon", "minTrackerEstimatorChi2", 200, -1, 999, "detector_diagnostics"),
-    ("ShiftMuon", "trackerMatchRawValid", 2, -.5, 1.5, "detector_diagnostics"),
-    ("ShiftMuon", "trackerMatchValid", 2, -.5, 1.5, "detector_diagnostics"),
+    ("ShiftMuon", "trackerMatchRawValid", 2, -0.5, 1.5, "detector_diagnostics"),
+    ("ShiftMuon", "trackerMatchValid", 2, -0.5, 1.5, "detector_diagnostics"),
     ("ShiftMuon", "trackerMatchLineDistance", 200, -1, 999, "detector_diagnostics"),
     ("ShiftMuon", "trackerMatchAxisAngle", 160, -0.01, 1.59, "detector_diagnostics"),
     ("ShiftMuon", "nMatchedEcalRecHits", 50, 0, 50, "detector_diagnostics"),
@@ -89,41 +89,187 @@ defaultHistParams += (
     ("ShiftMuon", "nCombinedTimingMeasurements", 20, 0, 20, "detector_diagnostics"),
     ("ShiftMuon", "combinedTimingDeltaChi2", 100, 0, 100, "detector_diagnostics"),
     ("ShiftMuon", "combinedTimingAgreesWithMuon", 3, -1.5, 1.5, "detector_diagnostics"),
-
-    ("Event", "ShiftRecoDiag_enableDTMeasurement", 2, -.5, 1.5, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_dtNavigationMode", 3, -.5, 2.5, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_enableGEMMeasurement", 2, -.5, 1.5, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_trackerMode", 3, -.5, 2.5, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_enableHcalDiagnostics", 2, -.5, 1.5, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_enableZDCDiagnostics", 2, -.5, 1.5, "detector_diagnostics"),
+    (
+        "Event",
+        "ShiftRecoDiag_enableDTMeasurement",
+        2,
+        -0.5,
+        1.5,
+        "detector_diagnostics",
+    ),
+    ("Event", "ShiftRecoDiag_dtNavigationMode", 3, -0.5, 2.5, "detector_diagnostics"),
+    (
+        "Event",
+        "ShiftRecoDiag_enableGEMMeasurement",
+        2,
+        -0.5,
+        1.5,
+        "detector_diagnostics",
+    ),
+    ("Event", "ShiftRecoDiag_trackerMode", 3, -0.5, 2.5, "detector_diagnostics"),
+    (
+        "Event",
+        "ShiftRecoDiag_enableHcalDiagnostics",
+        2,
+        -0.5,
+        1.5,
+        "detector_diagnostics",
+    ),
+    (
+        "Event",
+        "ShiftRecoDiag_enableZDCDiagnostics",
+        2,
+        -0.5,
+        1.5,
+        "detector_diagnostics",
+    ),
     ("Event", "ShiftRecoDiag_nDTSimHits", 100, 0, 100, "detector_diagnostics"),
     ("Event", "ShiftRecoDiag_nDTSegments", 50, 0, 50, "detector_diagnostics"),
     ("Event", "ShiftRecoDiag_nGEMSimHits", 20, 0, 20, "detector_diagnostics"),
     ("Event", "ShiftRecoDiag_nGEMSegments", 20, 0, 20, "detector_diagnostics"),
     ("Event", "ShiftRecoDiag_nGeneralTracks", 50, 0, 50, "detector_diagnostics"),
     ("Event", "ShiftRecoDiag_nTrackerSeeds", 30, 0, 30, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nTrackerTrackCandidates", 30, 0, 30, "detector_diagnostics"),
+    (
+        "Event",
+        "ShiftRecoDiag_nTrackerTrackCandidates",
+        30,
+        0,
+        30,
+        "detector_diagnostics",
+    ),
     ("Event", "ShiftRecoDiag_nTrackerRawTracks", 30, 0, 30, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nTrackerSelectedTracks", 30, 0, 30, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nTrackerLHCTrackCandidates", 30, 0, 30, "detector_diagnostics"),
+    (
+        "Event",
+        "ShiftRecoDiag_nTrackerSelectedTracks",
+        30,
+        0,
+        30,
+        "detector_diagnostics",
+    ),
+    (
+        "Event",
+        "ShiftRecoDiag_nTrackerLHCTrackCandidates",
+        30,
+        0,
+        30,
+        "detector_diagnostics",
+    ),
     ("Event", "ShiftRecoDiag_nTrackerLHCTracks", 30, 0, 30, "detector_diagnostics"),
     ("Event", "ShiftRecoDiag_nSignalMuonSimTracks", 10, 0, 10, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nSignalMuonWithTrackerSimHits", 10, 0, 10, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nSignalMuonWithMuonSystemSimHits", 10, 0, 10, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nSignalMuonWithTrackerAndMuonSystemSimHits", 10, 0, 10, "detector_diagnostics"),
+    (
+        "Event",
+        "ShiftRecoDiag_nSignalMuonWithTrackerSimHits",
+        10,
+        0,
+        10,
+        "detector_diagnostics",
+    ),
+    (
+        "Event",
+        "ShiftRecoDiag_nSignalMuonWithMuonSystemSimHits",
+        10,
+        0,
+        10,
+        "detector_diagnostics",
+    ),
+    (
+        "Event",
+        "ShiftRecoDiag_nSignalMuonWithTrackerAndMuonSystemSimHits",
+        10,
+        0,
+        10,
+        "detector_diagnostics",
+    ),
     ("Event", "ShiftRecoDiag_nDSATrackerMatches", 10, 0, 10, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nTraversingTrackerMatches", 10, 0, 10, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nSignalMuonHcalSimHits", 50, -2, 48, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_signalMuonHcalSimEnergy", 100, -2, 2, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nSignalMuonZDCSimHits", 50, -2, 48, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_signalMuonZDCSimEnergy", 100, -2, 2, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_signalMuonZDCFirstTime", 120, -600, 0, "detector_diagnostics"),
+    (
+        "Event",
+        "ShiftRecoDiag_nTraversingTrackerMatches",
+        10,
+        0,
+        10,
+        "detector_diagnostics",
+    ),
+    (
+        "Event",
+        "ShiftRecoDiag_nSignalMuonHcalSimHits",
+        50,
+        -2,
+        48,
+        "detector_diagnostics",
+    ),
+    (
+        "Event",
+        "ShiftRecoDiag_signalMuonHcalSimEnergy",
+        100,
+        -2,
+        2,
+        "detector_diagnostics",
+    ),
+    (
+        "Event",
+        "ShiftRecoDiag_nSignalMuonZDCSimHits",
+        50,
+        -2,
+        48,
+        "detector_diagnostics",
+    ),
+    (
+        "Event",
+        "ShiftRecoDiag_signalMuonZDCSimEnergy",
+        100,
+        -2,
+        2,
+        "detector_diagnostics",
+    ),
+    (
+        "Event",
+        "ShiftRecoDiag_signalMuonZDCFirstTime",
+        120,
+        -600,
+        0,
+        "detector_diagnostics",
+    ),
     ("Event", "ShiftRecoDiag_nPixelRecHits", 200, -1, 199, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nStripMatchedRecHits", 500, -1, 499, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nStripRphiRecHits", 3000, -1, 2999, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nStripRphiUnmatchedRecHits", 2000, -1, 1999, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nStripStereoRecHits", 1500, -1, 1499, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nStripStereoUnmatchedRecHits", 1000, -1, 999, "detector_diagnostics"),
+    (
+        "Event",
+        "ShiftRecoDiag_nStripMatchedRecHits",
+        500,
+        -1,
+        499,
+        "detector_diagnostics",
+    ),
+    (
+        "Event",
+        "ShiftRecoDiag_nStripRphiRecHits",
+        3000,
+        -1,
+        2999,
+        "detector_diagnostics",
+    ),
+    (
+        "Event",
+        "ShiftRecoDiag_nStripRphiUnmatchedRecHits",
+        2000,
+        -1,
+        1999,
+        "detector_diagnostics",
+    ),
+    (
+        "Event",
+        "ShiftRecoDiag_nStripStereoRecHits",
+        1500,
+        -1,
+        1499,
+        "detector_diagnostics",
+    ),
+    (
+        "Event",
+        "ShiftRecoDiag_nStripStereoUnmatchedRecHits",
+        1000,
+        -1,
+        999,
+        "detector_diagnostics",
+    ),
     ("Event", "ShiftRecoDiag_nHBHEQIE11Digis", 200, 0, 20000, "detector_diagnostics"),
     ("Event", "ShiftRecoDiag_nHFQIE10Digis", 200, 0, 5000, "detector_diagnostics"),
     ("Event", "ShiftRecoDiag_nHODigis", 200, 0, 3000, "detector_diagnostics"),
@@ -134,103 +280,234 @@ defaultHistParams += (
     ("Event", "ShiftRecoDiag_nHFRecHits", 200, -1, 1999, "detector_diagnostics"),
     ("Event", "ShiftRecoDiag_nHORecHits", 200, -1, 2999, "detector_diagnostics"),
     ("Event", "ShiftRecoDiag_nZDCRecHits", 50, -1, 49, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nZDCRecHitsAboveThreshold", 30, -1, 29, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_ZDCPositiveRecEnergy", 100, -1, 20, "detector_diagnostics"),
+    (
+        "Event",
+        "ShiftRecoDiag_nZDCRecHitsAboveThreshold",
+        30,
+        -1,
+        29,
+        "detector_diagnostics",
+    ),
+    (
+        "Event",
+        "ShiftRecoDiag_ZDCPositiveRecEnergy",
+        100,
+        -1,
+        20,
+        "detector_diagnostics",
+    ),
     ("Event", "ShiftRecoDiag_ZDCMaxRecEnergy", 100, -1, 5, "detector_diagnostics"),
     ("Event", "ShiftRecoDiag_ZDCMaxRecTime", 160, -600, 200, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nHBHERecHitsAboveThreshold", 200, -1, 3999, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_HBHEPositiveRecEnergy", 200, -1, 200, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nHFRecHitsAboveThreshold", 200, -1, 1999, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_HFPositiveRecEnergy", 200, -1, 200, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nEcalBarrelRecHitsAboveThreshold", 200, -1, 399, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_EcalBarrelPositiveRecEnergy", 200, -1, 100, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nEcalEndcapRecHitsAboveThreshold", 200, -1, 399, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_EcalEndcapPositiveRecEnergy", 200, -1, 100, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_nHORecHitsAboveThreshold", 200, -1, 2999, "detector_diagnostics"),
-    ("Event", "ShiftRecoDiag_HOPositiveRecEnergy", 200, -1, 200, "detector_diagnostics"),
+    (
+        "Event",
+        "ShiftRecoDiag_nHBHERecHitsAboveThreshold",
+        200,
+        -1,
+        3999,
+        "detector_diagnostics",
+    ),
+    (
+        "Event",
+        "ShiftRecoDiag_HBHEPositiveRecEnergy",
+        200,
+        -1,
+        200,
+        "detector_diagnostics",
+    ),
+    (
+        "Event",
+        "ShiftRecoDiag_nHFRecHitsAboveThreshold",
+        200,
+        -1,
+        1999,
+        "detector_diagnostics",
+    ),
+    (
+        "Event",
+        "ShiftRecoDiag_HFPositiveRecEnergy",
+        200,
+        -1,
+        200,
+        "detector_diagnostics",
+    ),
+    (
+        "Event",
+        "ShiftRecoDiag_nEcalBarrelRecHitsAboveThreshold",
+        200,
+        -1,
+        399,
+        "detector_diagnostics",
+    ),
+    (
+        "Event",
+        "ShiftRecoDiag_EcalBarrelPositiveRecEnergy",
+        200,
+        -1,
+        100,
+        "detector_diagnostics",
+    ),
+    (
+        "Event",
+        "ShiftRecoDiag_nEcalEndcapRecHitsAboveThreshold",
+        200,
+        -1,
+        399,
+        "detector_diagnostics",
+    ),
+    (
+        "Event",
+        "ShiftRecoDiag_EcalEndcapPositiveRecEnergy",
+        200,
+        -1,
+        100,
+        "detector_diagnostics",
+    ),
+    (
+        "Event",
+        "ShiftRecoDiag_nHORecHitsAboveThreshold",
+        200,
+        -1,
+        2999,
+        "detector_diagnostics",
+    ),
+    (
+        "Event",
+        "ShiftRecoDiag_HOPositiveRecEnergy",
+        200,
+        -1,
+        200,
+        "detector_diagnostics",
+    ),
     ("Event", "ShiftRecoDiag_nBCM1FSimHits", 50, -1, 49, "detector_diagnostics"),
     ("Event", "ShiftRecoDiag_nBHMSimHits", 50, -1, 49, "detector_diagnostics"),
     ("Event", "ShiftRecoDiag_nPLTSimHits", 50, -1, 49, "detector_diagnostics"),
-
 )
 
-muonCategories = ["NearEndcapOnly", "NearEndcapAndBarrel", "BothEndcaps", "FarEndcapOnly", "Unclassified"]
+muonCategories = [
+    "NearEndcapOnly",
+    "NearEndcapAndBarrel",
+    "BothEndcaps",
+    "FarEndcapOnly",
+    "Unclassified",
+]
 
-for name in ["GenMuon", "ShiftMuon"] + [f"ShiftMuon{category}" for category in muonCategories]:
-  defaultHistParams += (
-      ("Event", f"n{name}", 10, 0, 10, "event"),
-      (f"{name}", "pt", 200, 0, 20, "muon"),
-      (f"{name}", "pz", 200, -1000, 100, "muon"),
-      (f"{name}", "eta", 100, -10, 10, "muon"),
-      (f"{name}", "phi", 100, -3.2, 3.2, "muon"),
-      (f"{name}", "vx", 100, -300, 300, "muon"),
-      (f"{name}", "vy", 100, -300, 300, "muon"),
-      (f"{name}", "vz", 100, -20000, 20000, "muon"),
-  )
+for name in ["GenMuon", "ShiftMuon"] + [
+    f"ShiftMuon{category}" for category in muonCategories
+]:
+    defaultHistParams += (
+        ("Event", f"n{name}", 10, 0, 10, "event"),
+        (f"{name}", "pt", 500, 0, 50, "muon"),
+        (f"{name}", "pz", 500, -2000, 100, "muon"),
+        (f"{name}", "eta", 1000, -10, 10, "muon"),
+        (f"{name}", "phi", 100, -3.2, 3.2, "muon"),
+        (f"{name}", "vx", 1000, -300, 300, "muon"),
+        (f"{name}", "vy", 1000, -300, 300, "muon"),
+        (f"{name}", "vz", 1000, -20000, 40000, "muon"),
+    )
 
-  if "Gen" in name:
-    continue
+    if "Gen" in name:
+        continue
 
-  defaultHistParams += (
-      (f"{name}", "constrainedPt", 200, 0, 20, "muon"),
-      (f"{name}", "constrainedPz", 200, -1000, 100, "muon"),
-      (f"{name}", "constrainedEta", 100, -10, 10, "muon"),
-      (f"{name}", "constrainedPhi", 100, -3.2, 3.2, "muon"),
-      (f"{name}", "constrainedVx", 100, -300, 300, "muon"),
-      (f"{name}", "constrainedVy", 100, -300, 300, "muon"),
-      (f"{name}", "constrainedVz", 100, -20000, 20000, "muon"),
-
-      (f"{name}", "nCSCHits", 20, 0, 20, "muon"),
-      (f"{name}", "nDTHits", 20, 0, 20, "muon"),
-      (f"{name}", "nRPCHits", 20, 0, 20, "muon"),
-      (f"{name}", "nGEMHits", 20, 0, 20, "muon"),
-      (f"{name}", "nME0Hits", 20, 0, 20, "muon"),
-
-      (f"{name}", "dz", 100, -20000, 20000, "muon"),
-      (f"{name}", "linePcaZ", 100, -20000, 20000, "muon"),
-      (f"{name}", "trackVz", 100, -20000, 20000, "muon"),
-      (f"{name}", "genPartIdx", 30, -10, 20, "muon"),
-  )
+    defaultHistParams += (
+        (f"{name}", "constrainedPt", 500, 0, 50, "muon"),
+        (f"{name}", "constrainedPz", 500, -2000, 100, "muon"),
+        (f"{name}", "constrainedEta", 100, -10, 10, "muon"),
+        (f"{name}", "constrainedPhi", 100, -3.2, 3.2, "muon"),
+        (f"{name}", "constrainedVx", 1000, -300, 300, "muon"),
+        (f"{name}", "constrainedVy", 1000, -300, 300, "muon"),
+        (f"{name}", "constrainedVz", 1000, -20000, 40000, "muon"),
+        (f"{name}", "nCSCHits", 50, 0, 50, "muon"),
+        (f"{name}", "nDTHits", 50, 0, 50, "muon"),
+        (f"{name}", "nRPCHits", 50, 0, 50, "muon"),
+        (f"{name}", "nGEMHits", 50, 0, 50, "muon"),
+        (f"{name}", "nME0Hits", 50, 0, 50, "muon"),
+        (f"{name}", "dz", 500, -20000, 40000, "muon"),
+        (f"{name}", "linePcaZ", 100, -20000, 20000, "muon"),
+        (f"{name}", "trackVz", 100, -20000, 20000, "muon"),
+        (f"{name}", "genPartIdx", 30, -10, 20, "muon"),
+    )
 
 # ============================================================
 # Default dimuon histograms
 # ============================================================
 
-dimuonCategories = ["", "Good", "Near-Both", "Near-Far", "Both-Both", "Both-Far", "Other"]
+dimuonCategories = [
+    "",
+    "Good",
+    "Near-Both",
+    "Near-Far",
+    "Both-Both",
+    "Both-Far",
+    "Other",
+]
 
 for name in dimuonCategories:
-  defaultHistParams += (
-      ("Event", f"nShiftDimuonVertex{name}", 10, 0, 10, "event"),
-      (f"ShiftDimuonVertex{name}", "pt", 200, 0, 20, "dimuon"),
-      (f"ShiftDimuonVertex{name}", "pz", 200, -1000, 100, "dimuon"),
-      (f"ShiftDimuonVertex{name}", "eta", 100, -10, 10, "dimuon"),
-      (f"ShiftDimuonVertex{name}", "phi", 100, -3.2, 3.2, "dimuon"),
-      (f"ShiftDimuonVertex{name}", "mass", 100, 0, 10, "dimuon"),
-      (f"ShiftDimuonVertex{name}", "vx", 100, -300, 300, "dimuon"),
-      (f"ShiftDimuonVertex{name}", "vy", 100, -300, 300, "dimuon"),
-      (f"ShiftDimuonVertex{name}", "vz", 100, -20000, 20000, "dimuon"),
-      (f"ShiftDimuonVertex{name}", "chi2", 100, -1, 100, "dimuon"),
-      (f"ShiftDimuonVertex{name}", "normalizedChi2", 1000, -1, 100, "dimuon"),
-      (f"ShiftDimuonVertex{name}", "dca", 100, 0, 1500, "dimuon"),
-      (f"ShiftDimuonVertex{name}", "dcaValid", 20, -10, 10, "dimuon"),
-
-      (f"ShiftDimuonVertex{name}", "isOS", 20, -10, 10, "dimuon"),
-      (f"ShiftDimuonVertex{name}", "genIsOS", 20, -10, 10, "dimuon"),
-      (f"ShiftDimuonVertex{name}", "sameGenMuon", 20, -10, 10, "dimuon"),
-  )
+    defaultHistParams += (
+        ("Event", f"nShiftDimuonVertex{name}", 10, 0, 10, "event"),
+        (f"ShiftDimuonVertex{name}", "pt", 200, 0, 20, "dimuon"),
+        (f"ShiftDimuonVertex{name}", "pz", 200, -1000, 100, "dimuon"),
+        (f"ShiftDimuonVertex{name}", "eta", 1000, -10, 10, "dimuon"),
+        (f"ShiftDimuonVertex{name}", "phi", 100, -3.2, 3.2, "dimuon"),
+        (f"ShiftDimuonVertex{name}", "mass", 1000, 0, 100, "dimuon"),
+        (f"ShiftDimuonVertex{name}", "vx", 100, -300, 300, "dimuon"),
+        (f"ShiftDimuonVertex{name}", "vy", 100, -300, 300, "dimuon"),
+        (f"ShiftDimuonVertex{name}", "vz", 1000, -20000, 20000, "dimuon"),
+        (f"ShiftDimuonVertex{name}", "chi2", 1000, -1, 100, "dimuon"),
+        (f"ShiftDimuonVertex{name}", "normalizedChi2", 1000, -1, 100, "dimuon"),
+        (f"ShiftDimuonVertex{name}", "dca", 1000, 0, 1500, "dimuon"),
+        (f"ShiftDimuonVertex{name}", "dcaValid", 20, -10, 10, "dimuon"),
+        (f"ShiftDimuonVertex{name}", "isOS", 20, -10, 10, "dimuon"),
+        (f"ShiftDimuonVertex{name}", "genIsOS", 20, -10, 10, "dimuon"),
+        (f"ShiftDimuonVertex{name}", "sameGenMuon", 20, -10, 10, "dimuon"),
+    )
 
 # ============================================================
 # Custom 1D histograms
 # ============================================================
 
 histParams = (
-    ("DetectorDiagnostics", "dtAttachmentFraction", 51, 0, 1.02, "detector_diagnostics"),
-    ("DetectorDiagnostics", "trackerAttachmentFraction", 51, 0, 1.02, "detector_diagnostics"),
-    ("DetectorDiagnostics", "dtTruthChamberPurity", 51, 0, 1.02, "detector_diagnostics"),
+    (
+        "DetectorDiagnostics",
+        "dtAttachmentFraction",
+        51,
+        0,
+        1.02,
+        "detector_diagnostics",
+    ),
+    (
+        "DetectorDiagnostics",
+        "trackerAttachmentFraction",
+        51,
+        0,
+        1.02,
+        "detector_diagnostics",
+    ),
+    (
+        "DetectorDiagnostics",
+        "dtTruthChamberPurity",
+        51,
+        0,
+        1.02,
+        "detector_diagnostics",
+    ),
     ("DetectorDiagnostics", "timingMeasurements", 20, 0, 20, "detector_diagnostics"),
     ("DetectorDiagnostics", "timingDeltaChi2", 100, 0, 100, "detector_diagnostics"),
-    ("DetectorDiagnostics", "combinedTimingDeltaChi2", 100, 0, 100, "detector_diagnostics"),
-    ("DetectorDiagnostics", "hbheValidTimeFraction", 51, 0, 1.02, "detector_diagnostics"),
+    (
+        "DetectorDiagnostics",
+        "combinedTimingDeltaChi2",
+        100,
+        0,
+        100,
+        "detector_diagnostics",
+    ),
+    (
+        "DetectorDiagnostics",
+        "hbheValidTimeFraction",
+        51,
+        0,
+        1.02,
+        "detector_diagnostics",
+    ),
     ("DetectorDiagnostics", "hoValidTimeFraction", 51, 0, 1.02, "detector_diagnostics"),
     (f"GenDimuon", "pt", 200, 0, 20, "dimuon"),
     (f"GenDimuon", "pz", 200, -1000, 100, "dimuon"),
@@ -240,69 +517,121 @@ histParams = (
     (f"GenDimuon", "vx", 100, -300, 300, "dimuon"),
     (f"GenDimuon", "vy", 100, -300, 300, "dimuon"),
     (f"GenDimuon", "vz", 100, -20000, 20000, "dimuon"),
-
-    ("ShiftDimuonVertex", "topologyCategory", 5, -.5, 4.5, "dimuon"),
+    ("ShiftDimuonVertex", "topologyCategory", 5, -0.5, 4.5, "dimuon"),
 )
 
-
-def resolution_bin_edges(core_half_width, core_bins, tail_limit=1.e9):
-  """Fine linear core plus symmetric logarithmic tails, without axis growth."""
-  core_step = 2. * core_half_width / core_bins
-  core = [-core_half_width + index * core_step for index in range(core_bins + 1)]
-  positive_tail = []
-  edge = 2. * core_half_width
-  while edge < tail_limit:
-    positive_tail.append(edge)
-    edge *= 2.
-  positive_tail.append(tail_limit)
-  negative_tail = [-edge for edge in reversed(positive_tail)]
-  return negative_tail + core + positive_tail
+# MC-only origin diagnostic. Each dimuon contributes exactly one categorical
+# entry: its common immediate non-muon mother species, "different mothers",
+# or "unmatched". ShiftHistogramsFiller assigns human-readable bin labels.
+for name in dimuonCategories:
+    histParams += ((f"ShiftDimuonVertex{name}", "genPid", 13, -0.5, 12.5, "dimuon"),)
 
 
-relativeResolutionBinEdges = resolution_bin_edges(1., 100)
-qOverPtResolutionBinEdges = resolution_bin_edges(2., 200)
-vertexResolutionBinEdges = resolution_bin_edges(5000., 200)
+def resolution_bin_edges(core_half_width, core_bins, tail_limit=1.0e9):
+    """Fine linear core plus symmetric logarithmic tails, without axis growth."""
+    core_step = 2.0 * core_half_width / core_bins
+    core = [-core_half_width + index * core_step for index in range(core_bins + 1)]
+    positive_tail = []
+    edge = 2.0 * core_half_width
+    while edge < tail_limit:
+        positive_tail.append(edge)
+        edge *= 2.0
+    positive_tail.append(tail_limit)
+    negative_tail = [-edge for edge in reversed(positive_tail)]
+    return negative_tail + core + positive_tail
+
+
+relativeResolutionBinEdges = resolution_bin_edges(1.0, 100)
+qOverPtResolutionBinEdges = resolution_bin_edges(2.0, 200)
+vertexResolutionBinEdges = resolution_bin_edges(5000.0, 200)
 irregularHistParams = ()
 
 
 def add_resolution_histograms(prefix, variables, bin_edges):
-  global irregularHistParams
-  irregularHistParams += tuple(
-      (prefix, variable, bin_edges, "resolution") for variable in variables)
+    global irregularHistParams
+    irregularHistParams += tuple(
+        (prefix, variable, bin_edges, "resolution") for variable in variables
+    )
 
 
 for name in dimuonCategories:
-  prefix = f"DimuonResolution{name}"
-  add_resolution_histograms(prefix, (
-      "pt", "pz", "eta", "phi", "minv", "vz",
-      "constrainedPt", "constrainedPz", "constrainedEta", "constrainedPhi",
-      "constrainedMinv", "constrainedVz"), relativeResolutionBinEdges)
-  add_resolution_histograms(prefix, (
-      "vx", "vy", "constrainedVx", "constrainedVy"), vertexResolutionBinEdges)
-  histParams += (
-      (f"DimuonResolution{name}", "deltaEta", 2400, -12, 12, "resolution"),
-      (f"DimuonResolution{name}", "deltaPhi", 2000, -3.142, 3.142, "resolution"),
-      (f"DimuonResolution{name}", "constrainedDeltaEta", 2400, -12, 12, "resolution"),
-      (f"DimuonResolution{name}", "constrainedDeltaPhi", 2000, -3.142, 3.142, "resolution"),
-  )
+    prefix = f"DimuonResolution{name}"
+    add_resolution_histograms(
+        prefix,
+        (
+            "pt",
+            "pz",
+            "eta",
+            "phi",
+            "minv",
+            "vz",
+            "constrainedPt",
+            "constrainedPz",
+            "constrainedEta",
+            "constrainedPhi",
+            "constrainedMinv",
+            "constrainedVz",
+        ),
+        relativeResolutionBinEdges,
+    )
+    add_resolution_histograms(
+        prefix, ("vx", "vy", "constrainedVx", "constrainedVy"), vertexResolutionBinEdges
+    )
+    histParams += (
+        (f"DimuonResolution{name}", "deltaEta", 2400, -12, 12, "resolution"),
+        (f"DimuonResolution{name}", "deltaPhi", 2000, -3.142, 3.142, "resolution"),
+        (f"DimuonResolution{name}", "constrainedDeltaEta", 2400, -12, 12, "resolution"),
+        (
+            f"DimuonResolution{name}",
+            "constrainedDeltaPhi",
+            2000,
+            -3.142,
+            3.142,
+            "resolution",
+        ),
+    )
 
 for name in muonCategories:
-  prefix = f"MuonResolution{name}"
-  add_resolution_histograms(prefix, (
-      "pt", "pz", "eta", "phi", "vz",
-      "constrainedPt", "constrainedPz", "constrainedEta", "constrainedPhi",
-      "constrainedVz"), relativeResolutionBinEdges)
-  add_resolution_histograms(prefix, ("qOverPt", "constrainedQOverPt"), qOverPtResolutionBinEdges)
-  add_resolution_histograms(prefix, (
-      "vx", "vy", "constrainedVx", "constrainedVy"), vertexResolutionBinEdges)
-  histParams += (
-      (f"MuonResolution{name}", "deltaEta", 2400, -12, 12, "resolution"),
-      (f"MuonResolution{name}", "deltaPhi", 2000, -3.142, 3.142, "resolution"),
-      (f"MuonResolution{name}", "constrainedDeltaEta", 2400, -12, 12, "resolution"),
-      (f"MuonResolution{name}", "constrainedDeltaPhi", 2000, -3.142, 3.142, "resolution"),
-  )
+    prefix = f"MuonResolution{name}"
+    add_resolution_histograms(
+        prefix,
+        (
+            "pt",
+            "pz",
+            "eta",
+            "phi",
+            "vz",
+            "constrainedPt",
+            "constrainedPz",
+            "constrainedEta",
+            "constrainedPhi",
+            "constrainedVz",
+        ),
+        relativeResolutionBinEdges,
+    )
+    add_resolution_histograms(
+        prefix, ("qOverPt", "constrainedQOverPt"), qOverPtResolutionBinEdges
+    )
+    add_resolution_histograms(
+        prefix, ("vx", "vy", "constrainedVx", "constrainedVy"), vertexResolutionBinEdges
+    )
+    histParams += (
+        (f"MuonResolution{name}", "deltaEta", 2400, -12, 12, "resolution"),
+        (f"MuonResolution{name}", "deltaPhi", 2000, -3.142, 3.142, "resolution"),
+        (f"MuonResolution{name}", "constrainedDeltaEta", 2400, -12, 12, "resolution"),
+        (
+            f"MuonResolution{name}",
+            "constrainedDeltaPhi",
+            2000,
+            -3.142,
+            3.142,
+            "resolution",
+        ),
+    )
 
-add_resolution_histograms("MuonResolutionSingleEndcap", ("qOverPt",), qOverPtResolutionBinEdges)
+add_resolution_histograms(
+    "MuonResolutionSingleEndcap", ("qOverPt",), qOverPtResolutionBinEdges
+)
 
 # ============================================================
 # Generator-coordinate reconstruction efficiencies
@@ -310,44 +639,81 @@ add_resolution_histograms("MuonResolutionSingleEndcap", ("qOverPt",), qOverPtRes
 
 
 def frange(start, stop, step):
-  values = []
-  current = start
-  while current <= stop:
-    values.append(round(current, 10))
-    current += step
-  return tuple(values)
+    values = []
+    current = start
+    while current <= stop:
+        values.append(round(current, 10))
+        current += step
+    return tuple(values)
 
 
 muonEfficiencyBinning = {
-    "pt":  (0, .2, .4, .6, .8, 1., 1.2, 1.4, 1.6, 1.8, 2., 2.3, 2.6, 3., 3.5, 4.5, 6., 8.),
-    "pz":  frange(-300, 50, 10),
+    "pt": (
+        0,
+        0.2,
+        0.4,
+        0.6,
+        0.8,
+        1.0,
+        1.2,
+        1.4,
+        1.6,
+        1.8,
+        2.0,
+        2.3,
+        2.6,
+        3.0,
+        3.5,
+        4.5,
+        6.0,
+        8.0,
+    ),
+    "pz": frange(-300, 50, 10),
     "eta": frange(-5, -3, 0.10),
     "phi": frange(-3.2, 3.2, 0.4),
-    "vz":  (14500, 14600, 14680, 14720, 14750, 14775, 14800, 14825, 14850, 14880, 14920, 15000, 15100),
+    "vz": (
+        14500,
+        14600,
+        14680,
+        14720,
+        14750,
+        14775,
+        14800,
+        14825,
+        14850,
+        14880,
+        14920,
+        15000,
+        15100,
+    ),
 }
 
 dimuonEfficiencyBinning = {
-    "pt":  (0, 1., 2., 3., 6., 10.),
-    "pz":  (-400, -300, -150, -125, -100, -50, -20, 20, 40),
+    "pt": (0, 1.0, 2.0, 3.0, 6.0, 10.0),
+    "pz": (-400, -300, -150, -125, -100, -50, -20, 20, 40),
     "eta": frange(-8, -3, 0.5),
     "phi": frange(-3.2, 3.2, 0.8),
-    "vz":  (14500, 14600, 14700, 14750, 14800, 14850, 14900, 15000, 15100),
+    "vz": (14500, 14600, 14700, 14750, 14800, 14850, 14900, 15000, 15100),
 }
 
-muonEfficiencyPrefixes = ["ShiftMuonEfficiency"] + [f"ShiftMuon{category}Efficiency" for category in muonCategories]
+muonEfficiencyPrefixes = ["ShiftMuonEfficiency"] + [
+    f"ShiftMuon{category}Efficiency" for category in muonCategories
+]
 
-dimuonEfficiencyPrefixes = [f"ShiftDimuonVertex{category}Efficiency" for category in dimuonCategories]
+dimuonEfficiencyPrefixes = [
+    f"ShiftDimuonVertex{category}Efficiency" for category in dimuonCategories
+]
 
 for prefixes, binning in (
     (muonEfficiencyPrefixes, muonEfficiencyBinning),
     (dimuonEfficiencyPrefixes, dimuonEfficiencyBinning),
 ):
-  for prefix in prefixes:
-    for variable, binEdges in binning.items():
-      irregularHistParams += (
-          (prefix, f"{variable}_total", binEdges, "efficiency"),
-          (prefix, f"{variable}_pass", binEdges, "efficiency"),
-      )
+    for prefix in prefixes:
+        for variable, binEdges in binning.items():
+            irregularHistParams += (
+                (prefix, f"{variable}_total", binEdges, "efficiency"),
+                (prefix, f"{variable}_pass", binEdges, "efficiency"),
+            )
 
 # ============================================================
 # 2D histograms
@@ -356,17 +722,16 @@ for prefixes, binning in (
 histParams2D = ()
 
 for name in ["RecoVsGenMuon", "RecoVsGenDimuon"]:
-
-  histParams2D += (
-      (f"{name}_pt", 1000, 0, 60, 1000, 0, 60, "correlations"),
-      (f"{name}_pz", 500, -500, 100, 500, -500, 100, "correlations"),
-      (f"{name}_eta", 1000, -10, 10, 1000, -10, 10, "correlations"),
-      (f"{name}_phi", 100, -3.2, 3.2, 100, -3.2, 3.2, "correlations"),
-      (f"{name}_minv", 100, 0, 10, 100, 0, 10, "correlations"),
-      (f"{name}_vx", 200, -300, 300, 200, -10, 10, "correlations"),
-      (f"{name}_vy", 200, -300, 300, 200, -10, 10, "correlations"),
-      (f"{name}_vz", 200, 0, 20000, 2000, 0, 20000, "correlations"),
-  )
+    histParams2D += (
+        (f"{name}_pt", 1000, 0, 60, 1000, 0, 60, "correlations"),
+        (f"{name}_pz", 500, -500, 100, 500, -500, 100, "correlations"),
+        (f"{name}_eta", 1000, -10, 10, 1000, -10, 10, "correlations"),
+        (f"{name}_phi", 100, -3.2, 3.2, 100, -3.2, 3.2, "correlations"),
+        (f"{name}_minv", 100, 0, 10, 100, 0, 10, "correlations"),
+        (f"{name}_vx", 200, -300, 300, 200, -10, 10, "correlations"),
+        (f"{name}_vy", 200, -300, 300, 200, -10, 10, "correlations"),
+        (f"{name}_vz", 200, 0, 20000, 2000, 0, 20000, "correlations"),
+    )
 
 # ============================================================
 # Other stuff
@@ -374,80 +739,158 @@ for name in ["RecoVsGenMuon", "RecoVsGenDimuon"]:
 
 
 def latest_versioned_sample():
-  samples_dir = f"{base_path}/{sample}/{campaign}/samples/step4_merged"
-  input_path, provenance_tag = latest_merged_sample(samples_dir)
+    samples_dir = f"{base_path}/{sample}/{campaign}/samples/step4_merged"
+    input_path, provenance_tag = latest_merged_sample(samples_dir)
 
-  project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-  version_pattern = re.compile(r"^v([0-9]+)_([^/_]+)(?:_([^/]+))?$")
-  latest_version = 0
-  existing_version_for_hash = None
-  for output_path in glob.glob(f"{project_dir}/plots/v*_*"):
-    if not os.path.isdir(output_path):
-      continue
-    dir_name = os.path.basename(output_path)
-    match = version_pattern.fullmatch(dir_name)
-    if not match:
-      continue
-    version_number = int(match.group(1))
-    latest_version = max(latest_version, version_number)
-    output_hash = match.group(2)
-    output_variant = match.group(3) or ""
-    if output_hash == provenance_tag and not output_variant:
-      if existing_version_for_hash is None:
-        existing_version_for_hash = version_number
-      else:
-        existing_version_for_hash = max(existing_version_for_hash, version_number)
+    version_pattern = re.compile(r"^v([0-9]+)_([^/_]+)(?:_([^/]+))?$")
+    latest_version = 0
+    existing_version_for_hash = None
+    for output_path in glob.glob(f"{project_dir}/plots/v*_*"):
+        if not os.path.isdir(output_path):
+            continue
+        dir_name = os.path.basename(output_path)
+        match = version_pattern.fullmatch(dir_name)
+        if not match:
+            continue
+        version_number = int(match.group(1))
+        latest_version = max(latest_version, version_number)
+        output_hash = match.group(2)
+        output_variant = match.group(3) or ""
+        if output_hash == provenance_tag and not output_variant:
+            if existing_version_for_hash is None:
+                existing_version_for_hash = version_number
+            else:
+                existing_version_for_hash = max(
+                    existing_version_for_hash, version_number
+                )
 
-  sample_version = existing_version_for_hash if existing_version_for_hash is not None else latest_version + 1
-  return input_path, sample_version, provenance_tag
+    sample_version = (
+        existing_version_for_hash
+        if existing_version_for_hash is not None
+        else latest_version + 1
+    )
+    return input_path, sample_version, provenance_tag
 
 
 nEvents = -1
 
 if globals().get("recoDataMode", False):
-  # Input/output are supplied by the command line; do not scan an MC campaign.
-  input_path, sample_version, provenance_tag = "", 0, "data"
+    # Input/output are supplied by the command line; do not scan an MC campaign.
+    input_path, sample_version, provenance_tag = "", 0, "data"
 else:
-  input_path, sample_version, provenance_tag = latest_versioned_sample()
+    input_path, sample_version, provenance_tag = latest_versioned_sample()
 project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 inputFilePath = input_path
-histogramsOutputFilePath = f"{project_dir}/plots/v{sample_version}_{provenance_tag}/histograms.root"
+histogramsOutputFilePath = (
+    f"{project_dir}/plots/v{sample_version}_{provenance_tag}/histograms.root"
+)
 
 info(f"Selected sample v{sample_version}_{provenance_tag}: {inputFilePath}")
 info(f"Histogram output: {histogramsOutputFilePath}")
 
 weightsBranchName = "genWeight"
-eventsTreeNames = ["Events",]
+eventsTreeNames = [
+    "Events",
+]
 specialBranchSizes = {
     "Particle": "Event_numberP",
 }
 
 # Independent truth coverage and angular-tail diagnostics.
 for variable in ("hitMatched", "legacyMatched", "dimuonHitMatched"):
-  histParams += (("TruthDiagnostics", variable, 2, -.5, 1.5, "truth_diagnostics"),)
+    histParams += (("TruthDiagnostics", variable, 2, -0.5, 1.5, "truth_diagnostics"),)
 for category in muonCategories:
-  for variable, bins, lo, hi in (
-      ("directionReversed", 2, -.5, 1.5),
-      ("chargeMisidentified", 2, -.5, 1.5),
-      ("axisDeltaEta", 400, -2., 2.), ("axisDeltaPhi", 400, -3.142, 3.142),
-          ("constrainedEtaPull", 400, -20., 20.), ("constrainedPhiPull", 400, -20., 20.)):
-    histParams += ((f"MuonResolution{category}", variable, bins, lo, hi, "truth_diagnostics"),)
+    for variable, bins, lo, hi in (
+        ("directionReversed", 2, -0.5, 1.5),
+        ("chargeMisidentified", 2, -0.5, 1.5),
+        ("axisDeltaEta", 400, -2.0, 2.0),
+        ("axisDeltaPhi", 400, -3.142, 3.142),
+        ("constrainedEtaPull", 400, -20.0, 20.0),
+        ("constrainedPhiPull", 400, -20.0, 20.0),
+    ):
+        histParams += (
+            (f"MuonResolution{category}", variable, bins, lo, hi, "truth_diagnostics"),
+        )
 for variable, lo, hi in (
-    ("constrainedEtaErr", 0., 1.), ("constrainedPhiErr", 0., 1.),
-    ("targetPredictedEtaErr", 0., 1.), ("targetPredictedPhiErr", 0., 1.),
-    ("targetResidualX", -1000., 1000.), ("targetResidualY", -1000., 1000.),
-        ("targetPullX", -20., 20.), ("targetPullY", -20., 20.)):
-  histParams += (("TargetDiagnostics", variable, 200, lo, hi, "target_diagnostics"),)
-histParams += (("TargetDiagnostics", "constrainedStatus", 16, -11.5, 4.5, "target_diagnostics"),)
-histParams += (("TargetDiagnostics", "targetForwardStatus", 12, -10.5, 1.5, "target_diagnostics"),)
-histParams += (("TargetDiagnostics", "targetForwardIterations", 66, -1.5, 64.5, "target_diagnostics"),)
-for variable, lo, hi in (("massErr", 0., 10.), ("massRelativeErr", 0., 5.), ("minQoverPSignificance", 0., 20.)):
-  histParams += (("VertexRefitDiagnostics", variable, 200, lo, hi, "vertex_refit_diagnostics"),)
+    ("constrainedEtaErr", 0.0, 1.0),
+    ("constrainedPhiErr", 0.0, 1.0),
+    ("targetPredictedEtaErr", 0.0, 1.0),
+    ("targetPredictedPhiErr", 0.0, 1.0),
+    ("targetResidualX", -1000.0, 1000.0),
+    ("targetResidualY", -1000.0, 1000.0),
+    ("targetPullX", -20.0, 20.0),
+    ("targetPullY", -20.0, 20.0),
+):
+    histParams += (("TargetDiagnostics", variable, 200, lo, hi, "target_diagnostics"),)
+histParams += (
+    ("TargetDiagnostics", "constrainedStatus", 16, -11.5, 4.5, "target_diagnostics"),
+)
+histParams += (
+    ("TargetDiagnostics", "targetForwardStatus", 12, -10.5, 1.5, "target_diagnostics"),
+)
+histParams += (
+    (
+        "TargetDiagnostics",
+        "targetForwardIterations",
+        66,
+        -1.5,
+        64.5,
+        "target_diagnostics",
+    ),
+)
+for variable, lo, hi in (
+    ("massErr", 0.0, 10.0),
+    ("massRelativeErr", 0.0, 5.0),
+    ("minQoverPSignificance", 0.0, 20.0),
+):
+    histParams += (
+        ("VertexRefitDiagnostics", variable, 200, lo, hi, "vertex_refit_diagnostics"),
+    )
 for category in dimuonCategories:
-  histParams += ((f"DimuonResolution{category}", "refittedMassPull", 400, -20., 20., "truth_diagnostics"),)
-  histParams2D += (
-      (f"DimuonResolution{category}_refittedMassPullVsCurvature", 40, 0., 20., 200, -20., 20., "truth_diagnostics"),
-      (f"DimuonResolution{category}_refittedMassScaleVsCurvature", 40, 0., 20., 100, 0., 5., "truth_diagnostics"),)
-histParams2D += (("VertexRefitDiagnostics_massVsCurvature", 40, 0., 20., 100, 0., 10., "vertex_refit_diagnostics"),)
+    histParams += (
+        (
+            f"DimuonResolution{category}",
+            "refittedMassPull",
+            400,
+            -20.0,
+            20.0,
+            "truth_diagnostics",
+        ),
+    )
+    histParams2D += (
+        (
+            f"DimuonResolution{category}_refittedMassPullVsCurvature",
+            40,
+            0.0,
+            20.0,
+            200,
+            -20.0,
+            20.0,
+            "truth_diagnostics",
+        ),
+        (
+            f"DimuonResolution{category}_refittedMassScaleVsCurvature",
+            40,
+            0.0,
+            20.0,
+            100,
+            0.0,
+            5.0,
+            "truth_diagnostics",
+        ),
+    )
+histParams2D += (
+    (
+        "VertexRefitDiagnostics_massVsCurvature",
+        40,
+        0.0,
+        20.0,
+        100,
+        0.0,
+        10.0,
+        "vertex_refit_diagnostics",
+    ),
+)

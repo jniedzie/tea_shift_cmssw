@@ -88,21 +88,23 @@ for category in dimuon_categories:
   histograms.extend([
       Histogram(f"event/Event_nShiftDimuonVertex{category}", "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "n_{#mu#mu}"        , "# events"),
 
-      Histogram(f"dimuon/ShiftDimuonVertex{category}_pt"   , "", False, True , NormalizationType.to_lumi,     4, None, None, None, None, "p_{T}^{#mu#mu} [GeV]", "# events"),
-      Histogram(f"dimuon/ShiftDimuonVertex{category}_pz"   , "", False, True , NormalizationType.to_lumi,     4, None, None, None, None, "p_{Z}^{#mu#mu} [GeV]", "# events"),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_pt"   , "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "p_{T}^{#mu#mu} [GeV]", "# events"),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_pz"   , "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "p_{Z}^{#mu#mu} [GeV]", "# events"),
       Histogram(f"dimuon/ShiftDimuonVertex{category}_eta"  , "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "#eta^{#mu#mu}"       , "# events"),
-      Histogram(f"dimuon/ShiftDimuonVertex{category}_phi"  , "", False, True , NormalizationType.to_lumi,     4, None, None, None, None, "#phi^{#mu#mu}"       , "# events"),
-      Histogram(f"dimuon/ShiftDimuonVertex{category}_mass" , "", False, True , NormalizationType.to_lumi,     4, None, None, None, None, "m_{#mu#mu} [GeV]"    , "# events"),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_phi"  , "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "#phi^{#mu#mu}"       , "# events"),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_mass" , "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "m_{#mu#mu} [GeV]"    , "# events"),
 
-      Histogram(f"dimuon/ShiftDimuonVertex{category}_vx" , "", False, True , NormalizationType.to_lumi,     4, None, None, None, None, "v_{x}^{#mu#mu} [GeV]"    , "# events"),
-      Histogram(f"dimuon/ShiftDimuonVertex{category}_vy" , "", False, True , NormalizationType.to_lumi,     4, None, None, None, None, "v_{y}^{#mu#mu} [GeV]"    , "# events"),
-      Histogram(f"dimuon/ShiftDimuonVertex{category}_vz" , "", False, True , NormalizationType.to_lumi,     4, None, None, None, None, "v_{z}^{#mu#mu} [GeV]"    , "# events"),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_vx" , "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "v_{x}^{#mu#mu} [GeV]"    , "# events"),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_vy" , "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "v_{y}^{#mu#mu} [GeV]"    , "# events"),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_vz" , "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "v_{z}^{#mu#mu} [GeV]"    , "# events"),
 
       Histogram(f"dimuon/ShiftDimuonVertex{category}_chi2", "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "#chi^{2}"       , "# events"),
       Histogram(f"dimuon/ShiftDimuonVertex{category}_normalizedChi2", "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "#chi^{2}/ndof"       , "# events"),
       Histogram(f"dimuon/ShiftDimuonVertex{category}_dca", "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "DCA [cm]"       , "# events"),
       Histogram(f"dimuon/ShiftDimuonVertex{category}_dcaValid", "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "DCA valid"       , "# events"),
       Histogram(f"dimuon/ShiftDimuonVertex{category}_isOS", "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "isOS"       , "# events"),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_genPid", "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "generator mother", "# dimuons"),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_genPidDifferentMothers", "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "generator mother", "# dimuon mothers"),
 
   ])
 # fmt: on

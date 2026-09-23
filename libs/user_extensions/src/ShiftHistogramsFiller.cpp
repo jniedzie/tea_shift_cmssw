@@ -13,6 +13,56 @@ namespace {
 vector<string> const dimuonCategories = {
     "", "Good", "Near-Both", "Near-Far", "Both-Both", "Both-Far", "Other"};
 
+map<int, string> const dimuonOriginLabels = {
+    {0, "unmatched"},          {1, "different mothers"}, {2, "pion"},
+    {3, "kaon"},               {4, "eta/eta'"},          {5, "rho/omega"},
+    {6, "phi"},                {7, "J/psi"},             {8, "charm hadron"},
+    {9, "bottom hadron"},      {10, "tau"},              {11, "gamma/Z"},
+    {12, "other"},
+};
+
+map<int, string> const differentMotherLabels = {
+    {0, "pion"},          {1, "kaon"},       {2, "eta/eta'"},
+    {3, "rho/omega"},     {4, "phi"},        {5, "J/psi"},
+    {6, "charm hadron"},  {7, "bottom hadron"}, {8, "tau"},
+    {9, "gamma/Z"},       {10, "other"},
+};
+
+bool ContainsQuark(int pdgId, int quark) {
+  int digits = abs(pdgId) / 10;  // Remove the spin digit.
+  while (digits > 0) {
+    if (digits % 10 == quark)
+      return true;
+    digits /= 10;
+  }
+  return false;
+}
+
+int DimuonOriginCategory(int pdgId) {
+  int const absPdgId = abs(pdgId);
+  if (absPdgId == 111 || absPdgId == 211)
+    return 2;
+  if (absPdgId == 130 || absPdgId == 310 || absPdgId == 311 || absPdgId == 321)
+    return 3;
+  if (absPdgId == 221 || absPdgId == 331)
+    return 4;
+  if (absPdgId == 113 || absPdgId == 213 || absPdgId == 223)
+    return 5;
+  if (absPdgId == 333)
+    return 6;
+  if (absPdgId == 443)
+    return 7;
+  if (ContainsQuark(absPdgId, 5))
+    return 9;
+  if (ContainsQuark(absPdgId, 4))
+    return 8;
+  if (absPdgId == 15)
+    return 10;
+  if (absPdgId == 22 || absPdgId == 23)
+    return 11;
+  return 12;
+}
+
 string GetDimuonTopologyCategory(int topologyMin, int topologyMax) {
   static map<pair<int, int>, string> const namedCategories = {
       {{0, 2}, "Near-Both"},
@@ -30,6 +80,14 @@ ShiftHistogramsFiller::ShiftHistogramsFiller(shared_ptr<HistogramsHandler> histo
   auto& config = ConfigManager::GetInstance();
   eventProcessor = make_unique<EventProcessor>();
   config.GetValue("enableTruthDiagnostics", enableTruthDiagnostics);
+  if (enableTruthDiagnostics)
+    for (auto const& category : dimuonCategories)
+      histogramsHandler->SetHistogramLabels(
+          "ShiftDimuonVertex" + category + "_genPid", dimuonOriginLabels);
+  if (enableTruthDiagnostics)
+    for (auto const& category : dimuonCategories)
+      histogramsHandler->SetHistogramLabels(
+          "ShiftDimuonVertex" + category + "_genPidDifferentMothers", differentMotherLabels);
 }
 
 ShiftHistogramsFiller::~ShiftHistogramsFiller() {}
@@ -38,6 +96,7 @@ void ShiftHistogramsFiller::Fill(const shared_ptr<Event> event) {
   FillRecoLevel(event);
   FillDetectorDiagnostics(event);
   if (enableTruthDiagnostics) {
+    FillDimuonOrigins(event);
     FillGenLevel(event);
     FillRecoVsGen2D(event);
     FillResolutionPlots(event);
@@ -50,6 +109,74 @@ int ShiftHistogramsFiller::HitTruthIndex(const shared_ptr<PhysicsObject>& muon) 
     throw runtime_error("SHIFT truth diagnostics require hitGenPartIdx; angular matching is not a fallback. "
                         "For collision data set enableTruthDiagnostics=False.");
   return muon->GetAs<int>("hitGenPartIdx");
+}
+
+int ShiftHistogramsFiller::OriginTruthIndex(const shared_ptr<PhysicsObject>& muon) const {
+  int const hitIndex = HitTruthIndex(muon);
+  if (hitIndex >= 0)
+    return hitIndex;
+  // This fallback is deliberately restricted to the MC-only origin study.
+  // The hit association remains mandatory for reconstruction closure plots.
+  return muon->HasBranch("genPartIdx") ? muon->GetAs<int>("genPartIdx") : -1;
+}
+
+void ShiftHistogramsFiller::FillDimuonOrigins(const shared_ptr<Event> event) {
+  auto const genParticles = event->GetCollection("GenPart");
+  auto const recoMuons = event->GetCollection("ShiftMuon");
+  auto const recoDimuons = event->GetCollection("ShiftDimuonVertex");
+
+  // Extra collections contain the same PhysicsObject instances as the inclusive
+  // collection. Record membership once so the identical origin definition is
+  // used for inclusive, Good, and every topology category.
+  map<PhysicsObject const*, vector<string>> categoriesByDimuon;
+  for (auto const& category : dimuonCategories)
+    for (auto const& dimuon : *event->GetCollection("ShiftDimuonVertex" + category))
+      categoriesByDimuon[dimuon.get()].push_back(category);
+
+  for (auto const& dimuon : *recoDimuons) {
+    int originCategory = 0;
+    int const firstRecoIndex = dimuon->GetAs<int>("muonIdx1");
+    int const secondRecoIndex = dimuon->GetAs<int>("muonIdx2");
+    if (firstRecoIndex >= 0 && secondRecoIndex >= 0 && firstRecoIndex != secondRecoIndex &&
+        static_cast<size_t>(firstRecoIndex) < recoMuons->size() &&
+        static_cast<size_t>(secondRecoIndex) < recoMuons->size()) {
+      int const firstGenIndex = OriginTruthIndex(recoMuons->at(firstRecoIndex));
+      int const secondGenIndex = OriginTruthIndex(recoMuons->at(secondRecoIndex));
+      if (firstGenIndex >= 0 && secondGenIndex >= 0 && firstGenIndex != secondGenIndex &&
+          static_cast<size_t>(firstGenIndex) < genParticles->size() &&
+          static_cast<size_t>(secondGenIndex) < genParticles->size()) {
+        auto const firstParent = asNanoGenParticle(genParticles->at(firstGenIndex))
+                                     ->GetFirstMotherWithDifferentPdgId(genParticles);
+        auto const secondParent = asNanoGenParticle(genParticles->at(secondGenIndex))
+                                      ->GetFirstMotherWithDifferentPdgId(genParticles);
+        if (firstParent && secondParent) {
+          originCategory = firstParent->GetPhysicsObject() == secondParent->GetPhysicsObject()
+                               ? DimuonOriginCategory(firstParent->GetPdgId())
+                               : 1;
+          if (originCategory == 1) {
+            int const firstMotherCategory = DimuonOriginCategory(firstParent->GetPdgId());
+            int const secondMotherCategory = DimuonOriginCategory(secondParent->GetPdgId());
+            auto const categories = categoriesByDimuon.find(dimuon.get());
+            if (categories != categoriesByDimuon.end())
+              for (auto const& category : categories->second) {
+                histogramsHandler->Fill(
+                    "ShiftDimuonVertex" + category + "_genPidDifferentMothers",
+                    firstMotherCategory - 2);
+                histogramsHandler->Fill(
+                    "ShiftDimuonVertex" + category + "_genPidDifferentMothers",
+                    secondMotherCategory - 2);
+              }
+          }
+        }
+      }
+    }
+
+    auto const categories = categoriesByDimuon.find(dimuon.get());
+    if (categories == categoriesByDimuon.end())
+      continue;
+    for (auto const& category : categories->second)
+      histogramsHandler->Fill("ShiftDimuonVertex" + category + "_genPid", originCategory);
+  }
 }
 
 const ShiftHistogramsFiller::GenJPsiCandidate* ShiftHistogramsFiller::MatchDimuon(
