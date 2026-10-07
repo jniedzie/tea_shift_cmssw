@@ -579,7 +579,9 @@ if globals().get("recoDataMode", False):
     # Input/output are supplied by the command line; do not scan an MC campaign.
     input_path, sample_version, provenance_tag = "", 0, "data"
 else:
-    input_path, sample_version, provenance_tag = latest_versioned_sample()
+    # input_path, sample_version, provenance_tag = latest_versioned_sample()
+    # The submitter supplies one exact Nano file per job for all process/bins.
+    input_path, sample_version, provenance_tag = "", 0, campaign
 project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 inputFilePath = input_path
@@ -590,7 +592,10 @@ histogramsOutputFilePath = (
 info(f"Selected sample v{sample_version}_{provenance_tag}: {inputFilePath}")
 info(f"Histogram output: {histogramsOutputFilePath}")
 
-weightsBranchName = "genWeight"
+# weightsBranchName = "genWeight"
+weightsBranchName = "shiftSamplingGenWeight"
+# Use W/p once; retain the full parent GEN exposure/trial denominator from
+# validation/ntuple_production_20261005_v8/sampling_plan.json, not Nano Runs.
 eventsTreeNames = [
     "Events",
 ]

@@ -1,5 +1,39 @@
 # Running the SHIFT MC histogrammer
 
+The active settings now cover the representative V8 production: all six QCD
+bins, six J/psi bins and seven DY mass bins. The existing files configuration
+reads the final canonical inventory in
+`validation/ntuple_production_20261005_v8/`, refuses incomplete inputs and
+assigns one unique histogram output per Nano file. Outputs retain the existing
+EOS base and `sample/campaign_bin/histograms/` convention. The previous merged
+sample and native-weight lines remain commented in the existing configurations.
+
+After reviewing the configurations, the standard parallel command is:
+
+```bash
+source tea/setup.sh
+cd bin
+python submitter.py --app shift_histogrammer \
+  --config shift_histogrammer_config.py \
+  --files_config shift_histogrammer_files_config.py \
+  --condor --job_flavour longlunch --memory 2 \
+  --max_materialize 1000 --save_logs
+```
+
+No histogram production has been submitted. `--dry` prepares the standard
+submission files without submitting jobs. Logs are split into directories of
+500 jobs; the existing runner stages EOS files locally and publishes outputs
+with XRootD checksums. Application failures are returned to Condor.
+
+The existing `weightsBranchName` setting uses `shiftSamplingGenWeight = W/p`
+once. Its reader accepts both Float and Double branches. Efficiency pass/total
+and truth/detector diagnostic distributions use this weight for representative
+samples; restoring `genWeight` retains the previous raw diagnostics. Raw event
+cutflow counts stay raw. Full parent GEN exposure/trial denominators remain in
+the existing sampling plan and ledgers; selected Nano Runs/cutflow sums do not
+replace them. The old plotter cross sections/selected-count normalization and
+ordinary binomial efficiency errors must not be applied to this sample.
+
 From the analysis checkout:
 
 ```bash

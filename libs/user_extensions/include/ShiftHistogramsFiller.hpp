@@ -28,6 +28,8 @@ class ShiftHistogramsFiller {
   std::shared_ptr<HistogramsHandler> histogramsHandler;
   std::unique_ptr<EventProcessor> eventProcessor;
   bool enableTruthDiagnostics = true;
+  bool weightMcDiagnostics = false;
+  void FillDiagnostic(const std::string& name, double value);
   int HitTruthIndex(const std::shared_ptr<PhysicsObject>& muon) const;
   int OriginTruthIndex(const std::shared_ptr<PhysicsObject>& muon) const;
   const GenJPsiCandidate* MatchDimuon(const std::shared_ptr<PhysicsObject>& dimuon,

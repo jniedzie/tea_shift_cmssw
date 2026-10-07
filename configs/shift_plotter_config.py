@@ -128,7 +128,7 @@ for category in dimuon_categories:
       Histogram(f"dimuon/ShiftDimuonVertex{category}_p_variable", "", False, True, NormalizationType.to_lumi, 1, None, None, None, None, "p^{#mu#mu} [GeV]", "# events / GeV", scale_by_bin_width=True),
       Histogram(f"dimuon/ShiftDimuonVertex{category}_eta"  , "", False, True , NormalizationType.to_lumi,     2, None, None, None, None, "#eta^{#mu#mu}"       , "# events"),
       Histogram(f"dimuon/ShiftDimuonVertex{category}_phi"  , "", False, True , NormalizationType.to_lumi,     1, None, None, None, None, "#phi^{#mu#mu}"       , "# events"),
-      Histogram(f"dimuon/ShiftDimuonVertex{category}_mass" , "", False, True , NormalizationType.to_lumi,     1, None, 30, None, None, "m_{#mu#mu} [GeV]"    , "# events"),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_mass" , "", False, False , NormalizationType.to_lumi,     5, None, 10, None, None, "m_{#mu#mu} [GeV]"    , "# events"),
 
       Histogram(f"dimuon/ShiftDimuonVertex{category}_vx" , "", False, True , NormalizationType.to_lumi,     5, None, None, None, None, "v_{x}^{#mu#mu} [GeV]"    , "# events"),
       Histogram(f"dimuon/ShiftDimuonVertex{category}_vy" , "", False, True , NormalizationType.to_lumi,     5, None, None, None, None, "v_{y}^{#mu#mu} [GeV]"    , "# events"),

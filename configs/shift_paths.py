@@ -1,12 +1,12 @@
 # base_path = "/pnfs/iihe/cms/store/user/jniedzie/shift_cmssw"  # t2b
 base_path = "/eos/home-j/jniedzie/shift_cmssw/"  # lxplus
 
-# sample = "jpsi"
-sample = "qcd"
+sample = "jpsi"
+# sample = "qcd"
 
-pt_bin = "1to2"
+# pt_bin = "1to2"
 # pt_bin = "2to5"
-# pt_bin = "5to10"
+pt_bin = "5to10"
 # pt_bin = "10to20"
 # pt_bin = "20to-1"
 
@@ -37,6 +37,9 @@ pt_bin = "1to2"
 # campaign = "lssPaired_materialField_10k_2023_v3"
 
 # campaign = "lssPaired_field_10k_2023_v4"
+
+# campaign = "lssPaired_materialField_10k_2023_cms_v1"
+campaign = "shift_detector_representative_20261005_v8"
 
 # jpsi_campaign_base = "SamplingScan_jpsi_pThat_{}_analysis1k_chunk50_20260921_v1"
 jpsi_campaign_base = "Jpsi_Unfiltered_pThat_{}_ATLASproxy_10k_20260921_v1"
@@ -78,4 +81,4 @@ cross_sections = {  # pb; combined estimates from all chunks
 # ==========================
 
 campaign_base = jpsi_campaign_base if sample == "jpsi" else qcd_campaign_base
-campaign = campaign_base.format(pt_bin)
+# campaign = campaign_base.format(pt_bin)

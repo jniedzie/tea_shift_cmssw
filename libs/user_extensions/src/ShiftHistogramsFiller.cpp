@@ -80,6 +80,11 @@ ShiftHistogramsFiller::ShiftHistogramsFiller(shared_ptr<HistogramsHandler> histo
   auto& config = ConfigManager::GetInstance();
   eventProcessor = make_unique<EventProcessor>();
   config.GetValue("enableTruthDiagnostics", enableTruthDiagnostics);
+  try {
+    string weightsBranchName;
+    config.GetValue("weightsBranchName", weightsBranchName);
+    weightMcDiagnostics = weightsBranchName == "shiftSamplingGenWeight";
+  } catch (const Exception&) {}
   if (enableTruthDiagnostics)
     for (auto const& category : dimuonCategories)
       histogramsHandler->SetHistogramLabels(
@@ -91,6 +96,15 @@ ShiftHistogramsFiller::ShiftHistogramsFiller(shared_ptr<HistogramsHandler> histo
 }
 
 ShiftHistogramsFiller::~ShiftHistogramsFiller() {}
+
+void ShiftHistogramsFiller::FillDiagnostic(const string& name, double value) {
+  // Keep legacy raw diagnostics; representative MC uses its configured W/p.
+  // Use the existing event weight once for efficiencies and diagnostic shapes.
+  if (weightMcDiagnostics)
+    histogramsHandler->Fill(name, value);
+  else
+    histogramsHandler->FillUnweighted(name, value);
+}
 
 void ShiftHistogramsFiller::Fill(const shared_ptr<Event> event) {
   FillRecoLevel(event);
@@ -195,13 +209,13 @@ const ShiftHistogramsFiller::GenJPsiCandidate* ShiftHistogramsFiller::MatchDimuo
 void ShiftHistogramsFiller::FillDetectorDiagnostics(const shared_ptr<Event> event) {
   auto muons = event->GetCollection("ShiftMuon");
   for (auto const& muon : *muons) {
-    histogramsHandler->FillUnweighted("TargetDiagnostics_constrainedStatus", muon->GetAs<int>("constrainedStatus"));
+    FillDiagnostic("TargetDiagnostics_constrainedStatus", muon->GetAs<int>("constrainedStatus"));
     for (string const variable : {"targetForwardStatus", "targetForwardIterations"})
       if (muon->HasBranch(variable))
-        histogramsHandler->FillUnweighted("TargetDiagnostics_" + variable, muon->GetAs<float>(variable));
+        FillDiagnostic("TargetDiagnostics_" + variable, muon->GetAs<float>(variable));
     if (enableTruthDiagnostics) {
-      histogramsHandler->FillUnweighted("TruthDiagnostics_hitMatched", HitTruthIndex(muon) >= 0);
-      histogramsHandler->FillUnweighted("TruthDiagnostics_legacyMatched", muon->GetAs<int>("genPartIdx") >= 0);
+      FillDiagnostic("TruthDiagnostics_hitMatched", HitTruthIndex(muon) >= 0);
+      FillDiagnostic("TruthDiagnostics_legacyMatched", muon->GetAs<int>("genPartIdx") >= 0);
     }
     for (string const variable : {"constrainedEtaErr", "constrainedPhiErr", "targetPredictedEtaErr",
           "targetPredictedPhiErr", "targetResidualX", "targetResidualY", "targetPullX", "targetPullY"})
@@ -213,29 +227,29 @@ void ShiftHistogramsFiller::FillDetectorDiagnostics(const shared_ptr<Event> even
                                   muon->GetAs<int>("nCompatibleStripHits");
     int const addedTracker = muon->GetAs<int>("nAddedTrackerRefitHits");
     if (compatibleDT > 0)
-      histogramsHandler->FillUnweighted("DetectorDiagnostics_dtAttachmentFraction",
+      FillDiagnostic("DetectorDiagnostics_dtAttachmentFraction",
                                         static_cast<double>(addedDT) / compatibleDT);
     int const truthMatchedDT = enableTruthDiagnostics ? muon->GetAs<int>("nAddedDTTruthChamberMatches") : -1;
     if (addedDT > 0 && truthMatchedDT >= 0)
-      histogramsHandler->FillUnweighted("DetectorDiagnostics_dtTruthChamberPurity",
+      FillDiagnostic("DetectorDiagnostics_dtTruthChamberPurity",
                                         static_cast<double>(truthMatchedDT) / addedDT);
     if (compatibleTracker > 0)
-      histogramsHandler->FillUnweighted("DetectorDiagnostics_trackerAttachmentFraction",
+      FillDiagnostic("DetectorDiagnostics_trackerAttachmentFraction",
                                         static_cast<double>(addedTracker) / compatibleTracker);
-    histogramsHandler->FillUnweighted("DetectorDiagnostics_timingMeasurements",
+    FillDiagnostic("DetectorDiagnostics_timingMeasurements",
                                       muon->GetAs<int>("nTimingMeasurements"));
-    histogramsHandler->FillUnweighted("DetectorDiagnostics_timingDeltaChi2",
+    FillDiagnostic("DetectorDiagnostics_timingDeltaChi2",
                                       muon->GetAs<float>("timingDeltaChi2"));
-    histogramsHandler->FillUnweighted("DetectorDiagnostics_combinedTimingDeltaChi2",
+    FillDiagnostic("DetectorDiagnostics_combinedTimingDeltaChi2",
                                       muon->GetAs<float>("combinedTimingDeltaChi2"));
     int const crossedHBHE = muon->GetAs<int>("nCrossedHBHERecHits");
     int const crossedHO = muon->GetAs<int>("nCrossedHORecHits");
     if (crossedHBHE > 0)
-      histogramsHandler->FillUnweighted("DetectorDiagnostics_hbheValidTimeFraction",
+      FillDiagnostic("DetectorDiagnostics_hbheValidTimeFraction",
                                         static_cast<double>(muon->GetAs<int>("nValidCrossedHBHETimes")) /
                                             crossedHBHE);
     if (crossedHO > 0)
-      histogramsHandler->FillUnweighted("DetectorDiagnostics_hoValidTimeFraction",
+      FillDiagnostic("DetectorDiagnostics_hoValidTimeFraction",
                                         static_cast<double>(muon->GetAs<int>("nValidCrossedHOTimes")) /
                                             crossedHO);
   }
@@ -268,9 +282,9 @@ void ShiftHistogramsFiller::FillEfficiencies(const shared_ptr<Event> event) {
         {"vz", muon->GetAs<float>("vz")},
     };
     for (auto const& [variable, value] : values) {
-      histogramsHandler->FillUnweighted(prefix + "_" + variable + "_total", value);
+      FillDiagnostic(prefix + "_" + variable + "_total", value);
       if (pass)
-        histogramsHandler->FillUnweighted(prefix + "_" + variable + "_pass", value);
+        FillDiagnostic(prefix + "_" + variable + "_pass", value);
     }
   };
 
@@ -306,9 +320,9 @@ void ShiftHistogramsFiller::FillEfficiencies(const shared_ptr<Event> event) {
         {"vz", candidate.vertex.Z()},
     };
     for (auto const& [variable, value] : values) {
-      histogramsHandler->FillUnweighted(prefix + "_" + variable + "_total", value);
+      FillDiagnostic(prefix + "_" + variable + "_total", value);
       if (pass)
-        histogramsHandler->FillUnweighted(prefix + "_" + variable + "_pass", value);
+        FillDiagnostic(prefix + "_" + variable + "_pass", value);
     }
   };
 
@@ -386,7 +400,7 @@ void ShiftHistogramsFiller::FillRecoLevel(const shared_ptr<Event> event) {
           dimuon->GetAs<float>("refittedMinQoverPSignificance"), mass);
     }
     if (enableTruthDiagnostics)
-      histogramsHandler->FillUnweighted("TruthDiagnostics_dimuonHitMatched", MatchDimuon(dimuon, recoMuons, truthCandidates) != nullptr);
+      FillDiagnostic("TruthDiagnostics_dimuonHitMatched", MatchDimuon(dimuon, recoMuons, truthCandidates) != nullptr);
     string const category = GetDimuonTopologyCategory(
         dimuon->GetAs<int>("topologyMin"), dimuon->GetAs<int>("topologyMax"));
     histogramsHandler->Fill("ShiftDimuonVertex_topologyCategory", categoryIndices.at(category));
