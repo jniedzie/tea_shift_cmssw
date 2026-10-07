@@ -48,11 +48,51 @@ class ExistingRunnerTest(unittest.TestCase):
         self.assertTrue(calls[-1][-1].endswith('/eos/user/j/jniedzie/a/histograms_job0.root'))
 
 
-@unittest.skipUnless(shutil.which('condor_submit'), 'Native Condor parser unavailable')
+class SubmitterFatalErrorTest(unittest.TestCase):
+    def test_config_errors_exit_before_starting_jobs_without_traceback(self):
+        # Exercise the real CLI/config loader, while making a submission an
+        # explicit failure. No ROOT environment or scheduler is required.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'SubmissionManager.py').write_text(
+                'from enum import Enum\n'
+                'class SubmissionSystem(Enum):\n'
+                '  unknown=0; local=1; condor=2; local_parallel=3\n'
+                'class SubmissionManager:\n'
+                '  def __init__(self, *args):\n'
+                '    raise AssertionError("A job was started")\n')
+            environment = dict(os.environ, PYTHONPATH=os.pathsep.join([
+                str(root), str(PROJECT / 'tea/pylibs/logger')]))
+            for contents, reason in (
+                (None, 'No such file'),
+                ('raise RuntimeError("Nano production is not marked complete; wait for completion")',
+                 'Nano production is not marked complete; wait for completion'),
+                ('broken = [', 'files.py, line 1'),
+            ):
+                with self.subTest(reason=reason):
+                    config = root / 'files.py'
+                    if contents is not None:
+                        config.write_text(contents)
+                    result = subprocess.run([
+                        sys.executable, str(PROJECT / 'tea/apps/examples/submitter.py'),
+                        '--app', 'shift_histogrammer', '--config', 'config.py',
+                        '--files_config', str(config), '--local'],
+                        env=environment, capture_output=True, text=True, timeout=30)
+                    output = result.stdout + result.stderr
+                    self.assertEqual(result.returncode, 1, output)
+                    self.assertIn('FATAL: Submission preparation failed', output)
+                    self.assertIn(str(config), output)
+                    self.assertIn(reason, output)
+                    self.assertNotIn('Traceback', output)
+                    self.assertNotIn('A job was started', output)
+
+
+@unittest.skipUnless(shutil.which('condor_submit') and str(PROJECT).startswith('/afs/'),
+                     'Native Condor parser and writable AFS checkout required')
 class ExistingSubmitterCondorTest(unittest.TestCase):
     def test_existing_template_honors_cap_and_shards_real_native_ads(self):
         from SubmissionManager import SubmissionManager, SubmissionSystem
-        with tempfile.TemporaryDirectory() as temporary:
+        with tempfile.TemporaryDirectory(dir=PROJECT) as temporary:
             root = Path(temporary)
             (root / 'tea').symlink_to(PROJECT / 'tea', target_is_directory=True)
             work = root / 'bin'
@@ -67,7 +107,8 @@ class ExistingSubmitterCondorTest(unittest.TestCase):
                     manager.job_flavour, manager.memory_request = 'longlunch', 2.0
                     manager.materialize_max, manager.resubmit_job = 1000, process
                     manager.save_logs = True
-                    with patch('SubmissionManager.get_facility', return_value='lxplus'):
+                    with patch('SubmissionManager.get_facility', return_value='lxplus'), \
+                         patch.dict(os.environ, {'TEA_CONDOR_DIR': str(root / 'staging')}):
                         manager._SubmissionManager__setup_temp_file_paths()
                         manager._SubmissionManager__copy_templates()
                         manager._SubmissionManager__set_condor_script_variables(1002)

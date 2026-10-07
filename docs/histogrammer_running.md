@@ -2,10 +2,12 @@
 
 The active settings now cover the representative V8 production: all six QCD
 bins, six J/psi bins and seven DY mass bins. The existing files configuration
-reads the final canonical inventory in
+reads the existing final completion record and validated worker receipts in
 `validation/ntuple_production_20261005_v8/`, refuses incomplete inputs and
-assigns one unique histogram output per Nano file. Outputs retain the existing
-EOS base and `sample/campaign_bin/histograms/` convention. The previous merged
+assigns one unique histogram output per Nano file. It does not require an extra
+canonical audit file. Missing completion records, failed receipts and mismatched
+counts stop preparation with a fatal message and exit status 1. Outputs retain
+the existing EOS base and `sample/campaign_bin/histograms/` convention. The previous merged
 sample and native-weight lines remain commented in the existing configurations.
 
 After reviewing the configurations, the standard parallel command is:
