@@ -266,6 +266,34 @@ histParams = (
 )
 # fmt: on
 
+# Reconstructed pair observables use the indexed ShiftMuon states, without
+# truth matching or additional cuts. Fine-angle and mass plots retain tails in
+# overflow; the full opening-angle spectrum includes the antiparallel endpoint.
+for category in dimuonCategories:
+    for variable, bins, low, high in (
+        ("openingAngle", 630, 0.0, 3.15),
+        ("openingAngleFine", 400, 0.0, 0.2),
+        ("constrainedOpeningAngle", 630, 0.0, 3.15),
+        ("deltaPhi", 315, 0.0, 3.15),
+        ("deltaEta", 400, 0.0, 20.0),
+        ("deltaR", 400, 0.0, 20.0),
+        ("ptAsymmetry", 101, 0.0, 1.01),
+        ("momentumAsymmetry", 101, 0.0, 1.01),
+        ("minMuonPt", 500, 0.0, 50.0),
+        ("maxMuonPt", 500, 0.0, 50.0),
+        ("rapidity", 400, -10.0, 10.0),
+        ("vertexR", 450, 0.0, 450.0),
+        ("massOS", 1000, 0.0, 20.0),
+        ("massSS", 1000, 0.0, 20.0),
+        ("constrainedMass", 1000, 0.0, 100.0),
+        ("refittedMass", 1000, 0.0, 100.0),
+        ("probability", 101, 0.0, 1.01),
+        ("originCompatibilityNormalizedChi2", 500, 0.0, 50.0),
+        ("constrainedValid", 2, -0.5, 1.5),
+        ("refitStatus", 16, -11.5, 4.5),
+    ):
+        histParams += ((f"ShiftDimuonVertex{category}", variable, bins, low, high, "dimuon"),)
+
 # MC-only origin diagnostic. Each dimuon contributes exactly one categorical
 # entry: its common immediate non-muon mother species, "different mothers",
 # or "unmatched". ShiftHistogramsFiller assigns human-readable bin labels.
@@ -517,6 +545,11 @@ for prefixes, binning in (
 # ============================================================
 
 histParams2D = ()
+for category in dimuonCategories:
+    histParams2D += (
+        (f"ShiftDimuonVertex{category}_massVsOpeningAngle", 100, 0.0, 0.2, 100, 0.0, 10.0, "dimuon"),
+        (f"ShiftDimuonVertex{category}_massVsPtAsymmetry", 100, 0.0, 1.01, 100, 0.0, 10.0, "dimuon"),
+    )
 
 for name in ["RecoVsGenMuon", "RecoVsGenDimuon"]:
     # fmt: off

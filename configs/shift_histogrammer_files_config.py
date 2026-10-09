@@ -1,3 +1,5 @@
+import os
+
 from shift_paths import base_path, sample, campaign
 from shift_sample_paths import latest_merged_sample, validated_nano_files
 
@@ -8,4 +10,7 @@ sample_path = ""
 # output_hists_dir = f"{base_path}/{sample}/{campaign}/histograms"
 # Exact complete inventory: one unique histogram output per Nano file across
 # all six QCD bins, six J/psi bins and seven DY mass bins, in one job factory.
-input_output_file_list = validated_nano_files(base_path, campaign)
+input_output_file_list = validated_nano_files(
+    base_path, campaign,
+    allow_incomplete=os.environ.get("SHIFT_ALLOW_INCOMPLETE_NANO") == "1",
+)

@@ -108,6 +108,7 @@ void ShiftHistogramsFiller::FillDiagnostic(const string& name, double value) {
 
 void ShiftHistogramsFiller::Fill(const shared_ptr<Event> event) {
   FillRecoLevel(event);
+  FillDimuonKinematics(event);
   FillDetectorDiagnostics(event);
   if (enableTruthDiagnostics) {
     FillDimuonOrigins(event);
@@ -407,6 +408,93 @@ void ShiftHistogramsFiller::FillRecoLevel(const shared_ptr<Event> event) {
   }
 
   histogramsHandler->SetHistogramLabels("ShiftDimuonVertex_topologyCategory", labels);
+}
+
+void ShiftHistogramsFiller::FillDimuonKinematics(const shared_ptr<Event> event) {
+  auto const muons = event->GetCollection("ShiftMuon");
+  map<PhysicsObject const*, vector<string>> categoriesByDimuon;
+  for (auto const& category : dimuonCategories)
+    for (auto const& dimuon : *event->GetCollection("ShiftDimuonVertex" + category))
+      categoriesByDimuon[dimuon.get()].push_back(category);
+
+  for (auto const& dimuon : *event->GetCollection("ShiftDimuonVertex")) {
+    auto const fill = [&](string const& variable, double value) {
+      if (!isfinite(value)) return;
+      for (auto const& category : categoriesByDimuon.at(dimuon.get()))
+        histogramsHandler->Fill("ShiftDimuonVertex" + category + "_" + variable, value);
+    };
+    auto const fill2D = [&](string const& variable, double x, double y) {
+      if (!isfinite(x) || !isfinite(y)) return;
+      for (auto const& category : categoriesByDimuon.at(dimuon.get()))
+        histogramsHandler->Fill("ShiftDimuonVertex" + category + "_" + variable, x, y);
+    };
+    double const mass = dimuon->GetAs<float>("mass");
+    double const pt = dimuon->GetAs<float>("pt");
+    double const pz = dimuon->GetAs<float>("pz");
+    double const transverseMass = hypot(mass, pt);
+    if (mass >= 0. && pt >= 0. && transverseMass > 0.)
+      fill("rapidity", asinh(pz / transverseMass));
+    fill("vertexR", hypot(dimuon->GetAs<float>("vx"), dimuon->GetAs<float>("vy")));
+    // Keep OS and SS spectra separate without changing any pair selection.
+    if (mass >= 0. && dimuon->HasBranch("isOS")) {
+      int const isOS = dimuon->GetAs<int>("isOS");
+      if (isOS == 0 || isOS == 1) fill(isOS ? "massOS" : "massSS", mass);
+    }
+    for (string const variable : {"probability", "originCompatibilityNormalizedChi2",
+                                 "constrainedValid", "refitStatus"})
+      if (dimuon->HasBranch(variable)) fill(variable, dimuon->GetAs<float>(variable));
+    if (dimuon->HasBranch("constrainedValid") && dimuon->GetAs<int>("constrainedValid") == 1 &&
+        dimuon->HasBranch("constrainedMass") && dimuon->GetAs<float>("constrainedMass") >= 0.)
+      fill("constrainedMass", dimuon->GetAs<float>("constrainedMass"));
+    if (dimuon->HasBranch("refitStatus") && dimuon->GetAs<int>("refitStatus") == 1 &&
+        dimuon->HasBranch("refittedMass") && dimuon->GetAs<float>("refittedMass") >= 0.)
+      fill("refittedMass", dimuon->GetAs<float>("refittedMass"));
+
+    int const i = dimuon->GetAs<int>("muonIdx1"), j = dimuon->GetAs<int>("muonIdx2");
+    if (i < 0 || j < 0 || i == j || size_t(i) >= muons->size() || size_t(j) >= muons->size())
+      continue;
+    auto const first = muons->at(i), second = muons->at(j);
+    double const pt1 = first->GetAs<float>("pt"), pt2 = second->GetAs<float>("pt");
+    double const pz1 = first->GetAs<float>("pz"), pz2 = second->GetAs<float>("pz");
+    double const phi1 = first->GetAs<float>("phi"), phi2 = second->GetAs<float>("phi");
+    if (!isfinite(pt1) || !isfinite(pt2) || !isfinite(pz1) || !isfinite(pz2) ||
+        !isfinite(phi1) || !isfinite(phi2) || pt1 < 0. || pt2 < 0.)
+      continue;
+    TVector3 const p1(pt1 * cos(phi1), pt1 * sin(phi1), pz1);
+    TVector3 const p2(pt2 * cos(phi2), pt2 * sin(phi2), pz2);
+    if (p1.Mag() == 0. || p2.Mag() == 0.) continue;
+    // atan2 retains precision for nearly parallel boosted muons. This is the
+    // lab-frame angle between signed momenta, not an unoriented track-axis angle.
+    double const angle = atan2(p1.Cross(p2).Mag(), p1.Dot(p2));
+    fill("openingAngle", angle);
+    fill("openingAngleFine", angle);
+    fill2D("massVsOpeningAngle", angle, mass);
+    fill("momentumAsymmetry", abs(p1.Mag() - p2.Mag()) / (p1.Mag() + p2.Mag()));
+    fill("minMuonPt", min(pt1, pt2));
+    fill("maxMuonPt", max(pt1, pt2));
+    if (pt1 + pt2 > 0.) {
+      double const asymmetry = abs(pt1 - pt2) / (pt1 + pt2);
+      fill("ptAsymmetry", asymmetry);
+      fill2D("massVsPtAsymmetry", asymmetry, mass);
+    }
+    double const deltaPhi = abs(remainder(phi1 - phi2, 2. * acos(-1.)));
+    fill("deltaPhi", deltaPhi);
+    double const deltaEta = abs(first->GetAs<float>("eta") - second->GetAs<float>("eta"));
+    fill("deltaEta", deltaEta);
+    if (isfinite(deltaEta)) fill("deltaR", hypot(deltaEta, deltaPhi));
+
+    if (first->HasBranch("constrainedValid") && second->HasBranch("constrainedValid") &&
+        first->GetAs<int>("constrainedValid") == 1 && second->GetAs<int>("constrainedValid") == 1) {
+      auto const momentum = [](shared_ptr<PhysicsObject> const& muon) {
+        double const cpt = muon->GetAs<float>("constrainedPt");
+        double const cphi = muon->GetAs<float>("constrainedPhi");
+        return TVector3(cpt * cos(cphi), cpt * sin(cphi), muon->GetAs<float>("constrainedPz"));
+      };
+      auto const c1 = momentum(first), c2 = momentum(second);
+      if (c1.Mag() > 0. && c2.Mag() > 0.)
+        fill("constrainedOpeningAngle", atan2(c1.Cross(c2).Mag(), c1.Dot(c2)));
+    }
+  }
 }
 
 void ShiftHistogramsFiller::FillRecoVsGen2D(const shared_ptr<Event> event) {

@@ -37,6 +37,7 @@ class ShiftHistogramsFiller {
   
   void FillGenLevel(const std::shared_ptr<Event> event);
   void FillRecoLevel(const std::shared_ptr<Event> event);
+  void FillDimuonKinematics(const std::shared_ptr<Event> event);
   void FillRecoVsGen2D(const std::shared_ptr<Event> event);
   void FillResolutionPlots(const std::shared_ptr<Event> event);
   void FillEfficiencies(const std::shared_ptr<Event> event);
