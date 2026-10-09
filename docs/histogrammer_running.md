@@ -29,11 +29,11 @@ cd bin
 python submitter.py --app shift_histogrammer \
   --config shift_histogrammer_config.py \
   --files_config shift_histogrammer_files_config.py \
-  --condor --job_flavour longlunch --memory 2 \
-  --max_materialize 1000 --save_logs
+  --condor --job_flavour longlunch --memory 6 \
+  --max_materialize 100 --save_logs
 ```
 
-No histogram production has been submitted. `--dry` prepares the standard
+`--dry` prepares the standard
 submission files without submitting jobs. Logs are split into directories of
 500 jobs; the existing runner stages EOS files locally and publishes outputs
 with XRootD checksums. Application failures are returned to Condor.
@@ -146,6 +146,25 @@ Analysis settings, event weights and EOS output paths are preserved.
 The submissions retain stdout, stderr and scheduler logs under
 `validation/histogram_hold_20261007/afs_worker_logs`, with directories split
 every 500 jobs.
+
+For checksum-pinned runtime workers, prepare a new immutable wrapper and submit
+file:
+
+```bash
+python3 utils/histogram_worker.py --source ORIGINAL_WORKER --output NEW_WORKER \
+  --source-submit ORIGINAL_SUBMIT --output-submit NEW_SUBMIT
+```
+
+This writes safe startup limits and the required Condor exit policy into the
+new submit file, preserving its exact input list and frozen payload. It refuses
+to overwrite existing files. Runtime transfers retry
+three times, with a ten-minute limit per attempt; extraction and relocation
+have separate limits. Exit 75 requests another worker start, capped at four
+starts. Checksum failures, analysis errors and exhausted retries remain held.
+Use `max_materialize = 100` and `max_idle = 20`; a 1 GB runtime archive must
+not be downloaded by 1,000 simultaneous cold workers. A factory limit does
+not throttle jobs already materialized: recover that backlog in bounded waves.
+Never overwrite a live worker or frozen analysis payload when preparing repairs.
 
 ## Merge histograms by process-bin
 
