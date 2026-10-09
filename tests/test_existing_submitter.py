@@ -28,6 +28,12 @@ class ExistingRunnerTest(unittest.TestCase):
             self.assertEqual(runner.execute(['./app', '--input_path', '/tmp/input.root']), 17)
             self.assertEqual(run.call_count, 1)
 
+    def test_application_signal_is_reported_with_conventional_exit_code(self):
+        with patch.object(runner.subprocess, 'run', return_value=SimpleNamespace(returncode=-7)), \
+             patch.object(runner, 'fatal') as fatal:
+            self.assertEqual(runner.execute(['./app']), 135)
+            self.assertIn('SIGBUS', fatal.call_args.args[0])
+
     def test_eos_output_is_staged_and_published_with_checksum(self):
         calls = []
         def run(command, **kwargs):
@@ -44,6 +50,7 @@ class ExistingRunnerTest(unittest.TestCase):
         self.assertTrue(calls[1][calls[1].index('--input_path') + 1].startswith('/tmp/'))
         self.assertEqual(calls[-1][0], 'xrdcp')
         self.assertIn('--posc', calls[-1])
+        self.assertIn('--force', calls[-1])
         self.assertIn('--cksum', calls[-1])
         self.assertTrue(calls[-1][-1].endswith('/eos/user/j/jniedzie/a/histograms_job0.root'))
 
@@ -90,6 +97,15 @@ class SubmitterFatalErrorTest(unittest.TestCase):
 @unittest.skipUnless(shutil.which('condor_submit') and str(PROJECT).startswith('/afs/'),
                      'Native Condor parser and writable AFS checkout required')
 class ExistingSubmitterCondorTest(unittest.TestCase):
+    def test_cern_batch_rejects_eos_python_runtime(self):
+        from SubmissionManager import SubmissionManager, SubmissionSystem
+        manager = object.__new__(SubmissionManager)
+        manager.submission_system = SubmissionSystem.condor
+        with patch('SubmissionManager.get_facility', return_value='lxplus'), \
+             patch.object(sys, 'executable', '/eos/user/j/test/environment/bin/python'):
+            with self.assertRaisesRegex(RuntimeError, 'Activate an AFS TEA environment'):
+                manager._SubmissionManager__set_python_executable()
+
     def test_existing_template_honors_cap_and_shards_real_native_ads(self):
         from SubmissionManager import SubmissionManager, SubmissionSystem
         with tempfile.TemporaryDirectory(dir=PROJECT) as temporary:
@@ -108,9 +124,13 @@ class ExistingSubmitterCondorTest(unittest.TestCase):
                     manager.materialize_max, manager.resubmit_job = 1000, process
                     manager.save_logs = True
                     with patch('SubmissionManager.get_facility', return_value='lxplus'), \
-                         patch.dict(os.environ, {'TEA_CONDOR_DIR': str(root / 'staging')}):
+                         patch.dict(os.environ, {'TEA_CONDOR_DIR': str(root / 'staging'),
+                                                   'CONDA_BUILD_SYSROOT': '/test/sysroot with spaces'}):
                         manager._SubmissionManager__setup_temp_file_paths()
                         manager._SubmissionManager__copy_templates()
+                        manager._SubmissionManager__set_run_script_variables()
+                        self.assertIn("export CONDA_BUILD_SYSROOT='/test/sysroot with spaces'",
+                                      Path(manager.condor_run_script_name).read_text())
                         manager._SubmissionManager__set_condor_script_variables(1002)
                     preview = work / f'preview_{process}.ads'
                     environment = {key: value for key, value in os.environ.items()

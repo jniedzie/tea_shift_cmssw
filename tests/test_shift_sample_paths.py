@@ -5,9 +5,11 @@ import sys
 import tempfile
 import unittest
 import hashlib
+from unittest.mock import patch
 
 CONFIGS = Path(__file__).resolve().parents[1] / 'configs'
 sys.path.insert(0, str(CONFIGS))
+sys.path.insert(0, str(CONFIGS.parent / 'tea/pylibs/logger'))
 from shift_sample_paths import latest_merged_sample, validated_nano_files
 
 
@@ -111,10 +113,54 @@ class CompleteNanoInventoryTest(unittest.TestCase):
         self.assertTrue(files[0][0].endswith('qcd_0to1/job0000000/nano.root'))
         self.assertEqual(files[1][2], self.base + '/jpsi/' + self.campaign + '_20to-1/histograms/histograms_job0000001.root')
 
+    def test_terminal_failed_production_reports_failure_instead_of_waiting(self):
+        (self.root / 'production_complete.json').unlink()
+        self.write(self.root / 'live_status.json', dict(health='failed', terminal=True,
+                   nano_jobs_done=1, nano_jobs_expected=2, failed_nano_jobs=[1]))
+        with self.assertRaisesRegex(RuntimeError, '1/2 Nano jobs completed; 1 failed.*--allow-incomplete'):
+            self.files()
+
+    def test_sharded_receipts_keep_complete_inventory_validation(self):
+        group = self.root / 'results' / 'g0'
+        group.mkdir()
+        for job in range(2):
+            (self.root / 'results' / f'status{job}.json').rename(group / f'status{job}.json')
+        self.assertEqual(len(self.files()), 2)
+        self.rows[1]['complete'] = False
+        self.write(group / 'status1.json', self.rows[1])
+        with self.assertRaisesRegex(RuntimeError, 'Unvalidated Nano receipt'):
+            self.files()
+
     def test_missing_completion_record_is_refused(self):
         (self.root / 'production_complete.json').unlink()
         with self.assertRaisesRegex(RuntimeError, 'not marked complete.*Wait for'):
             self.files()
+
+    def test_partial_inventory_uses_only_validated_receipts(self):
+        (self.root / 'production_complete.json').unlink()
+        (self.root / 'results' / 'status1.json').unlink()
+        files = validated_nano_files(self.base, self.campaign, self.root, allow_incomplete=True)
+        self.assertEqual(len(files), 1)
+        self.assertTrue(files[0][0].endswith('qcd_0to1/job0000000/nano.root'))
+
+    def test_partial_inventory_skips_failed_attempt_but_rejects_bad_success(self):
+        (self.root / 'production_complete.json').unlink()
+        self.rows[1].update(complete=False, exit_code=1, nano_path=None, nano_bytes=None)
+        self.refresh()
+        with patch('Logger.warn') as warn:
+            files = validated_nano_files(self.base, self.campaign, self.root, allow_incomplete=True)
+        warn.assert_called_once_with('Nano production incomplete: 1/2 jobs ready.')
+        self.assertEqual(len(files), 1)
+        self.rows[0]['validated_tier_events']['NANO'] = 0
+        self.refresh()
+        with self.assertRaisesRegex(RuntimeError, 'Unvalidated Nano receipt'):
+            validated_nano_files(self.base, self.campaign, self.root, allow_incomplete=True)
+
+    def test_partial_flag_does_not_skip_failure_in_marked_complete_production(self):
+        self.rows[1].update(complete=False, exit_code=1)
+        self.refresh()
+        with self.assertRaisesRegex(RuntimeError, 'Unvalidated Nano receipt'):
+            validated_nano_files(self.base, self.campaign, self.root, allow_incomplete=True)
 
     def test_changed_sampling_plan_is_refused(self):
         (self.root / 'sampling_plan.json').write_text('{}')

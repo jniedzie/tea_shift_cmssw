@@ -2,6 +2,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "configs"))
 from shift_sample_paths import single_root_file
@@ -41,6 +42,25 @@ class SingleRootFileTest(unittest.TestCase):
         (nested / "histograms.root").touch()
         with self.assertRaisesRegex(RuntimeError, "found 0"):
             single_root_file(self.directory)
+
+    def test_optional_missing_and_empty_directories(self):
+        self.assertIsNone(single_root_file(self.directory / "missing", allow_missing=True))
+        self.assertIsNone(single_root_file(self.directory, allow_missing=True))
+
+    def test_optional_inaccessible_directory(self):
+        with patch.object(Path, "iterdir", side_effect=PermissionError("Permission denied")):
+            self.assertIsNone(single_root_file(self.directory, allow_missing=True))
+
+    def test_optional_existing_file_selected(self):
+        expected = self.directory / "histograms.root"
+        expected.touch()
+        self.assertEqual(single_root_file(self.directory, allow_missing=True), str(expected))
+
+    def test_optional_multiple_files_still_rejected(self):
+        for name in ("a.root", "b.root"):
+            (self.directory / name).touch()
+        with self.assertRaisesRegex(RuntimeError, "found 2: a.root, b.root"):
+            single_root_file(self.directory, allow_missing=True)
 
 
 if __name__ == "__main__":

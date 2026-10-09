@@ -154,13 +154,20 @@ From `tea_shift_cmssw`, activate TEA and run the existing merger from `bin`:
 ```bash
 source tea/setup.sh
 cd bin
-python merge.py --files_config ../configs/shift_histogrammer_merge_config.py \
+python merge.py --files_config shift_histogrammer_files_config.py \
   --condor --hadd-workers 1 --hadd-files-per-pass 100 \
   --job_flavour workday --memory 2 --dry
 ```
 
+Use the same files configuration as histogram submission. For its
+`input_output_file_list`, TEA merges the histogram-output column, grouped by
+output directory. The Nano input column is not a merge input. Tree outputs,
+when present, are grouped and merged separately. No separate merge config is
+needed. Exact lists exclude unrelated files in those directories; directory
+configs using `output_hists_dir` or `output_trees_dir` retain their usual behavior.
+
 This prepares one merge job for each of the 19 process-bins, using the exact
-19,537 outputs expected by the histogrammer files configuration. Each output
+outputs expected by the selected campaign's histogrammer files configuration. Each output
 is `sample/campaign_bin/histograms_merged/ntuple_0.root`. The dry run works
 while histogram jobs are running. It writes Condor files to a unique AFS
 directory under `bin/tmp/condor_merge/` and prints the same concise submission
