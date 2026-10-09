@@ -5,6 +5,8 @@ from collections import Counter
 from pathlib import Path
 import re
 
+from shift_storage_paths import resolve_storage_path, tier_directory
+
 
 def single_root_file(directory, *, allow_missing=False):
     """Resolve one ROOT file; optionally return None for unavailable inputs."""
@@ -45,8 +47,10 @@ def latest_merged_sample(samples_dir):
             raise RuntimeError(f"Merged sample is missing its validation record: {sidecar}")
         record = json.loads(sidecar.read_text())
         checksum = record.get("sha256", "")
+        recorded_output = record.get("output", "")
+        resolved_output = resolve_storage_path(recorded_output) if recorded_output else ""
         if (record.get("status") != "validated" or
-                Path(record.get("output", "")) != path or
+                Path(resolved_output) != path or
                 not re.fullmatch(r"[0-9a-f]{64}", checksum)):
             raise RuntimeError(f"Invalid merged-sample provenance: {sidecar}")
         # A validated complete merge supersedes a legacy, possibly partial one.
@@ -132,8 +136,10 @@ def validated_nano_files(base_path, campaign, production_directory=None, *, allo
             raise RuntimeError(f"Unvalidated Nano receipt: {receipt_path}; check production completion")
         totals[stratum] += events
         process, bin_name = stratum.split("_", 1)
-        input_path = Path(base_path) / "ntuple_production" / campaign / stratum / f"job{job:07d}" / "nano.root"
-        output_path = Path(base_path) / process / f"{campaign}_{bin_name.replace('toinf', 'to-1')}" / "histograms" / f"histograms_job{job:07d}.root"
+        # Validate the immutable receipt above before following its relocation.
+        input_path = resolve_storage_path(
+            Path(base_path) / "ntuple_production" / campaign / stratum / f"job{job:07d}" / "nano.root")
+        output_path = tier_directory(base_path, process, bin_name, campaign, "histograms") / f"histograms_job{job:07d}.root"
         files.append((str(input_path), "", str(output_path)))
     if ((final is not None or not allow_incomplete) and dict(totals) != manifest["strata"]) or \
             len({row[2] for row in files}) != len(files):

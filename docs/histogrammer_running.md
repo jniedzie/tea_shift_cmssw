@@ -1,5 +1,42 @@
 # Running the SHIFT MC histogrammer
 
+## EOS storage layout after October 9, 2026
+
+The production data base is `/eos/home-j/jniedzie/shift_cmssw/` (the equivalent
+XRootD namespace is `/eos/user/j/jniedzie/shift_cmssw/`). It contains process-bin
+directories such as `qcd_pThat0to1GeV`, `jpsi_pThat2to5GeV` and
+`dy_mHat0p211317to0p5GeV`. Decimal boundaries retain every digit and use `p`.
+The open upper boundary is `inf`. Each process-bin contains dated campaigns.
+
+For example, the current QCD 0--1 detector sample is:
+
+```text
+qcd_pThat0to1GeV/shift_detector_representative_20261007_v10/
+  nanoAOD/nano_job0000000.root
+  nanoAOD_merged/ntuple_0.root
+  histograms/histograms_job0000000.root
+  histograms_merged/ntuple_0.root
+  metadata/ntuple_production/job0000000/complete.json
+```
+
+Each data tier stores its regular ROOT files directly. Historical GEN, SIM,
+DIGI/RAW/HLT, AODSIM and reconstruction variants remain separately identified.
+Metadata preserves cross sections, normalization, sampling ledgers, original
+receipts, archived configurations, logs and EOS saved versions. A legacy
+campaign without a production date receives its EOS creation date in UTC;
+the detector era `2023` is never treated as a production date.
+
+Shared trigger/pileup inputs and frozen runtime/control payloads are under the
+sibling `/eos/home-j/jniedzie/shift_cmssw_support/`. The migration inventory,
+rename receipts and exact old-to-new path map are in workspace
+`validation/storage_reorganization_20261009/`. Original production receipts
+and their hashes are unchanged; `shift_storage_paths.py` resolves their old
+paths only when accessing files. Histogram and plot configurations use the new
+tier paths. Historical paths in dated records below describe their original
+deployment, rather than current locations. Retained frozen jobs must not be
+resubmitted against old paths; prepare a new deployment including the storage
+resolver and the new output layout first.
+
 The decay-corrected V10 campaign is controlled by DAGMan `12844748`, with
 watchdog `12844749`, under `validation/ntuple_production_20261007_v10/`.
 It automatically runs the existing histogrammer after each validated Nano
@@ -161,6 +198,16 @@ to overwrite existing files. Runtime transfers retry
 three times, with a ten-minute limit per attempt; extraction and relocation
 have separate limits. Exit 75 requests another worker start, capped at four
 starts. Checksum failures, analysis errors and exhausted retries remain held.
+Startup timeouts and killed startup children use this retry path; a retry avoids
+the previous worker node. A killed histogram application remains held.
+Event-file reads, directory creation and publication use the system XRootD
+tools with the Python/ROOT library environment removed from those child
+processes. They retry three times before requesting a bounded restart on another
+node. The application keeps its frozen Python/ROOT runtime and configuration.
+Full application output is retained as gzip/base64 inside the Condor stdout
+log to avoid filling the AFS quota with repeated progress messages. Decode it
+with `python3 utils/histogram_worker.py --decode-log JOB.out --decoded-output
+JOB.application.log`. Application failures also retain a plain stderr tail.
 Use `max_materialize = 100` and `max_idle = 20`; a 1 GB runtime archive must
 not be downloaded by 1,000 simultaneous cold workers. A factory limit does
 not throttle jobs already materialized: recover that backlog in bounded waves.

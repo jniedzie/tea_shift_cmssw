@@ -22,6 +22,10 @@ class MergedSampleTest(unittest.TestCase):
                                   self.directory / 'missing_storage_map.json')
         migration_default.start()
         self.addCleanup(migration_default.stop)
+        retention_default = patch('shift_storage_paths.DEFAULT_RETENTION_MANIFEST',
+                                  self.directory / 'missing_retention_map.json')
+        retention_default.start()
+        self.addCleanup(retention_default.stop)
 
     def complete(self):
         path = self.directory / 'ntuple_sampling_complete_200events.root'
@@ -98,6 +102,10 @@ class CompleteNanoInventoryTest(unittest.TestCase):
                                   self.root / 'missing_storage_map.json')
         migration_default.start()
         self.addCleanup(migration_default.stop)
+        retention_default = patch('shift_storage_paths.DEFAULT_RETENTION_MANIFEST',
+                                  self.root / 'missing_retention_map.json')
+        retention_default.start()
+        self.addCleanup(retention_default.stop)
         self.campaign = 'shift_detector_representative_20261005_v8'
         self.base = '/eos/home-j/jniedzie/shift_cmssw'
         self.eos = '/eos/user/j/jniedzie/shift_cmssw/ntuple_production/' + self.campaign

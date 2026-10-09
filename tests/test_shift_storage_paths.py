@@ -45,6 +45,10 @@ class StorageResolverTest(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.manifest = self.root / "map.json"
+        retention_default = patch.object(storage, "DEFAULT_RETENTION_MANIFEST",
+                                         self.root / "absent_retention.json")
+        retention_default.start()
+        self.addCleanup(retention_default.stop)
         self.old = "/eos/user/j/jniedzie/shift_cmssw/ntuple_production/campaign/qcd_0to1/job0000000/nano.root"
         self.new = "/eos/user/j/jniedzie/shift_cmssw/qcd_pThat0to1GeV/campaign_20261007/nanoAOD/nano_job0000000.root"
         self.record = dict(schema="shift-storage-path-map-v1", complete=True, paths={self.old: self.new},
@@ -195,6 +199,187 @@ class StorageResolverTest(unittest.TestCase):
         self.write()
         with self.assertRaisesRegex(ValueError, "without traversal"):
             self.resolve(self.old)
+
+
+class StorageRetentionTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.migration = self.root / "migration.json"
+        self.retention = self.root / "retention.json"
+        self.base = "/eos/user/j/jniedzie/shift_cmssw/"
+        self.campaign = self.base + "jpsi_pThat1to5GeV/old_20260921"
+        self.archive = ("/eos/user/j/jniedzie/shift_cmssw_support/legacy_references/"
+                        "jpsi_pThat1to5GeV/old_20260921")
+        self.old = self.base + "jpsi/old/samples/step4/file.root"
+        self.alias = self.old.replace("/old/", "/logical_old/")
+        self.dated = self.campaign + "/nanoAOD/file.root"
+        self.migration_record = dict(schema="shift-storage-path-map-v1", complete=True,
+                                     paths={self.old: self.dated}, aliases={self.alias: self.dated})
+        self.record = dict(schema="shift-storage-retention-map-v1", complete=True,
+                           archive_prefixes={self.campaign: self.archive}, deleted_paths=[])
+        self.migration.write_text(json.dumps(self.migration_record))
+        self.write()
+        for setting, value in (("DEFAULT_MIGRATION_MANIFEST", self.migration),
+                               ("DEFAULT_RETENTION_MANIFEST", self.retention)):
+            selected = patch.object(storage, setting, value)
+            selected.start()
+            self.addCleanup(selected.stop)
+        environment = patch.dict("os.environ", {}, clear=True)
+        environment.start()
+        self.addCleanup(environment.stop)
+
+    def write(self):
+        self.retention.write_text(json.dumps(self.record))
+
+    def test_legacy_alias_and_dated_paths_resolve_without_rewriting_migration(self):
+        before = self.migration.read_bytes()
+        expected = self.archive + "/nanoAOD/file.root"
+        for path in (self.old, self.alias, self.dated):
+            with self.subTest(path=path):
+                self.assertEqual(storage.resolve_storage_path(path), expected)
+        self.assertEqual(self.migration.read_bytes(), before)
+
+    def test_archive_retains_local_mount_and_remote_pfn_spelling(self):
+        expected = self.archive + "/nanoAOD/file.root"
+        for path in (self.old, self.alias, self.dated):
+            with self.subTest(path=path):
+                self.assertEqual(storage.resolve_storage_path(path.replace("/eos/user/j", "/eos/home-j")),
+                                 expected.replace("/eos/user/j", "/eos/home-j"))
+                self.assertEqual(storage.resolve_storage_path("root://eosuser.cern.ch/" + path),
+                                 "root://eosuser.cern.ch/" + expected)
+
+    def test_archived_config_directory_resolves_after_exact_migration_mapping(self):
+        old = self.base + "jpsi/old/configs/step1"
+        self.migration_record["directories"] = {old: self.campaign + "/metadata/legacy/configs/step1"}
+        self.migration.write_text(json.dumps(self.migration_record))
+        self.assertEqual(storage.resolve_storage_path(old), self.archive + "/metadata/legacy/configs/step1")
+
+    def test_longest_archive_prefix_wins_with_component_boundaries(self):
+        self.record["archive_prefixes"][self.campaign + "/nanoAOD"] = self.archive + "/special"
+        self.write()
+        self.assertEqual(storage.resolve_storage_path(self.dated), self.archive + "/special/file.root")
+        adjacent = self.campaign + "_extra/nanoAOD/file.root"
+        self.assertEqual(storage.resolve_storage_path(adjacent), adjacent)
+        self.assertEqual(storage.resolve_storage_path(self.campaign + "/nanoAOD_extra/file.root"),
+                         self.archive + "/nanoAOD_extra/file.root")
+
+    def test_tombstone_blocks_legacy_alias_dated_mount_and_pfn_before_archive(self):
+        self.record["deleted_paths"] = [self.dated]
+        self.write()
+        for path in (self.old, self.alias, self.dated,
+                     self.dated.replace("/eos/user/j", "/eos/home-j"),
+                     "root://eosuser.cern.ch/" + self.old):
+            with self.subTest(path=path), self.assertRaisesRegex(FileNotFoundError, "data was retired"):
+                storage.resolve_storage_path(path)
+        self.assertEqual(storage.resolve_storage_path(self.campaign + "/nanoAOD/another.root"),
+                         self.archive + "/nanoAOD/another.root")
+
+    def test_tombstone_also_checks_original_canonical_input(self):
+        self.record["deleted_paths"] = [self.old]
+        self.write()
+        with self.assertRaisesRegex(FileNotFoundError, "data was retired"):
+            storage.resolve_storage_path(self.old)
+
+    def test_gen_pilot_tombstone_does_not_retire_campaign_metadata(self):
+        pilot = self.base + "qcd_pThat1to2GeV/pilot_20260921/GEN_pilot/gen.root"
+        metadata = pilot.replace("GEN_pilot/gen.root", "metadata/normalization_complete.json")
+        self.record["deleted_paths"] = [pilot]
+        self.write()
+        with self.assertRaises(FileNotFoundError):
+            storage.resolve_storage_path(pilot)
+        self.assertEqual(storage.resolve_storage_path(metadata), metadata)
+
+    def test_current_outputs_and_archive_paths_are_unchanged(self):
+        for path in (self.base + "jpsi_pThat1to2GeV/detector_20261007_v10/nanoAOD/current.root",
+                     self.archive + "/nanoAOD/file.root"):
+            with self.subTest(path=path):
+                self.assertEqual(storage.resolve_storage_path(path), path)
+
+    def test_incomplete_overlay_blocks_only_shift_inputs(self):
+        self.record["complete"] = False
+        self.write()
+        for path in (self.old, self.dated,
+                     self.base + "jpsi_pThat1to2GeV/current_20261007/nanoAOD/file.root",
+                     "/eos/home-j/jniedzie/shift_cmssw_support/runtime.tar.gz"):
+            with self.subTest(path=path), self.assertRaisesRegex(RuntimeError, "retention is not validated"):
+                storage.resolve_storage_path(path)
+        for path in ("/tmp/source.root", "/afs/work/manifest.json",
+                     self.base.replace("shift_cmssw/", "shift_cmssw_extra/") + "file.root"):
+            with self.subTest(path=path):
+                self.assertEqual(storage.resolve_storage_path(path), path)
+                self.assertEqual(storage.resolve_storage_path(path, self.migration, self.retention), path)
+
+    def test_custom_migration_maps_opt_out_of_default_retention(self):
+        self.record["complete"] = False
+        self.write()
+        self.assertEqual(storage.resolve_storage_path(self.old, self.migration), self.dated)
+        with patch.dict("os.environ", {"SHIFT_STORAGE_MIGRATION_MANIFEST": str(self.migration)}):
+            self.assertEqual(storage.resolve_storage_path(self.old), self.dated)
+
+    def test_custom_migration_can_explicitly_opt_into_retention(self):
+        self.assertEqual(storage.resolve_storage_path(self.old, self.migration, self.retention),
+                         self.archive + "/nanoAOD/file.root")
+        self.record["deleted_paths"] = [self.dated]
+        self.write()
+        with self.assertRaises(FileNotFoundError):
+            storage.resolve_storage_path(self.old, self.migration, self.retention)
+
+    def test_absent_default_overlay_preserves_migration_behavior(self):
+        self.retention.unlink()
+        self.assertEqual(storage.resolve_storage_path(self.old), self.dated)
+
+    def test_dated_paths_can_be_archived_without_a_migration_map(self):
+        self.migration.unlink()
+        self.assertEqual(storage.resolve_storage_path(self.dated), self.archive + "/nanoAOD/file.root")
+
+    def test_missing_explicit_retention_map_is_refused_for_shift_inputs(self):
+        with self.assertRaisesRegex(RuntimeError, "retention map is missing"):
+            storage.resolve_storage_path(self.old, self.migration, self.root / "missing.json")
+
+    def test_retention_schema_and_mapping_types_are_refused(self):
+        for change in ({"schema": "unknown"}, {"archive_prefixes": []}, {"deleted_paths": {}},
+                       {"archive_prefixes": {self.campaign: 17}}, {"deleted_paths": [17]}):
+            record = dict(self.record, **change)
+            self.retention.write_text(json.dumps(record))
+            with self.subTest(change=change), self.assertRaises(RuntimeError):
+                storage.resolve_storage_path(self.old)
+
+    def test_retention_rejects_traversal_relative_and_out_of_scope_paths(self):
+        for prefixes, deleted in (({"relative": self.archive}, []),
+                                  ({self.campaign: self.archive + "/../escape"}, []),
+                                  ({self.campaign: "/tmp/archive"}, []),
+                                  ({"/tmp/source": self.archive}, []),
+                                  ({}, ["/tmp/deleted.root"]),
+                                  ({}, [self.base + "../deleted.root"])):
+            self.record.update(archive_prefixes=prefixes, deleted_paths=deleted)
+            self.write()
+            with self.subTest(prefixes=prefixes, deleted=deleted), self.assertRaises(ValueError):
+                storage.resolve_storage_path(self.old)
+
+    def test_duplicate_json_retention_keys_are_refused(self):
+        self.retention.write_text('{"schema":"shift-storage-retention-map-v1",'
+                                  '"complete":true,"complete":false,"archive_prefixes":{},"deleted_paths":[]}')
+        with self.assertRaisesRegex(ValueError, "Duplicate storage mapping key"):
+            storage.resolve_storage_path(self.old)
+
+    def test_duplicate_canonical_prefixes_and_tombstones_are_refused(self):
+        local = self.campaign.replace("/eos/user/j", "/eos/home-j")
+        self.record["archive_prefixes"][local] = self.archive
+        self.write()
+        with self.assertRaisesRegex(ValueError, "Duplicate canonical storage retention prefix"):
+            storage.resolve_storage_path(self.old)
+        self.record.update(archive_prefixes={}, deleted_paths=[self.dated, self.dated.replace("/eos/user/j", "/eos/home-j")])
+        self.write()
+        with self.assertRaisesRegex(ValueError, "Duplicate retired storage path"):
+            storage.resolve_storage_path(self.old)
+
+    def test_retention_replacement_invalidates_cached_record(self):
+        self.assertEqual(storage.resolve_storage_path(self.old), self.archive + "/nanoAOD/file.root")
+        self.record["archive_prefixes"][self.campaign] = self.archive + "/updated"
+        self.write()
+        self.assertEqual(storage.resolve_storage_path(self.old), self.archive + "/updated/nanoAOD/file.root")
 
 
 if __name__ == "__main__":
