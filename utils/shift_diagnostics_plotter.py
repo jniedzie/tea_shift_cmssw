@@ -118,7 +118,10 @@ DIMUON_SUMMARY_VARIABLES = [
     variables for variables in DIMUON_RESOLUTION_VARIABLES if variables[0] not in ("vx", "vy")
 ]
 
-EFFICIENCY_VARIABLES = ["pt", "pz", "eta", "phi", "vz"]
+MUON_EFFICIENCY_VARIABLES = ["pt", "pz", "eta", "phi", "vz"]
+DIMUON_EFFICIENCY_VARIABLES = [*MUON_EFFICIENCY_VARIABLES, "openingAngle"]
+# Preserve the original five-variable list for callers using the old name.
+EFFICIENCY_VARIABLES = MUON_EFFICIENCY_VARIABLES
 MUON_EFFICIENCY_TITLES = {
     "pt": "Generator p^{#mu}_{T} (GeV)",
     "pz": "Generator p^{#mu}_{z} (GeV)",
@@ -132,6 +135,7 @@ DIMUON_EFFICIENCY_TITLES = {
     "eta": "Generator #eta^{#mu#mu}",
     "phi": "Generator #phi^{#mu#mu}",
     "vz": "Generator v^{#mu#mu}_{z} (cm)",
+    "openingAngle": "Generator #mu#mu opening angle (rad)",
 }
 MUON_EFFICIENCY_TYPES = [
     ("", "Inclusive", ROOT.kBlack),
@@ -1049,23 +1053,56 @@ def efficiency_prefix(object_name, category):
   return f"{object_name}{category}Efficiency"
 
 
+def efficiency_variables(object_name):
+  return DIMUON_EFFICIENCY_VARIABLES if object_name == "ShiftDimuonVertex" else MUON_EFFICIENCY_VARIABLES
+
+
+def draw_missing_opening_angle(labels=()):
+  ROOT.gPad.SetLogx(False)
+  ROOT.gPad.SetLogy(False)
+  notice = ROOT.TPaveText(0.08, 0.25, 0.95, 0.75, "NDC")
+  notice.SetFillStyle(0)
+  notice.SetBorderSize(0)
+  notice.SetTextFont(42)
+  notice.SetTextSize(min(0.045, 0.55 / (len(labels) + 3)))
+  notice.AddText("Opening-angle efficiency unavailable")
+  for label in labels:
+    notice.AddText(f"Missing histograms: {label}")
+  notice.AddText("Rerun shift_histogrammer for these inputs" if labels
+                 else "Rerun shift_histogrammer for this input")
+  notice.Draw()
+  return notice
+
+
 def draw_efficiencies(canvas, input_file, object_name, categories, comparison=None):
   objects = []
   legend_entries = []
   is_dimuon = object_name == "ShiftDimuonVertex"
+  variables = efficiency_variables(object_name)
   efficiency_titles = DIMUON_EFFICIENCY_TITLES if is_dimuon else MUON_EFFICIENCY_TITLES
-  for pad_index, variable in enumerate(EFFICIENCY_VARIABLES, 1):
+  for pad_index, variable in enumerate(variables, 1):
     canvas.cd(pad_index)
     ROOT.gPad.SetLeftMargin(0.25 if is_dimuon else 0.22)
     ROOT.gPad.SetRightMargin(0.07)
     ROOT.gPad.SetBottomMargin(0.23)
     ROOT.gPad.SetTopMargin(0.08)
+    ROOT.gPad.SetLogx(variable == "openingAngle")
     ROOT.gPad.SetLogy(is_dimuon)
     curves = []
     frame = None
     series = ([("", label, color, marker, source) for (label, source), (_, color, marker) in zip(
         comparison, comparison_styles(len(comparison)))] if comparison is not None
         else [(category, label, color, 20, input_file) for category, label, color in categories])
+    if variable == "openingAngle" and comparison is not None:
+      prefix = efficiency_prefix(object_name, "")
+      missing_labels = [label for label, source in comparison
+                        if not source.Get(f"efficiency/{prefix}_{variable}_pass")
+                        or not source.Get(f"efficiency/{prefix}_{variable}_total")]
+      if missing_labels:
+        print("Warning: opening-angle comparison unavailable; missing histograms for "
+              + ", ".join(missing_labels))
+        objects.append(draw_missing_opening_angle(missing_labels))
+        continue
     for category, label, color, marker, source in series:
       prefix = efficiency_prefix(object_name, category)
       passed = source.Get(f"efficiency/{prefix}_{variable}_pass")
@@ -1078,14 +1115,18 @@ def draw_efficiencies(canvas, input_file, object_name, categories, comparison=No
         continue
       if frame is None:
         x_axis = total.GetXaxis()
+        # The first angle bin starts at zero. Show its centre on the log axis
+        # while retaining the whole bin, including zero, in the efficiency.
+        x_min = (0.2 * x_axis.GetBinCenter(1) if variable == "openingAngle"
+                 and x_axis.GetXmin() <= 0 else x_axis.GetXmin())
         y_min, y_max = (1.e-3, 1.3) if is_dimuon else (0.0, 1.08)
-        frame = ROOT.gPad.DrawFrame(x_axis.GetXmin(), y_min, x_axis.GetXmax(), y_max)
+        frame = ROOT.gPad.DrawFrame(x_min, y_min, x_axis.GetXmax(), y_max)
         set_axes_titles(frame, efficiency_titles[variable], "Reconstruction efficiency")
         if is_dimuon:
           frame.GetYaxis().SetTitleOffset(1.10)
         objects.append(frame)
         for efficiency_value in ((1.0, 0.1, 0.01) if is_dimuon else (1.0, 0.5)):
-          line = ROOT.TLine(x_axis.GetXmin(), efficiency_value, x_axis.GetXmax(), efficiency_value)
+          line = ROOT.TLine(x_min, efficiency_value, x_axis.GetXmax(), efficiency_value)
           line.SetLineColor(ROOT.kGray + 1)
           line.SetLineStyle(2 if efficiency_value == 1.0 else 3)
           line.SetLineWidth(1)
@@ -1112,12 +1153,14 @@ def draw_efficiencies(canvas, input_file, object_name, categories, comparison=No
         legend_label = f"{label} ( #varepsilon_{{tot}} = {100.0 * total_efficiency:.2g}% ) "
         legend_entries.append((graph, legend_label))
     if not curves:
+      if variable == "openingAngle":
+        objects.append(draw_missing_opening_angle())
       continue
     objects.extend(item for efficiency, graph, _ in curves for item in (efficiency, graph))
 
   # Reserve the pad immediately after the last variable entirely for the
   # legend so the layout remains correct when variables are added or removed.
-  canvas.cd(len(EFFICIENCY_VARIABLES) + 1)
+  canvas.cd(len(variables) + 1)
   ROOT.gPad.SetLeftMargin(0.04)
   ROOT.gPad.SetRightMargin(0.04)
   ROOT.gPad.SetTopMargin(0.04)
@@ -1224,10 +1267,15 @@ def run_version_comparison(args):
               require_complete_resolution(hist)
       for object_name, categories in (("ShiftMuon", MUON_EFFICIENCY_TYPES),
                                       ("ShiftDimuonVertex", DIMUON_EFFICIENCY_TYPES)):
+        variables = efficiency_variables(object_name)
         for category, _, _ in categories:
-          for variable in EFFICIENCY_VARIABLES if category == "" else EFFICIENCY_VARIABLES[:1]:
+          for variable in variables if category == "" else variables[:1]:
             prefix = f"efficiency/{efficiency_prefix(object_name, category)}_{variable}"
             passed, total = source.Get(prefix + "_pass"), source.Get(prefix + "_total")
+            # Legacy files lack the new pair entirely. Keep the established
+            # comparisons and visibly mark the angle panel as unavailable.
+            if variable == "openingAngle" and not passed and not total:
+              continue
             if not passed or not total or not ROOT.TEfficiency.CheckConsistency(passed, total):
               raise RuntimeError(f"{label}: missing or inconsistent efficiency {prefix}")
     output_dir = os.path.join(args.output_dir, "comparisons", "_vs_".join(f"v{version}" for version in versions))
@@ -1260,7 +1308,7 @@ def run_version_comparison(args):
       for category, display_name, _ in categories:
         values = []
         for source in sources:
-          prefix = f"efficiency/{efficiency_prefix(object_name, category)}_{EFFICIENCY_VARIABLES[0]}"
+          prefix = f"efficiency/{efficiency_prefix(object_name, category)}_{efficiency_variables(object_name)[0]}"
           passed, total = source.Get(prefix + "_pass"), source.Get(prefix + "_total")
           n_pass = passed.Integral(0, passed.GetNbinsX() + 1)
           n_total = total.Integral(0, total.GetNbinsX() + 1)
@@ -1388,7 +1436,8 @@ def main():
       ("ShiftDimuonVertex", DIMUON_EFFICIENCY_TYPES, "shiftdimuonvertex_efficiency"),
   ):
     efficiency_canvases.append((
-        ROOT.TCanvas(f"canvas_{output_stem}", f"{object_name} efficiency", 1100, 1200),
+        ROOT.TCanvas(f"canvas_{output_stem}", f"{object_name} efficiency", 1100,
+                     1600 if object_name == "ShiftDimuonVertex" else 1200),
         object_name,
         categories,
         f"{output_stem}.pdf",
@@ -1410,7 +1459,7 @@ def main():
     drawn_objects += draw_resolutions(canvas, canvas_spec["names"], input_file, DIMUON_RESOLUTION_REBIN)
   drawn_objects += draw_qoverpt_comparison(qoverpt_canvas[0], input_file, CMS_DP_QOVERPT_DATA)
   for canvas, object_name, categories, _ in efficiency_canvases:
-    canvas.Divide(2, 3)
+    canvas.Divide(2, math.ceil((len(efficiency_variables(object_name)) + 1) / 2))
     drawn_objects += draw_efficiencies(canvas, input_file, object_name, categories)
 
   output_names = [
