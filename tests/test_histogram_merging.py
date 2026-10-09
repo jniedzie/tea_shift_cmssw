@@ -16,6 +16,34 @@ spec.loader.exec_module(merge)
 
 
 class HistogramMergeTest(unittest.TestCase):
+    def test_raw_nano_groups_keep_bins_separate(self):
+        jobs = merge.collect_input_group_jobs({
+            '/qcd/groups': ['/qcd/job2/nano.root', '/qcd/job0/nano.root', '/qcd/job1/nano.root'],
+            '/dy/groups': ['/dy/job4/nano.root'],
+        }, chunk_size=2)
+        self.assertEqual({job[5]: job[-1] for job in jobs}, {
+            '/dy/groups/ntuple_0.root': ['/dy/job4/nano.root'],
+            '/qcd/groups/ntuple_0.root': ['/qcd/job0/nano.root', '/qcd/job1/nano.root'],
+            '/qcd/groups/ntuple_1.root': ['/qcd/job2/nano.root'],
+        })
+
+    def test_raw_nano_duplicates_and_overwrite_rejected(self):
+        for groups in ({'/out/a': ['/nano.root'], '/out/b': ['/nano.root']},
+                       {'/out': ['/out/ntuple_0.root']},
+                       {'/out': ['/a.root'], '/out/.': ['/b.root']}):
+            with self.subTest(groups=groups), self.assertRaises(ValueError):
+                merge.collect_input_group_jobs(groups, chunk_size=20)
+
+    def test_raw_nano_missing_input_stops_before_submission(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config = Path(temporary) / 'files.py'
+            config.write_text(f"merge_input_groups = {{'{temporary}/out': ['{temporary}/missing.root']}}\n")
+            with patch.object(sys, 'argv', ['merge.py', '--files_config', str(config), '--condor']), \
+                 patch.object(merge, 'submit_condor_jobs') as submit:
+                with self.assertRaisesRegex(RuntimeError, 'No merge jobs submitted'):
+                    merge.main()
+            submit.assert_not_called()
+
     def test_groups_exact_inputs_by_process_bin(self):
         jobs = merge.collect_explicit_jobs([
             ("/nano/a.root", "", "/qcd/a.root"),

@@ -4,16 +4,77 @@ This adapts the checksum-pinned local-runtime wrapper, preserving its analysis
 payload and publication commands. Never overwrite a worker used by live jobs.
 """
 import argparse
+import base64
+import gzip
 from pathlib import Path
 import re
+import sys
 
 
 ON_EXIT_HOLD = '(ExitBySignal =?= True) || ((ExitCode =!= 0) && ((ExitCode =!= 75) || (NumJobStarts >= 4)))'
 ON_EXIT_REMOVE = '(ExitBySignal =?= False) && (ExitCode =?= 0)'
 ON_EXIT_HOLD_REASON = '"Histogram worker failed: exit " + string(ExitCode) + "; inspect stderr for phase (runtime retry limit: 4 starts)"'
-ERROR_HANDLER = '''trap 'rc=$?; echo "FATAL: Histogram worker failed during ${tea_phase} (exit ${rc}, line ${LINENO})" >&2; if [[ ( "$rc" == 124 || "$rc" == 137 ) && "$tea_phase" == runtime* ]]; then exit 75; fi; if [[ "$rc" == 75 && "$tea_phase" != runtime* ]]; then exit 1; fi; exit "$rc"' ERR'''
+ERROR_HANDLER = '''trap 'rc=$?; echo "FATAL: Histogram worker failed during ${tea_phase} (exit ${rc}, line ${LINENO})" >&2; if [[ -n "${TEA_TRANSFER_FAILURE_MARKER:-}" && -f "${TEA_TRANSFER_FAILURE_MARKER:-}" ]]; then exit 75; fi; if [[ ( "$rc" == 124 || "$rc" == 137 ) && "$tea_phase" == runtime* ]]; then exit 75; fi; if [[ "$rc" == 75 && "$tea_phase" != runtime* ]]; then exit 1; fi; exit "$rc"' ERR'''
 RUNTIME_CHECKSUM = r'''  printf '%s  %s\n' "$tea_digest" "$tea_stage/runtime.tar.gz" | sha256sum --check --status'''
 RETRY_MACHINE_GUARD = '(ExitCode =!= 75) || isUndefined(LastRemoteHost) || !stringListMember(TARGET.Machine, LastRemoteHost, "@")'
+LOG_BEGIN = '=== TEA APPLICATION LOG GZIP BASE64 BEGIN ==='
+LOG_END = '=== TEA APPLICATION LOG GZIP BASE64 END ==='
+
+NATIVE_XROOTD = r'''tea_native_bin="$job_sandbox/native_xrootd"
+mkdir -p "$tea_native_bin"
+export TEA_TRANSFER_FAILURE_MARKER="$job_sandbox/transfer_retry_exhausted"
+cat > "$tea_native_bin/xrdcp" <<'TEA_NATIVE_XROOTD'
+#!/bin/bash
+set -eo pipefail
+tea_transfer_tool="${0##*/}"
+case "$tea_transfer_tool" in xrdcp) tea_transfer_seconds=120;; xrdfs) tea_transfer_seconds=60;; *) exit 1;; esac
+unset PYTHONPATH PYTHONHOME LD_LIBRARY_PATH LD_PRELOAD ROOTSYS CONDA_PREFIX CONDA_BUILD_SYSROOT
+export PATH=/usr/bin:/bin
+printf '%s\n' "$tea_transfer_tool" > "$TEA_TRANSFER_FAILURE_MARKER"
+for tea_transfer_attempt in 1 2 3; do
+  if timeout -k 15 "$tea_transfer_seconds" "/usr/bin/$tea_transfer_tool" "$@"; then
+    rm -f -- "$TEA_TRANSFER_FAILURE_MARKER"
+    exit 0
+  else
+    tea_transfer_rc=$?
+    echo "Native $tea_transfer_tool failed (exit $tea_transfer_rc), attempt $tea_transfer_attempt/3" >&2
+  fi
+  if [[ "$tea_transfer_attempt" -lt 3 ]]; then sleep $((2 * tea_transfer_attempt)); fi
+done
+echo "RETRYABLE: Native $tea_transfer_tool exhausted its three attempts" >&2
+exit 75
+TEA_NATIVE_XROOTD
+cp "$tea_native_bin/xrdcp" "$tea_native_bin/xrdfs"
+chmod 700 "$tea_native_bin/xrdcp" "$tea_native_bin/xrdfs"
+'''
+
+
+def capture_application(command):
+    return f'''tea_application_log="$job_sandbox/histogram_application.log"
+if {command} > "$tea_application_log" 2>&1; then
+  tea_application_rc=0
+else
+  tea_application_rc=$?
+fi
+/usr/bin/gzip -c "$tea_application_log" > "$tea_application_log.gz"
+echo "{LOG_BEGIN}"
+/usr/bin/base64 "$tea_application_log.gz"
+echo "{LOG_END}"
+echo "Histogram application exited $tea_application_rc; full log retained above in gzip/base64 form"
+if [[ "$tea_application_rc" != 0 ]]; then
+  /usr/bin/tail -c 8192 "$tea_application_log" >&2
+  echo "FATAL: Histogram application or publication failed (exit $tea_application_rc)" >&2
+  if [[ -n "${{TEA_TRANSFER_FAILURE_MARKER:-}}" && -f "${{TEA_TRANSFER_FAILURE_MARKER:-}}" ]]; then exit 75; fi
+  if [[ "$tea_application_rc" == 75 ]]; then exit 1; fi
+  exit "$tea_application_rc"
+fi'''
+
+
+def decode_application_log(text):
+    if text.count(LOG_BEGIN) != 1 or text.count(LOG_END) != 1:
+        raise ValueError('A complete, unique compressed application log is required')
+    encoded = text.split(LOG_BEGIN, 1)[1].split(LOG_END, 1)[0]
+    return gzip.decompress(base64.b64decode(''.join(encoded.split()), validate=True))
 
 DOWNLOAD = r'''  # Retry only runtime transfer failures. Analysis failures remain fatal.
   tea_download_ok=false
@@ -54,6 +115,14 @@ fi''',
         if source.count(old) != 1:
             raise ValueError(f'Unsupported worker: expected exactly one {old!r}')
         source = source.replace(old, new)
+    runtime_path = 'export PATH="$tea_cache/runtime/bin:/usr/bin:/bin"'
+    if source.count(runtime_path) != 1:
+        raise ValueError('Unsupported worker: exactly one runtime activation is required')
+    source = source.replace(runtime_path, NATIVE_XROOTD + 'export PATH="$tea_native_bin:$tea_cache/runtime/bin:/usr/bin:/bin"')
+    commands = re.findall(r'^timeout -k 15 600 [^\n]*condor_runner\.py \\\n(?:[^\n]*\\\n)*[^\n]*', source, re.MULTILINE)
+    if len(commands) != 1:
+        raise ValueError('Unsupported worker: exactly one histogram application is required')
+    source = source.replace(commands[0], capture_application(commands[0].replace('timeout -k 15 600', 'timeout -k 15 1200')))
     return source
 
 
@@ -96,11 +165,23 @@ def harden_submit(source, worker):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--source', type=Path, required=True)
-    parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--source', type=Path)
+    parser.add_argument('--output', type=Path)
     parser.add_argument('--source-submit', type=Path)
     parser.add_argument('--output-submit', type=Path)
+    parser.add_argument('--decode-log', type=Path)
+    parser.add_argument('--decoded-output', type=Path)
     args = parser.parse_args()
+    if args.decode_log:
+        data = decode_application_log(args.decode_log.read_text())
+        if args.decoded_output:
+            with args.decoded_output.open('xb') as output:
+                output.write(data)
+        else:
+            sys.stdout.buffer.write(data)
+        return
+    if not args.source or not args.output:
+        parser.error('--source and --output are required when preparing a worker')
     if bool(args.source_submit) != bool(args.output_submit):
         parser.error('--source-submit and --output-submit must be used together')
     text = harden_worker(args.source.read_text())

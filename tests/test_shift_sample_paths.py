@@ -18,6 +18,10 @@ class MergedSampleTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.directory = Path(self.tmp.name)
+        migration_default = patch('shift_storage_paths.DEFAULT_MIGRATION_MANIFEST',
+                                  self.directory / 'missing_storage_map.json')
+        migration_default.start()
+        self.addCleanup(migration_default.stop)
 
     def complete(self):
         path = self.directory / 'ntuple_sampling_complete_200events.root'
@@ -54,6 +58,22 @@ class MergedSampleTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'Invalid merged-sample'):
             latest_merged_sample(self.directory)
 
+    def test_relocated_merge_keeps_its_original_sidecar(self):
+        original = self.complete()
+        relocated = self.directory / 'nanoAOD_merged'
+        relocated.mkdir()
+        target = relocated / original.name
+        sidecar = original.with_suffix('.json')
+        original_record = sidecar.read_bytes()
+        original.rename(target)
+        sidecar.rename(target.with_suffix('.json'))
+        migration = self.directory / 'map.json'
+        migration.write_text(json.dumps(dict(schema='shift-storage-path-map-v1',
+            complete=True, paths={str(original): str(target)})))
+        with patch.dict('os.environ', {'SHIFT_STORAGE_MIGRATION_MANIFEST': str(migration)}):
+            self.assertEqual(latest_merged_sample(relocated), (str(target), 'a' * 12))
+        self.assertEqual(target.with_suffix('.json').read_bytes(), original_record)
+
     def test_unknown_files_rejected(self):
         (self.directory / 'ntuple_unknown.root').touch()
         with self.assertRaisesRegex(RuntimeError, 'No versioned or validated'):
@@ -74,6 +94,10 @@ class CompleteNanoInventoryTest(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
+        migration_default = patch('shift_storage_paths.DEFAULT_MIGRATION_MANIFEST',
+                                  self.root / 'missing_storage_map.json')
+        migration_default.start()
+        self.addCleanup(migration_default.stop)
         self.campaign = 'shift_detector_representative_20261005_v8'
         self.base = '/eos/home-j/jniedzie/shift_cmssw'
         self.eos = '/eos/user/j/jniedzie/shift_cmssw/ntuple_production/' + self.campaign
@@ -111,7 +135,32 @@ class CompleteNanoInventoryTest(unittest.TestCase):
         files = self.files()
         self.assertEqual(len(files), 2)
         self.assertTrue(files[0][0].endswith('qcd_0to1/job0000000/nano.root'))
-        self.assertEqual(files[1][2], self.base + '/jpsi/' + self.campaign + '_20to-1/histograms/histograms_job0000001.root')
+        self.assertEqual(files[1][2], self.base + '/jpsi_pThat20toinfGeV/' + self.campaign + '/histograms/histograms_job0000001.root')
+
+    def test_relocated_inputs_preserve_original_receipt_validation(self):
+        original_rows = [(self.root / 'results' / f'status{job}.json').read_bytes() for job in range(2)]
+        original_plan = (self.root / 'manifest.json').read_bytes()
+        original_sampling = (self.root / 'sampling_plan.json').read_bytes()
+        migration = self.root / 'map.json'
+        destinations = [
+            self.base.replace('/eos/home-j', '/eos/user/j') + '/qcd_pThat0to1GeV/' + self.campaign + '/nanoAOD/nano_job0000000.root',
+            self.base.replace('/eos/home-j', '/eos/user/j') + '/jpsi_pThat20toinfGeV/' + self.campaign + '/nanoAOD/nano_job0000001.root',
+        ]
+        migration.write_text(json.dumps(dict(schema='shift-storage-path-map-v1', complete=True,
+            paths={row['nano_path']: destination for row, destination in zip(self.rows, destinations)})))
+        with patch.dict('os.environ', {'SHIFT_STORAGE_MIGRATION_MANIFEST': str(migration)}):
+            files = self.files()
+            self.assertEqual([row[0] for row in files],
+                [path.replace('/eos/user/j', '/eos/home-j') for path in destinations])
+            self.assertEqual([(self.root / 'results' / f'status{job}.json').read_bytes()
+                for job in range(2)], original_rows)
+            # A rewritten receipt must still fail even when it names the new file.
+            self.rows[0]['nano_path'] = destinations[0]
+            self.refresh()
+            with self.assertRaisesRegex(RuntimeError, 'Unvalidated Nano receipt'):
+                self.files()
+        self.assertEqual((self.root / 'manifest.json').read_bytes(), original_plan)
+        self.assertEqual((self.root / 'sampling_plan.json').read_bytes(), original_sampling)
 
     def test_terminal_failed_production_reports_failure_instead_of_waiting(self):
         (self.root / 'production_complete.json').unlink()

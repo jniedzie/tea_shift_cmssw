@@ -2,6 +2,8 @@
 import importlib.util
 import argparse
 from array import array
+from contextlib import redirect_stdout
+import io
 import subprocess
 from pathlib import Path
 import tempfile
@@ -14,7 +16,63 @@ plotter = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(plotter)
 
 
+OPENING_ANGLE_EDGES = array("d", [0., .001, .002, .003, .005, .01, .02, .03, .05,
+                                 .075, .1, .15, .2, .3, .5, 1., 1.5, 2., 3.15])
+
+
+class EfficiencySource:
+  def __init__(self, object_name, include_opening_angle=True):
+    self.histograms = {}
+    self.requests = []
+    for variable in plotter.efficiency_variables(object_name):
+      if variable == "openingAngle" and not include_opening_angle:
+        continue
+      for suffix, count in (("pass", 5), ("total", 10)):
+        name = f"{plotter.efficiency_prefix(object_name, '')}_{variable}_{suffix}"
+        hist = (ROOT.TH1D(name, name, len(OPENING_ANGLE_EDGES) - 1, OPENING_ANGLE_EDGES)
+                if variable == "openingAngle" else ROOT.TH1D(name, name, 10, -1, 1))
+        hist.SetDirectory(0)
+        for _ in range(count):
+          hist.Fill(0. if variable == "openingAngle" else 0.1)
+        self.histograms["efficiency/" + name] = hist
+
+  def Get(self, name):
+    self.requests.append(name)
+    return self.histograms.get(name)
+
+
 class ComparisonTests(unittest.TestCase):
+  def write_histogram_fixture(self, root, version, label, include_opening_angle=True):
+    path = root / f"v{version}_abcdef123456_{label.replace(' ', '_')}" / "histograms.root"
+    path.parent.mkdir()
+    with ROOT.TFile(str(path), "RECREATE") as output:
+      output.mkdir("resolution").cd()
+      for summary in plotter.SUMMARY_CANVAS_SPECS:
+        for category, _, _ in summary["categories"]:
+          for variables in summary["variables"]:
+            for variable in variables:
+              name = f"{summary['histogram_prefix']}{category}_{variable}"
+              hist = ROOT.TH1D(name, name, 200, -100, 100)
+              for _ in range(10):
+                for value in (-20., 0.1, 3. * version):
+                  hist.Fill(value)
+              hist.Write()
+      output.mkdir("efficiency").cd()
+      for object_name, categories in (("ShiftMuon", plotter.MUON_EFFICIENCY_TYPES),
+                                      ("ShiftDimuonVertex", plotter.DIMUON_EFFICIENCY_TYPES)):
+        for category, _, _ in categories:
+          for variable in plotter.efficiency_variables(object_name):
+            if variable == "openingAngle" and not include_opening_angle:
+              continue
+            for suffix, count in (("pass", version), ("total", 10)):
+              name = f"{plotter.efficiency_prefix(object_name, category)}_{variable}_{suffix}"
+              hist = (ROOT.TH1D(name, name, len(OPENING_ANGLE_EDGES) - 1, OPENING_ANGLE_EDGES)
+                      if variable == "openingAngle" else ROOT.TH1D(name, name, 10, -1, 1))
+              for _ in range(count):
+                hist.Fill(0.1)
+              hist.Write()
+    return path
+
   def test_labels_and_duplicate_recipes(self):
     selections = [("", 44, "ca5af1024788_control_v3"),
                   ("", 45, "ca5af1024788-dirty-12345678_materialField_v3"),
@@ -83,31 +141,7 @@ class ComparisonTests(unittest.TestCase):
       root = Path(directory)
       labels = ["control v3", "material v3", "field v3", "materialField v3"]
       for version, label in enumerate(labels, 1):
-        path = root / f"v{version}_abcdef123456_{label.replace(' ', '_')}" / "histograms.root"
-        path.parent.mkdir()
-        with ROOT.TFile(str(path), "RECREATE") as output:
-          output.mkdir("resolution").cd()
-          for summary in plotter.SUMMARY_CANVAS_SPECS:
-            for category, _, _ in summary["categories"]:
-              for variables in summary["variables"]:
-                for variable in variables:
-                  name = f"{summary['histogram_prefix']}{category}_{variable}"
-                  hist = ROOT.TH1D(name, name, 200, -100, 100)
-                  for _ in range(10):
-                    for value in (-20., 0.1, 3. * version):
-                      hist.Fill(value)
-                  hist.Write()
-          output.mkdir("efficiency").cd()
-          for object_name, categories in (("ShiftMuon", plotter.MUON_EFFICIENCY_TYPES),
-                                          ("ShiftDimuonVertex", plotter.DIMUON_EFFICIENCY_TYPES)):
-            for category, _, _ in categories:
-              for variable in plotter.EFFICIENCY_VARIABLES:
-                for suffix, count in (("pass", version), ("total", 10)):
-                  name = f"{plotter.efficiency_prefix(object_name, category)}_{variable}_{suffix}"
-                  hist = ROOT.TH1D(name, name, 10, -1, 1)
-                  for _ in range(count):
-                    hist.Fill(0.1)
-                  hist.Write()
+        self.write_histogram_fixture(root, version, label)
       args = argparse.Namespace(compare_versions=[1, 2, 3, 4], histograms_dir=str(root), output_dir=str(root))
       plotter.run_version_comparison(args)
       pdfs = list((root / "comparisons/v1_vs_v2_vs_v3_vs_v4").glob("*.pdf"))
@@ -116,6 +150,83 @@ class ComparisonTests(unittest.TestCase):
         text = subprocess.check_output(["pdftotext", str(pdf), "-"], text=True)
         for label in labels:
           self.assertIn(label, text)
+        if pdf.name == "shiftdimuonvertex_efficiency_inclusive.pdf":
+          self.assertIn("opening angle (rad)", text)
+        elif pdf.name == "shiftmuon_efficiency_inclusive.pdf":
+          self.assertNotIn("opening angle", text)
+
+  def test_legacy_comparison_warns_without_drawing_a_partial_angle_comparison(self):
+    with tempfile.TemporaryDirectory() as directory:
+      root = Path(directory)
+      self.write_histogram_fixture(root, 1, "current")
+      self.write_histogram_fixture(root, 2, "legacy", include_opening_angle=False)
+      args = argparse.Namespace(compare_versions=[1, 2], histograms_dir=str(root), output_dir=str(root))
+      messages = io.StringIO()
+      with redirect_stdout(messages):
+        plotter.run_version_comparison(args)
+      self.assertIn("opening-angle comparison unavailable; missing histograms for legacy", messages.getvalue())
+      output = root / "comparisons/v1_vs_v2"
+      self.assertEqual(len(list(output.glob("*.pdf"))), 6)
+      text = subprocess.check_output(
+          ["pdftotext", str(output / "shiftdimuonvertex_efficiency_inclusive.pdf"), "-"], text=True)
+      self.assertIn("Opening-angle efficiency unavailable", text)
+      self.assertIn("Missing histograms: legacy", text)
+      self.assertIn("10.0%", text)
+      self.assertIn("20.0%", text)
+
+  def test_incomplete_opening_angle_pair_fails_before_any_comparison_pdf(self):
+    with tempfile.TemporaryDirectory() as directory:
+      root = Path(directory)
+      path = self.write_histogram_fixture(root, 1, "incomplete")
+      self.write_histogram_fixture(root, 2, "complete")
+      with ROOT.TFile(str(path), "UPDATE") as output:
+        output.GetDirectory("efficiency").Delete("ShiftDimuonVertexEfficiency_openingAngle_total;*")
+      args = argparse.Namespace(compare_versions=[1, 2], histograms_dir=str(root), output_dir=str(root))
+      with self.assertRaisesRegex(RuntimeError, "missing or inconsistent efficiency .*openingAngle"):
+        plotter.run_version_comparison(args)
+      self.assertFalse((root / "comparisons").exists())
+
+
+class EfficiencyTests(unittest.TestCase):
+  def test_angle_panel_preserves_truth_bins_and_single_muon_panels(self):
+    for object_name, rows, expected in (("ShiftDimuonVertex", 4, 6), ("ShiftMuon", 3, 5)):
+      with self.subTest(object_name=object_name):
+        source = EfficiencySource(object_name)
+        canvas = ROOT.TCanvas("test_" + object_name, "", 1100, rows * 400)
+        canvas.Divide(2, rows)
+        objects = plotter.draw_efficiencies(canvas, source, object_name, [("", "Inclusive", ROOT.kBlack)])
+        efficiencies = [obj for obj in objects if obj.InheritsFrom("TEfficiency")]
+        self.assertEqual(len(efficiencies), expected)
+        self.assertEqual(canvas.GetPad(1).GetLogx(), 0)
+        if object_name == "ShiftDimuonVertex":
+          angle = efficiencies[-1]
+          self.assertIn("openingAngle", angle.GetName())
+          self.assertEqual(angle.GetTotalHistogram().GetNbinsX(), len(OPENING_ANGLE_EDGES) - 1)
+          self.assertEqual(angle.GetTotalHistogram().GetBinContent(1), 10)
+          self.assertEqual(angle.GetPassedHistogram().GetBinContent(1), 5)
+          self.assertEqual(canvas.GetPad(6).GetLogx(), 1)
+          frame = canvas.GetPad(6).GetListOfPrimitives().FindObject("hframe")
+          self.assertEqual(frame.GetXaxis().GetTitle(), "Generator #mu#mu opening angle (rad)")
+          self.assertAlmostEqual(frame.GetXaxis().GetXmin(), 0.0001)
+          self.assertTrue(canvas.GetPad(7).GetListOfPrimitives().FindObject("TPave"))
+        else:
+          self.assertFalse(any("openingAngle" in name for name in source.requests))
+          self.assertTrue(canvas.GetPad(6).GetListOfPrimitives().FindObject("TPave"))
+        canvas.Close()
+
+  def test_legacy_dimuon_plot_warns_and_keeps_the_existing_five_panels(self):
+    source = EfficiencySource("ShiftDimuonVertex", include_opening_angle=False)
+    canvas = ROOT.TCanvas("test_legacy_dimuon", "", 1100, 1600)
+    canvas.Divide(2, 4)
+    messages = io.StringIO()
+    with redirect_stdout(messages):
+      objects = plotter.draw_efficiencies(canvas, source, "ShiftDimuonVertex", [("", "Inclusive", ROOT.kBlack)])
+    self.assertIn("ShiftDimuonVertexEfficiency_openingAngle' was not found", messages.getvalue())
+    self.assertEqual(sum(obj.InheritsFrom("TEfficiency") for obj in objects), 5)
+    self.assertEqual(canvas.GetPad(6).GetLogx(), 0)
+    notice = canvas.GetPad(6).GetListOfPrimitives().FindObject("TPave")
+    self.assertEqual(notice.GetListOfLines().First().GetTitle(), "Opening-angle efficiency unavailable")
+    canvas.Close()
 
 
 if __name__ == "__main__":

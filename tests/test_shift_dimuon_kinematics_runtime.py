@@ -29,6 +29,7 @@ class DimuonKinematicsRuntimeTest(unittest.TestCase):
         fields.update(("pt", "pz", "eta", "phi", "mass", "vx", "vy", "vz", "topology",
                        "probability", "originCompatibilityNormalizedChi2", "refitStatus",
                        "dca", "dcaValid"))
+        fields.update(f"constrained{variable}" for variable in ("Pt", "Pz", "Eta", "Phi", "Vx", "Vy", "Vz"))
         buffers = {}
         collections = ("ShiftMuon", "ShiftDimuonVertex", "GenPart") if truth else (
             "ShiftMuon", "ShiftDimuonVertex")
@@ -95,6 +96,25 @@ class DimuonKinematicsRuntimeTest(unittest.TestCase):
     def integral(self, histogram):
         return histogram.Integral(0, histogram.GetNbinsX() + 1)
 
+    def test_constrained_muon_shapes_reject_failed_fits_and_keep_valid_zero(self):
+        root = self.run_histograms([{"branches": {
+            "ShiftMuon_constrainedValid": [0.0, 1.0],
+            "ShiftMuon_constrainedPt": [0.0, 4.0],
+            "ShiftMuon_constrainedPz": [0.0, -100.0],
+            "ShiftMuon_constrainedEta": [0.0, -5.0],
+            "ShiftMuon_constrainedPhi": [0.0, 0.0],
+            "ShiftMuon_constrainedVx": [0.0, 0.0],
+            "ShiftMuon_constrainedVy": [0.0, 0.0],
+            "ShiftMuon_constrainedVz": [0.0, 14800.0],
+        }}])
+        for category in ("", "BothEndcaps"):
+            for variable, value in (("Pt", 4.0), ("Pz", -100.0), ("Eta", -5.0),
+                                    ("Phi", 0.0), ("Vx", 0.0), ("Vy", 0.0), ("Vz", 14800.0)):
+                histogram = root.Get(f"muon/ShiftMuon{category}_constrained{variable}")
+                self.assertTrue(histogram)
+                self.assertEqual(self.integral(histogram), 1.0, variable)
+                self.assertEqual(histogram.GetBinContent(histogram.FindBin(value)), 1.0, variable)
+
     def test_known_geometry_truth_free_and_category_membership(self):
         root = self.run_histograms([{}])
         for category in ("", "Good", "Both-Both"):
@@ -127,8 +147,8 @@ class DimuonKinematicsRuntimeTest(unittest.TestCase):
         self.assertEqual(angle.GetBinContent(angle.GetNbinsX() + 1), 0.0)
         fine = self.histogram(root, "openingAngleFine")
         # The float-valued input lies very close to a bin edge after wrapping.
-        self.assertAlmostEqual(fine.GetMean(), (0.02 + 1e-5) / 3.0, delta=1e-6)
-        self.assertEqual(fine.GetBinContent(fine.GetNbinsX() + 1), 1.0)
+        self.assertAlmostEqual(fine.GetMean(), (math.pi + 0.02 + 1e-5) / 4.0, delta=1e-6)
+        self.assertEqual(fine.GetBinContent(fine.GetNbinsX() + 1), 0.0)
 
     def test_bad_pair_indices_zero_and_nonfinite_momenta_are_skipped(self):
         root = self.run_histograms([

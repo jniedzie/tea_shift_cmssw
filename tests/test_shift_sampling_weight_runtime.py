@@ -1,6 +1,7 @@
 """Bounded runtime check, enabled with SHIFT_WEIGHT_TEST_EXECUTABLE."""
 
 from array import array
+import math
 import os
 from pathlib import Path
 import re
@@ -96,9 +97,9 @@ class SamplingWeightRuntimeTest(unittest.TestCase):
         root.Close()
 
 
-    def efficiency_input(self):
+    def efficiency_input(self, events=None):
         output = self.ROOT.TFile(str(self.scratch / "efficiency_input.root"), "RECREATE")
-        tree = self.ROOT.TTree("Events", "Two unequal-weight Jpsi outcomes")
+        tree = self.ROOT.TTree("Events", "Synthetic Jpsi reconstruction outcomes")
         source = (Path(__file__).resolve().parents[1] / "libs/user_extensions/src/ShiftHistogramsFiller.cpp").read_text()
         fields = set(re.findall(r'GetAs<(?:float|int)>\("([^"]+)"\)', source))
         fields.update(("pt", "eta", "phi", "mass", "pz", "vx", "vy", "vz", "statusFlags",
@@ -117,7 +118,7 @@ class SamplingWeightRuntimeTest(unittest.TestCase):
         native = array("f", [7.0])
         tree.Branch("shiftSamplingGenWeight", weight, "shiftSamplingGenWeight/D")
         tree.Branch("genWeight", native, "genWeight/F")
-        for key, values in {
+        defaults = {
             "GenPart_pdgId": [443, 13, -13], "GenPart_status": [2, 1, 1],
             "GenPart_genPartIdxMother": [-1, 0, 0], "GenPart_pt": [4.0, 2.0, 3.0],
             "GenPart_eta": [1.0, 1.0, 1.0], "GenPart_phi": [0.1, 0.5, -0.5],
@@ -134,15 +135,24 @@ class SamplingWeightRuntimeTest(unittest.TestCase):
             "ShiftDimuonVertex_eta": [1.0], "ShiftDimuonVertex_phi": [0.1],
             "ShiftDimuonVertex_mass": [3.0], "ShiftDimuonVertex_vx": [1.0],
             "ShiftDimuonVertex_vy": [1.0], "ShiftDimuonVertex_vz": [10.0],
-        }.items():
-            for index, value in enumerate(values):
-                buffers[key][index] = value
-        buffers["nGenPart"][0] = 3
-        tree.Fill()  # W/p=1: truth dimuon exists, no reconstructed candidates.
-        weight[0] = 3.0
-        buffers["nShiftMuon"][0] = 2
-        buffers["nShiftDimuonVertex"][0] = 1
-        tree.Fill()  # W/p=3: both truth muons and their pair are reconstructed.
+        }
+        if events is None:
+            events = (
+                {"weight": 1.0, "reconstructed": False},
+                {"weight": 3.0, "reconstructed": True},
+            )
+        for event in events:
+            for values in buffers.values():
+                for index in range(len(values)):
+                    values[index] = 0
+            for key, values in {**defaults, **event.get("branches", {})}.items():
+                for index, value in enumerate(values):
+                    buffers[key][index] = value
+            weight[0] = event["weight"]
+            buffers["nGenPart"][0] = 3
+            buffers["nShiftMuon"][0] = 2 if event["reconstructed"] else 0
+            buffers["nShiftDimuonVertex"][0] = 1 if event["reconstructed"] else 0
+            tree.Fill()
         tree.Write()
         output.Close()
         return self.scratch / "efficiency_input.root"
@@ -188,6 +198,106 @@ class SamplingWeightRuntimeTest(unittest.TestCase):
         self.assertEqual(recorded["legacy"]["ShiftDimuonVertexEfficiency"][:2], (1.0, 2.0))
         self.assertEqual(recorded["weighted"]["hit_matches"], 6.0)
         self.assertEqual(recorded["legacy"]["hit_matches"], 2.0)
+
+    def test_dimuon_opening_angle_uses_generated_signed_momenta_and_hit_matching(self):
+        good_pair = {"ShiftDimuonVertex_isOS": [1.0], "ShiftDimuonVertex_dcaValid": [1.0],
+                     "ShiftDimuonVertex_dca": [10.0]}
+        # Keep eta unchanged while varying pz to distinguish signed momentum
+        # directions from an angle reconstructed through eta or deltaR.
+        events = (
+            # The failed reconstruction still contributes at its generated angle.
+            {"weight": 1.0, "reconstructed": False, "branches": {
+                "GenPart_pt": [4.0, 1.0, 1.0], "GenPart_phi": [0.1, 0.0, 0.6],
+                "GenPart_pz": [4.0, 0.0, 0.0]}},
+            # Reco directions differ deliberately: the numerator uses the truth angle.
+            {"weight": 3.0, "reconstructed": True, "branches": {
+                **good_pair, "GenPart_pt": [4.0, 1.0, 1.0],
+                "GenPart_phi": [0.1, 0.0, 0.02], "GenPart_pz": [4.0, -100.0, -100.0],
+                "ShiftMuon_phi": [0.0, 1.0], "ShiftMuon_pz": [0.0, 0.0]}},
+            # Legacy angular association must not count as successful hit matching.
+            {"weight": 5.0, "reconstructed": True, "branches": {
+                **good_pair, "GenPart_pt": [4.0, 1.0, 1.0],
+                "GenPart_phi": [0.1, 0.0, 0.4], "GenPart_pz": [4.0, 0.0, 0.0],
+                "ShiftMuon_hitGenPartIdx": [-1.0, -1.0]}},
+            # About 1e-9 radians: acos of the rounded cosine would give zero.
+            {"weight": 7.0, "reconstructed": True, "branches": {
+                "GenPart_pt": [4.0, 1.0, 1.0], "GenPart_phi": [0.1, 0.0, 1e-7],
+                "GenPart_pz": [4.0, -100.0, -100.0], "ShiftMuon_topology": [0.0, 2.0],
+                "ShiftDimuonVertex_topologyMin": [0.0], "ShiftDimuonVertex_topologyMax": [2.0]}},
+            # Opposite signed longitudinal momenta give an angle near pi.
+            {"weight": 11.0, "reconstructed": True, "branches": {
+                **good_pair, "GenPart_pt": [4.0, 2.0, 3.0],
+                "GenPart_phi": [0.1, 0.0, math.pi], "GenPart_pz": [4.0, -20.0, 30.0],
+                "ShiftMuon_topology": [2.0, 3.0], "ShiftDimuonVertex_topologyMin": [2.0],
+                "ShiftDimuonVertex_topologyMax": [3.0]}},
+            # A muon pair from a Z is outside the existing J/psi denominator.
+            {"weight": 13.0, "reconstructed": True, "branches": {
+                **good_pair, "GenPart_pdgId": [23, 13, -13]}},
+        )
+        source = self.efficiency_input(events)
+        categories = ("", "Good", "Near-Both", "Near-Far", "Both-Both", "Both-Far", "Other")
+        edges = (0.0, 1e-10, 1e-8, 1e-3, 0.5, 1.0, 2.0, 3.0, math.nextafter(math.pi, math.inf))
+        for mode in ("weighted", "legacy"):
+            with self.subTest(mode=mode):
+                config = self.scratch / f"opening_angle_{mode}.py"
+                config.write_text(
+                    "from shift_histogrammer_config import *\n"
+                    f"nEvents = {len(events)}\n"
+                    "defaultHistParams = (('Event', 'nShiftMuon', 10, 0, 10, 'event'),)\n"
+                    "irregularDefaultHistParams = ()\n"
+                    "irregularHistParams = tuple(entry for entry in irregularHistParams "
+                    "if entry[1] not in ('openingAngle_total', 'openingAngle_pass')) + tuple(\n"
+                    f"    (prefix, f'openingAngle_{{kind}}', {edges!r}, 'efficiency')\n"
+                    "    for prefix in dimuonEfficiencyPrefixes for kind in ('total', 'pass'))\n"
+                    + ("weightsBranchName = 'genWeight'\n" if mode == "legacy" else "")
+                )
+                path = self.scratch / f"opening_angle_{mode}.root"
+                result = subprocess.run(
+                    [os.environ["SHIFT_WEIGHT_TEST_EXECUTABLE"], "--config", str(config),
+                     "--input_path", str(source), "--output_hists_path", str(path)],
+                    capture_output=True, text=True, timeout=180,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout[-6000:] + result.stderr[-3000:])
+                root = self.ROOT.TFile.Open(str(path))
+                try:
+                    weights = (1.0, 3.0, 5.0, 7.0, 11.0) if mode == "weighted" else (1.0,) * 5
+                    # Bin 1 (exact parallel) and flow bins remain empty. Tiny but
+                    # nonzero, forward, unmatched, failed and antiparallel pairs
+                    # occupy five distinct bins.
+                    expected_total = [0.0, weights[3], weights[1], weights[2], weights[0],
+                                      0.0, 0.0, weights[4]]
+                    category_pass = {
+                        "": {2: weights[3], 3: weights[1], 8: weights[4]},
+                        "Good": {3: weights[1], 8: weights[4]},
+                        "Near-Both": {2: weights[3]}, "Near-Far": {},
+                        "Both-Both": {3: weights[1]}, "Both-Far": {8: weights[4]}, "Other": {},
+                    }
+                    for category in categories:
+                        prefix = f"ShiftDimuonVertex{category}Efficiency"
+                        total = root.Get(f"efficiency/{prefix}_openingAngle_total")
+                        passed = root.Get(f"efficiency/{prefix}_openingAngle_pass")
+                        self.assertTrue(total and passed, prefix)
+                        self.assertEqual(total.GetNbinsX(), len(edges) - 1)
+                        self.assertEqual([total.GetBinContent(index) for index in range(1, len(edges))],
+                                         expected_total, prefix)
+                        self.assertEqual([passed.GetBinContent(index) for index in range(1, len(edges))],
+                                         [category_pass[category].get(index, 0.0)
+                                          for index in range(1, len(edges))], prefix)
+                        for histogram in (total, passed):
+                            self.assertEqual(histogram.GetBinContent(0), 0.0, prefix)
+                            self.assertEqual(histogram.GetBinContent(len(edges)), 0.0, prefix)
+                        pt_total = root.Get(f"efficiency/{prefix}_pt_total")
+                        pt_pass = root.Get(f"efficiency/{prefix}_pt_pass")
+                        integral = lambda histogram: histogram.Integral(0, histogram.GetNbinsX() + 1)
+                        self.assertEqual(integral(total), integral(pt_total), prefix)
+                        self.assertEqual(integral(passed), integral(pt_pass), prefix)
+                        for index, content in enumerate(expected_total, start=1):
+                            self.assertAlmostEqual(total.GetBinError(index) ** 2, content ** 2)
+                        for index, content in category_pass[category].items():
+                            self.assertAlmostEqual(passed.GetBinError(index) ** 2, content ** 2)
+                    self.assertEqual(root.Get("rawEventsCutFlow").GetBinContent(1), len(events))
+                finally:
+                    root.Close()
 
 
 if __name__ == "__main__":

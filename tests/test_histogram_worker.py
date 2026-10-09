@@ -1,8 +1,11 @@
 """Runtime transfer recovery must never accept a partial or corrupt payload."""
 import importlib.util
 import hashlib
+import json
+import os
 from pathlib import Path
 import subprocess
+import shlex
 import tempfile
 import unittest
 
@@ -76,6 +79,56 @@ sleep() { :; }
     def test_retry_migration_preserves_original_machine_requirements(self):
         prepared = worker.harden_submit('requirements = TARGET.Arch == "X86_64"\nqueue 1\n', Path('/tmp/worker.sh'))
         self.assertIn('requirements = (TARGET.Arch == "X86_64") && (' + worker.RETRY_MACHINE_GUARD + ')\n', prepared)
+
+    def test_compressed_application_log_preserves_all_bytes_and_exit_status(self):
+        for status in (0, 1, 75, 137):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as temporary:
+                program = f'import sys; sys.stdout.write("x"*100000+"\\n"); sys.stdout.flush(); sys.stderr.write("diagnostic\\n"); sys.stderr.flush(); sys.exit({status})'
+                command = 'python3 -c ' + shlex.quote(program)
+                script = 'set -euo pipefail\njob_sandbox=' + shlex.quote(temporary) + '\n' + worker.capture_application(command)
+                result = subprocess.run(['bash', '-c', script], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 1 if status == 75 else status)
+                self.assertEqual(worker.decode_application_log(result.stdout), b'x'*100000+b'\ndiagnostic\n')
+                self.assertLess(len(result.stdout), 2000)
+
+    def test_exhausted_transfer_retries_are_distinct_from_application_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            marker = Path(temporary) / 'transfer_retry_exhausted'
+            marker.write_text('xrdcp\n')
+            script = 'set -euo pipefail\njob_sandbox=' + shlex.quote(temporary) + '\nexport TEA_TRANSFER_FAILURE_MARKER=' + shlex.quote(str(marker)) + '\n'
+            result = subprocess.run(['bash', '-c', script + worker.capture_application('bash -c "exit 1"')], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 75)
+
+    def test_native_transfer_cleans_runtime_environment_and_retries(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            tool = root / 'native_stub'
+            tool.write_text('#!/usr/bin/python3\n'
+                'import json,os,sys\n'
+                'from pathlib import Path\n'
+                'p=Path(os.environ["TEA_TEST_TRACE"])\n'
+                'calls=json.loads(p.read_text()) if p.exists() else []\n'
+                'calls.append(dict(args=sys.argv[1:],environment={k:os.environ.get(k) for k in '
+                '["PYTHONHOME","PYTHONPATH","LD_LIBRARY_PATH","ROOTSYS","CONDA_PREFIX","X509_USER_PROXY"]}))\n'
+                'p.write_text(json.dumps(calls))\n'
+                'sys.exit(51 if len(calls)<3 else 0)\n')
+            tool.chmod(0o755)
+            setup = worker.NATIVE_XROOTD.replace('"/usr/bin/$tea_transfer_tool"', shlex.quote(str(tool)))
+            arguments = ['--silent', '--cksum', 'adler32', 'root://synthetic//input', 'output.root']
+            script = 'set -euo pipefail\njob_sandbox=' + shlex.quote(temporary) + '\n' + setup
+            script += '"$tea_native_bin/xrdcp" ' + shlex.join(arguments) + '\n'
+            env = dict(os.environ, TEA_TEST_TRACE=str(root/'trace.json'), PYTHONHOME='/nonexistent/runtime',
+                       PYTHONPATH='/nonexistent/runtime', LD_LIBRARY_PATH='/nonexistent/runtime',
+                       ROOTSYS='/nonexistent/runtime', CONDA_PREFIX='/nonexistent/runtime', X509_USER_PROXY='synthetic-proxy')
+            result = subprocess.run(['bash', '-c', script], capture_output=True, text=True, env=env, timeout=20)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = json.loads((root/'trace.json').read_text())
+            self.assertEqual(len(calls), 3)
+            for call in calls:
+                self.assertEqual(call['args'], arguments)
+                self.assertEqual(call['environment'].pop('X509_USER_PROXY'), 'synthetic-proxy')
+                self.assertTrue(all(value is None for value in call['environment'].values()))
+            self.assertFalse((root/'transfer_retry_exhausted').exists())
 
     def test_ambiguous_submit_setting_rejected(self):
         with self.assertRaises(ValueError):
