@@ -3,7 +3,9 @@ base_path = "/eos/home-j/jniedzie/shift_cmssw/"  # lxplus
 
 sample = "jpsi"
 # sample = "qcd"
+# sample = "dy"
 
+# pt_bin = "0to1"
 # pt_bin = "1to2"
 # pt_bin = "2to5"
 pt_bin = "5to10"
@@ -39,7 +41,8 @@ pt_bin = "5to10"
 # campaign = "lssPaired_field_10k_2023_v4"
 
 # campaign = "lssPaired_materialField_10k_2023_cms_v1"
-campaign = "shift_detector_representative_20261005_v8"
+
+campaign = "shift_detector_representative_20261007_v10"
 
 # jpsi_campaign_base = "SamplingScan_jpsi_pThat_{}_analysis1k_chunk50_20260921_v1"
 jpsi_campaign_base = "Jpsi_Unfiltered_pThat_{}_ATLASproxy_10k_20260921_v1"
@@ -62,16 +65,31 @@ qcd_campaign_base = "QCD_UnfilteredDecays_pThat_{}_ATLASproxy_100k_20260921_v1"
 # Cross sections
 # ==========================
 
-cross_sections = {  # pb; combined estimates from all chunks
+cross_sections = {  # pb; combined estimates from all production chunks
     "jpsi": {
-        "1to2": 621357.8611509507,
-        "2to5": 116404.48317891415,
-        "5to10": 2030.7448141130817,
+        "20toinf": 0.044064467556391526,
+        "10to20": 23.906403461436227,
+        "5to10": 1881.374468818274,
+        "2to5": 93225.77307339365,
+        "1to2": 342299.260533131,
+        "0to1": 1503369.0870485106,
     },
     "qcd": {
-        "1to2": 36563971991.23754,
-        "2to5": 3655743759.3925757,
-        "5to10": 40792126.38657331,
+        "20toinf": 1851.4190933761722,
+        "10to20": 573197.6708161484,
+        "5to10": 37788127.561581455,
+        "2to5": 2324492992.016241,
+        "1to2": 13003378648.466198,
+        "0to1": 50156300701.79254,
+    },
+    "dy": {
+        "20to-1": 1.2761671115668445,
+        "10to20": 38.46548547834682,
+        "5to10": 458.0153183831834,
+        "2to5": 5912.643177243027,
+        "1to2": 25020.91681087829,
+        "0.5to1": 132153.1881897009,
+        "0.211317to0.5": 326341.85535591666,
     },
 }
 
