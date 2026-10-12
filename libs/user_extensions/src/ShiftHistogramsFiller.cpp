@@ -85,6 +85,28 @@ ShiftHistogramsFiller::ShiftHistogramsFiller(shared_ptr<HistogramsHandler> histo
     config.GetValue("weightsBranchName", weightsBranchName);
     weightMcDiagnostics = weightsBranchName == "shiftSamplingGenWeight";
   } catch (const Exception&) {}
+  // Physical constrained values are zero placeholders when the fit failed.
+  // These bookings are custom so the generic filler cannot include failures.
+  auto registerConstrained = [&](auto const& variables) {
+    for (auto const& [name, params] : variables) {
+      if (params.collection.rfind("ShiftMuon", 0) != 0 ||
+          params.variable.rfind("constrained", 0) != 0 ||
+          params.variable == "constrainedValid" || params.variable == "constrainedStatus")
+        continue;
+      string branch = params.variable;
+      string const suffix = "_variable";
+      if (branch.size() > suffix.size() &&
+          branch.compare(branch.size() - suffix.size(), suffix.size(), suffix) == 0)
+        branch.resize(branch.size() - suffix.size());
+      constrainedMuonVariables[name] = {params.collection, branch};
+    }
+  };
+  map<string, HistogramParams> customVariables;
+  config.GetHistogramsParams(customVariables, "histParams");
+  registerConstrained(customVariables);
+  map<string, IrregularHistogramParams> irregularCustomVariables;
+  config.GetHistogramsParams(irregularCustomVariables, "irregularHistParams");
+  registerConstrained(irregularCustomVariables);
   if (enableTruthDiagnostics)
     for (auto const& category : dimuonCategories)
       histogramsHandler->SetHistogramLabels(
@@ -108,6 +130,7 @@ void ShiftHistogramsFiller::FillDiagnostic(const string& name, double value) {
 
 void ShiftHistogramsFiller::Fill(const shared_ptr<Event> event) {
   FillRecoLevel(event);
+  FillConstrainedMuons(event);
   FillDimuonKinematics(event);
   FillDetectorDiagnostics(event);
   if (enableTruthDiagnostics) {
@@ -116,6 +139,18 @@ void ShiftHistogramsFiller::Fill(const shared_ptr<Event> event) {
     FillRecoVsGen2D(event);
     FillResolutionPlots(event);
     FillEfficiencies(event);
+  }
+}
+
+void ShiftHistogramsFiller::FillConstrainedMuons(const shared_ptr<Event> event) {
+  for (auto const& [name, source] : constrainedMuonVariables) {
+    for (auto const& muon : *event->GetCollection(source.first)) {
+      if (!muon->HasBranch("constrainedValid") || muon->GetAs<int>("constrainedValid") != 1 ||
+          !muon->HasBranch(source.second))
+        continue;
+      double const value = muon->GetAs<float>(source.second);
+      if (std::isfinite(value)) histogramsHandler->Fill(name, value);
+    }
   }
 }
 
@@ -315,11 +350,21 @@ void ShiftHistogramsFiller::FillEfficiencies(const shared_ptr<Event> event) {
       dimuonCategoryMembers[category].insert(dimuon.get());
   }
   auto fillDimuon = [this](string const& prefix, GenJPsiCandidate const& candidate, bool pass) {
-    map<string, double> const values = {
+    map<string, double> values = {
         {"pt", candidate.momentum.Pt()},   {"pz", candidate.momentum.Pz()},
         {"eta", candidate.momentum.Eta()}, {"phi", candidate.momentum.Phi()},
         {"vz", candidate.vertex.Z()},
     };
+    auto const momentum = [](shared_ptr<NanoGenParticle> const& muon) {
+      double const pt = muon->GetAs<float>("pt"), phi = muon->GetAs<float>("phi");
+      return TVector3(pt * cos(phi), pt * sin(phi), muon->GetAs<float>("pz"));
+    };
+    TVector3 const p1 = momentum(candidate.muonMinus), p2 = momentum(candidate.muonPlus);
+    if (isfinite(p1.Mag()) && isfinite(p2.Mag()) && p1.Mag() > 0. && p2.Mag() > 0.) {
+      // Truth momenta define the x value even when no reconstructed pair exists.
+      // atan2 preserves precision for nearly parallel boosted daughters.
+      values["openingAngle"] = atan2(p1.Cross(p2).Mag(), p1.Dot(p2));
+    }
     for (auto const& [variable, value] : values) {
       FillDiagnostic(prefix + "_" + variable + "_total", value);
       if (pass)

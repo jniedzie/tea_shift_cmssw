@@ -29,6 +29,7 @@ class ShiftHistogramsFiller {
   std::unique_ptr<EventProcessor> eventProcessor;
   bool enableTruthDiagnostics = true;
   bool weightMcDiagnostics = false;
+  std::map<std::string, std::pair<std::string, std::string>> constrainedMuonVariables;
   void FillDiagnostic(const std::string& name, double value);
   int HitTruthIndex(const std::shared_ptr<PhysicsObject>& muon) const;
   int OriginTruthIndex(const std::shared_ptr<PhysicsObject>& muon) const;
@@ -37,6 +38,7 @@ class ShiftHistogramsFiller {
   
   void FillGenLevel(const std::shared_ptr<Event> event);
   void FillRecoLevel(const std::shared_ptr<Event> event);
+  void FillConstrainedMuons(const std::shared_ptr<Event> event);
   void FillDimuonKinematics(const std::shared_ptr<Event> event);
   void FillRecoVsGen2D(const std::shared_ptr<Event> event);
   void FillResolutionPlots(const std::shared_ptr<Event> event);

@@ -6,11 +6,16 @@ from HistogramNormalizer import NormalizationType
 from CmsLabelsManager import CmsLabel
 from Logger import warn
 from shift_sample_paths import single_root_file
+from shift_storage_paths import tier_directory
+from shift_plot_binning import muon_variable_binning, dimuon_variable_binning
+from shift_plot_labels import apply_reconstruction_labels
+from shift_plot_normalization import full_gen_weight_sums
 
 from shift_paths import base_path, cross_sections, campaign
 
 
 samples = []
+normalization_sums = full_gen_weight_sums(campaign)
 
 jpsi_colors = {
     "0to1": ROOT.TColor.GetColor("#FEC44F"),  # gold
@@ -61,7 +66,9 @@ for process, colors, label in (
         key=lambda item: float(item[0].split("to")[0]),
         reverse=True,
     ):
-        directory = f"{base_path}/{process}/{campaign}_{bin_name.replace('toinf', 'to-1')}/histograms_merged"
+        directory = tier_directory(
+            base_path, process, bin_name, campaign, "histograms_merged"
+        )
         file_path = single_root_file(directory, allow_missing=True)
         if file_path is None:
             warn(
@@ -75,6 +82,11 @@ for process, colors, label in (
                 file_path=file_path,
                 type=SampleType.background,
                 cross_section=cross_section,
+                initial_weight_sum=(
+                    normalization_sums[f"{process}_{bin_name}"]
+                    if normalization_sums is not None
+                    else -1
+                ),
                 line_alpha=0.0,
                 fill_color=colors[bin_name],
                 fill_alpha=0.7,
@@ -132,14 +144,14 @@ for category in dimuon_categories:
       Histogram(f"dimuon/ShiftDimuonVertex{category}_p_variable"            , "", False, True, NormalizationType.to_lumi, 1, None, None, None, None, "p^{#mu#mu} [GeV]"    , "# events / GeV"  , scale_by_bin_width=True      ),
       Histogram(f"dimuon/ShiftDimuonVertex{category}_eta"                   , "", False, True, NormalizationType.to_lumi, 2, None, None, None, None, "#eta^{#mu#mu}"       , "# events"        ),
       Histogram(f"dimuon/ShiftDimuonVertex{category}_phi"                   , "", False, True, NormalizationType.to_lumi, 1, None, None, None, None, "#phi^{#mu#mu}"       , "# events"        ),
-      Histogram(f"dimuon/ShiftDimuonVertex{category}_mass"                  , "", False, True, NormalizationType.to_lumi, 1, None, 10  , None, None, "m_{#mu#mu} [GeV]"    , "# events"        , allow_legend_x_extension=True),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_mass"                  , "", False, True, NormalizationType.to_lumi, 1, None, None, None, None, "m_{#mu#mu} [GeV]"    , "# events"        , allow_legend_x_extension=True),
 
       Histogram(f"dimuon/ShiftDimuonVertex{category}_vx"                    , "", False, True, NormalizationType.to_lumi, 5, None, None, None, None, "v_{x}^{#mu#mu} [cm]" , "# events"        ),
       Histogram(f"dimuon/ShiftDimuonVertex{category}_vy"                    , "", False, True, NormalizationType.to_lumi, 5, None, None, None, None, "v_{y}^{#mu#mu} [cm]" , "# events"        ),
       Histogram(f"dimuon/ShiftDimuonVertex{category}_vz"                    , "", False, True, NormalizationType.to_lumi, 5, None, None, None, None, "v_{z}^{#mu#mu} [cm]" , "# events"        ),
 
-      Histogram(f"dimuon/ShiftDimuonVertex{category}_chi2"                  , "", False, True, NormalizationType.to_lumi, 1, None, 8   , None, None, "#chi^{2}"            , "# events"        ),
-      Histogram(f"dimuon/ShiftDimuonVertex{category}_normalizedChi2"        , "", False, True, NormalizationType.to_lumi, 2, None, 3   , None, None, "#chi^{2}/ndof"       , "# events"        ),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_chi2"                  , "", False, True, NormalizationType.to_lumi, 1, None, None, None, None, "#chi^{2}"            , "# events"        ),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_normalizedChi2"        , "", False, True, NormalizationType.to_lumi, 2, None, None, None, None, "#chi^{2}/ndof"       , "# events"        ),
       Histogram(f"dimuon/ShiftDimuonVertex{category}_dca"                   , "", False, True, NormalizationType.to_lumi, 4, None, None, None, None, "DCA [cm]"            , "# events"        ),
       Histogram(f"dimuon/ShiftDimuonVertex{category}_isOS"                  , "", False, True, NormalizationType.to_lumi, 1, None, None, None, None, "isOS"                , "# events"        ),
       Histogram(f"dimuon/ShiftDimuonVertex{category}_genPid"                , "", False, True, NormalizationType.to_lumi, 1, None, None, None, None, "generator mother"    , "# dimuons"       ),
@@ -174,9 +186,9 @@ for category in muon_categories:
 # for successful fits; SS mass provides a separate combinatorial control.
 for category in dimuon_categories:
     for variable, label, rebin, upper in (
-        ("openingAngle", "#alpha_{#mu#mu} [rad]", 2, None),
-        ("openingAngleFine", "#alpha_{#mu#mu} [rad]", 2, None),
-        ("constrainedOpeningAngle", "#alpha_{#mu#mu}^{constrained} [rad]", 2, None),
+        ("openingAngle", "#alpha_{#mu#mu} [rad]", 1, None),
+        ("openingAngleFine", "#alpha_{#mu#mu} [rad]", 1, None),
+        ("constrainedOpeningAngle", "#alpha_{#mu#mu}^{constrained} [rad]", 1, None),
         ("deltaPhi", "|#Delta#phi_{#mu#mu}| [rad]", 1, None),
         ("deltaEta", "|#Delta#eta_{#mu#mu}|", 1, None),
         ("deltaR", "#Delta R_{#mu#mu}", 1, None),
@@ -186,10 +198,10 @@ for category in dimuon_categories:
         ("maxMuonPt", "max(p_{T,1},p_{T,2}) [GeV]", 2, None),
         ("rapidity", "y_{#mu#mu}", 2, None),
         ("vertexR", "r_{vertex}^{#mu#mu} [cm]", 2, None),
-        ("massOS", "m_{#mu^{+}#mu^{-}} [GeV]", 5, 10.0),
-        ("massSS", "m_{#mu^{#pm}#mu^{#pm}} [GeV]", 5, 10.0),
-        ("constrainedMass", "m_{#mu#mu}^{constrained} [GeV]", 1, 10.0),
-        ("refittedMass", "m_{#mu#mu}^{refit} [GeV]", 1, 10.0),
+        ("massOS", "m_{#mu^{+}#mu^{-}} [GeV]", 5, None),
+        ("massSS", "m_{#mu^{#pm}#mu^{#pm}} [GeV]", 5, None),
+        ("constrainedMass", "m_{#mu#mu}^{constrained} [GeV]", 1, None),
+        ("refittedMass", "m_{#mu#mu}^{refit} [GeV]", 1, None),
         ("probability", "vertex fit probability", 1, None),
         ("originCompatibilityNormalizedChi2", "#chi^{2}_{origin}/3", 2, None),
         ("constrainedValid", "valid constrained vertex", 1, None),
@@ -255,6 +267,38 @@ for name, label in (
         Histogram(name=name, log_y=True, x_label=label, y_label="# entries")
     )
 
+# Rebin only recorded source bins and display densities, so changing a bin's
+# width does not itself create a rising tail or a false bump. The same edges
+# apply to the inclusive and Both-Endcaps/Both-Both selections and all samples.
+for histogram in histograms:
+    if histogram.name.startswith("muon/ShiftMuon"):
+        rules, object_label = muon_variable_binning, "# muons"
+    elif histogram.name.startswith("dimuon/ShiftDimuonVertex"):
+        rules, object_label = dimuon_variable_binning, "# dimuons"
+    else:
+        continue
+    variable = histogram.name.rsplit("_", 1)[-1]
+    if variable not in rules:
+        continue
+    histogram.bin_edges = rules[variable]
+    histogram.rebin = 1
+    histogram.scale_by_bin_width = True
+    unit = next(
+        (unit for unit in ("GeV", "cm", "rad") if f"[{unit}]" in histogram.x_label),
+        "unit x",
+    )
+    histogram.y_label = f"{object_label} / {unit}"
+    if variable == "openingAngleFine":
+        # Resolve the boosted peak here; the full angular plots retain all
+        # recorded tails, including the antiparallel endpoint.
+        histogram.x_max = 0.2
+        histogram.allow_legend_x_extension = True
+    # if variable in ("openingAngle", "constrainedOpeningAngle",
+    #                 "originCompatibilityNormalizedChi2"):
+    #     histogram.show_full_x_range = True
+
+apply_reconstruction_labels(histograms)
+
 histograms2D = []
 for category in dimuon_categories:
     for variable, label in (
@@ -291,5 +335,7 @@ plotting_options = {
 }
 
 canvas_size = (800, 600)
+categorical_canvas_size = (1200, 850)
+categorical_legend_outside = True
 show_ratio_plots = False
 # ratio_limits = (0.7, 1.3)  # Optional override; limits are automatic by default.
