@@ -1,5 +1,7 @@
 """Merge the preceding step's outputs with exact inventories and worker checks."""
 import importlib.util
+import hashlib
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -16,6 +18,50 @@ spec.loader.exec_module(merge)
 
 
 class HistogramMergeTest(unittest.TestCase):
+    def nano_files_config(self, inventory):
+        config_spec = importlib.util.spec_from_file_location(
+            "shift_nano_files_test", PROJECT / "configs/shift_nanoAOD_files_config.py")
+        config = importlib.util.module_from_spec(config_spec)
+        with patch("shift_paths.nano_merge_inventory", str(inventory)):
+            config_spec.loader.exec_module(config)
+        return config
+
+    def test_standard_nano_config_reads_exact_groups_without_other_outputs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            inventory = Path(temporary) / "inputs.json"
+            groups = {"/sample/one/nanoAOD_merged": ["/input/a.root", "/input/b.root"],
+                      "/sample/two/nanoAOD_merged": ["/input/c.root"]}
+            inventory.write_text(json.dumps(dict(schema="shift-nano-merge-inputs-v1",
+                                                merge_input_groups=groups)))
+            config = self.nano_files_config(inventory)
+            self.assertEqual(config.merge_input_groups, groups)
+            self.assertFalse(hasattr(config, "output_hists_dir"))
+            jobs = merge.collect_input_group_jobs(config.merge_input_groups, chunk_size=2)
+            self.assertEqual(len(jobs), 2)
+            self.assertEqual({job[5] for job in jobs}, {
+                "/sample/one/nanoAOD_merged/ntuple_0.root",
+                "/sample/two/nanoAOD_merged/ntuple_0.root"})
+
+    def test_standard_nano_config_checks_retained_inventory_hash_and_bins(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            payload = "('/legacy/qcd_0to1/job0/nano.root', '', '/hist/0.root')\n".encode()
+            (root / "histogram_inputs.txt").write_bytes(payload)
+            record = dict(campaign="20261012-example", bins={"qcd_0to1": 1},
+                          inputs_sha256=hashlib.sha256(payload).hexdigest())
+            inventory = root / "inventory.json"
+            inventory.write_text(json.dumps(record))
+            config = self.nano_files_config(inventory)
+            self.assertEqual(list(config.merge_input_groups.values()),
+                             [["/legacy/qcd_0to1/job0/nano.root"]])
+            record["bins"] = {"qcd_0to1": 2}
+            inventory.write_text(json.dumps(record))
+            with self.assertRaisesRegex(ValueError, "per-bin inventory"):
+                self.nano_files_config(inventory)
+            (root / "histogram_inputs.txt").write_bytes(payload + b"changed")
+            with self.assertRaisesRegex(ValueError, "checksum differs"):
+                self.nano_files_config(inventory)
+
     def test_raw_nano_groups_keep_bins_separate(self):
         jobs = merge.collect_input_group_jobs({
             '/qcd/groups': ['/qcd/job2/nano.root', '/qcd/job0/nano.root', '/qcd/job1/nano.root'],

@@ -7,7 +7,7 @@ import unittest
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "configs"))
-from shift_plot_normalization import full_gen_weight_sums
+from shift_sample_paths import full_gen_weight_sums
 
 
 class FullGenPlotNormalizationTest(unittest.TestCase):
