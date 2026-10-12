@@ -1,5 +1,45 @@
 # Running the SHIFT MC histogrammer
 
+## Main configs for every study
+
+Histogram definitions and study controls belong in
+`configs/shift_histogrammer_config.py`; plotting definitions belong in
+`configs/shift_plotter_config.py`. Use the standard SHIFT application, submitter,
+merger and plotter when the feature fits their ordinary histogram/plot model.
+Specialized diagnostics such as ROC curves, fit checks and uncertainty plots
+belong in `utils/`. Keep calculation/preparation code outside the main configs
+instead of forcing every study into them.
+
+Saved BDT score diagnostics are optional fills in the main histogrammer.
+Unscored inputs retain ordinary histogramming. The main plotter accepts
+`SHIFT_PLOT_INPUTS` for a pinned histogram inventory, with
+`SHIFT_PLOT_MODE=bdt` or `mixing` for the corresponding view. Without an
+inventory it retains the standard campaign plots. Full GEN normalization is
+verified by the existing `shift_sample_paths.py` helper; the selected Nano
+count is never substituted for the parent GEN denominator.
+
+Event mixing constructs pairs from different events and repeats the same
+pair fit; it cannot be replaced by histogram definitions alone. Its calculation
+is one callable backend in `utils/shift_mixing.py`. Configure `eventMixing` and
+set `runEventMixing=True` in the main histogrammer config, then use the same
+`shift_histogrammer` application. The stage validates inputs and same-event fit
+closure before writing mixed rows, source-event uncertainties and ROOT inputs.
+Its completed `mixing_plot_inputs.json` is read by the main plotter with
+`SHIFT_PLOT_INPUTS` and `SHIFT_PLOT_MODE=mixing`. This optional study retains
+its unvalidated physics/rate status; producing plots does not establish its
+background-rate prediction.
+
+For specialized coverage and uncertainty-band checks, set
+`eventMixing["diagnostics"] = True`. That optional rendering stays in `utils/`
+and writes a separate diagnostic PDF/PNGs. It leaves the mixed rows, ROOT
+histograms, weights and model accounting unchanged.
+
+The superseded source/configs are byte-verified under workspace
+`validation/tea_consolidation_20261012/before/`. Frozen production deployments
+remain unchanged. The dated October 9 merged-BDT recovery tool reads its two
+historical dependencies from the supplied prior frozen plan; future studies
+use the canonical main configs.
+
 ## EOS storage layout after October 9, 2026
 
 The production data base is `/eos/home-j/jniedzie/shift_cmssw/` (the equivalent
@@ -214,6 +254,27 @@ not throttle jobs already materialized: recover that backlog in bounded waves.
 Never overwrite a live worker or frozen analysis payload when preparing repairs.
 
 ## Merge histograms by process-bin
+
+For raw Nano grouping before histogramming, use the existing Nano files config
+and merger, rather than a separate group-merge config:
+
+```bash
+source tea/setup.sh
+export SHIFT_NANO_MERGE_INVENTORY=/absolute/path/nano_merge_inputs.json
+cd bin
+python merge.py --files_config shift_nanoAOD_files_config.py \
+  --n-files-to-merge 100 --condor --dry
+```
+
+The generic JSON format has `schema: "shift-nano-merge-inputs-v1"` and a
+`merge_input_groups` object mapping each destination directory to its exact
+input-file list. Keep different physical signal points and process-bins in
+separate groups. The config also reads a retained `inventory.json` beside its
+hash-bound `histogram_inputs.txt`, verifying the original per-bin counts.
+The merger rejects duplicate inputs, output/input aliases and missing files
+before submission. Choose the batch size from the actual event counts; 100
+twenty-event inputs yield roughly 2,000 events per grouped file. The examples
+prepare a dry run; remove `--dry` only when ready to submit the reviewed plan.
 
 From `tea_shift_cmssw`, activate TEA and run the existing merger from `bin`:
 

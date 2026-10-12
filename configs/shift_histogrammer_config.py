@@ -20,6 +20,31 @@ import os
 # Truth is used only for MC performance evaluation, never reco selection.
 enableTruthDiagnostics = True
 
+# Saved scores are diagnostics only; unscored Nano inputs remain supported.
+enableBdtDiagnostics = True
+requireBdtScore = False
+bdtTruthDiagnostics = True
+
+# The same application can run the optional event-mixing preparation stage.
+runEventMixing = False
+eventMixing = {
+    "pool": None, "inventory": None, "output": None,
+    "config_json": None, "fit": None,
+    "partners": 20, "bootstrap": 100, "seed": 20261009,
+    "extract": False, "campaign": campaign, "production_directory": None,
+    "workers": 8, "executor": "process",
+    # Optional source-event uncertainty and coverage checks stay in utils.
+    "diagnostics": False,
+}
+
+
+def run_mixing_stage(settings=None):
+    import sys
+    if project_dir not in sys.path:
+        sys.path.insert(0, project_dir)
+    from utils.shift_mixing import run_event_mixing
+    return run_event_mixing(eventMixing if settings is None else settings)
+
 # fmt: off
 defaultHistParams = (
     ("ShiftMuon"        , "topology"     , 5, -0.5, 4.5, "muon"  ),
@@ -788,3 +813,33 @@ irregularHistParams += tuple(
 irregularDefaultHistParams = tuple(
     row for row in irregularDefaultHistParams if not is_constrained_muon_physical_histogram(row)
 )
+
+# Custom fills retain native Double scores and signed event weights once.
+BDT_CATEGORIES = tuple(dimuonCategories)
+BDT_LABEL_SUFFIXES = ("", "Genuine", "Accidental", "Unknown")
+BDT_SCORE_BINS = (100, 0.0, 1.0)
+BDT_MAP_AXES = {
+    "Mass": (100, 0.0, 100.0, "m_{#mu#mu}^{reco} [GeV]"),
+    "Vz": (100, -20000.0, 20000.0, "v_{z}^{reco} [cm]"),
+    "VertexR": (100, 0.0, 300.0, "r_{vertex}^{reco} [cm]"),
+}
+
+
+def bdt_histogram_name(category="", label="", unweighted=False):
+    return f"ShiftDimuonVertex{category}_bdtScore{label}" + ("Unweighted" if unweighted else "")
+
+
+def bdt_histogram_path(category="", label="", unweighted=False):
+    return "dimuon_bdt/" + bdt_histogram_name(category, label, unweighted)
+
+
+if enableBdtDiagnostics:
+    for category in BDT_CATEGORIES:
+        for label in BDT_LABEL_SUFFIXES:
+            for unweighted in (False, True):
+                histParams += ((f"ShiftDimuonVertex{category}",
+                                "bdtScore" + label + ("Unweighted" if unweighted else ""),
+                                *BDT_SCORE_BINS, "dimuon_bdt"),)
+        for axis, (bins, low, high, title) in BDT_MAP_AXES.items():
+            histParams2D += ((bdt_histogram_name(category) + "Vs" + axis,
+                              bins, low, high, *BDT_SCORE_BINS, "dimuon_bdt"),)

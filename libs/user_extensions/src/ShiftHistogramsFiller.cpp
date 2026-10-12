@@ -2,9 +2,12 @@
 
 #include "ConfigManager.hpp"
 
-#include <map>
 #include <cmath>
+#include <iomanip>
+#include <map>
 #include <set>
+
+#include "TObjString.h"
 
 using namespace std;
 
@@ -76,7 +79,8 @@ string GetDimuonTopologyCategory(int topologyMin, int topologyMax) {
 
 }  // namespace
 
-ShiftHistogramsFiller::ShiftHistogramsFiller(shared_ptr<HistogramsHandler> histogramsHandler_) : histogramsHandler(histogramsHandler_) {
+ShiftHistogramsFiller::ShiftHistogramsFiller(shared_ptr<HistogramsHandler> histogramsHandler_, TFile* inputFile)
+    : histogramsHandler(histogramsHandler_) {
   auto& config = ConfigManager::GetInstance();
   eventProcessor = make_unique<EventProcessor>();
   config.GetValue("enableTruthDiagnostics", enableTruthDiagnostics);
@@ -115,6 +119,7 @@ ShiftHistogramsFiller::ShiftHistogramsFiller(shared_ptr<HistogramsHandler> histo
     for (auto const& category : dimuonCategories)
       histogramsHandler->SetHistogramLabels(
           "ShiftDimuonVertex" + category + "_genPidDifferentMothers", differentMotherLabels);
+  SetupBdtDiagnostics(inputFile);
 }
 
 ShiftHistogramsFiller::~ShiftHistogramsFiller() {}
@@ -129,6 +134,7 @@ void ShiftHistogramsFiller::FillDiagnostic(const string& name, double value) {
 }
 
 void ShiftHistogramsFiller::Fill(const shared_ptr<Event> event) {
+  FillBdtDiagnostics(event);
   FillRecoLevel(event);
   FillConstrainedMuons(event);
   FillDimuonKinematics(event);
@@ -140,6 +146,179 @@ void ShiftHistogramsFiller::Fill(const shared_ptr<Event> event) {
     FillResolutionPlots(event);
     FillEfficiencies(event);
   }
+}
+
+void ShiftHistogramsFiller::SetupBdtDiagnostics(TFile* inputFile) {
+  auto& config = ConfigManager::GetInstance();
+  try { config.GetValue("enableBdtDiagnostics", enableBdtDiagnostics); } catch (const Exception&) {}
+  if (!enableBdtDiagnostics) return;
+  bool requireScore = false;
+  try { config.GetValue("requireBdtScore", requireScore); } catch (const Exception&) {}
+  try { config.GetValue("bdtTruthDiagnostics", bdtTruthDiagnostics); } catch (const Exception&) {}
+  bdtTruthDiagnostics = bdtTruthDiagnostics && enableTruthDiagnostics;
+  try { config.GetValue("weightsBranchName", bdtWeightsBranch); } catch (const Exception&) {}
+  TDirectory::TContext context;
+  unique_ptr<TFile> ownedInput;
+  if (!inputFile) {
+    string inputPath;
+    config.GetValue("inputFilePath", inputPath);
+    ownedInput.reset(TFile::Open(inputPath.c_str(), "READ"));
+    inputFile = ownedInput.get();
+  }
+  if (!inputFile || inputFile->IsZombie() || inputFile->TestBit(TFile::kRecovered))
+    throw runtime_error("Cannot inspect saved BDT score input");
+  auto tree = dynamic_cast<TTree*>(inputFile->Get("Events"));
+  if (!tree) throw runtime_error("Saved BDT diagnostics require the Events tree");
+  auto score = tree->GetLeaf("ShiftDimuonVertex_bdtScore");
+  if (!score) {
+    if (requireScore) throw runtime_error("Missing required saved BDT score branch: ShiftDimuonVertex_bdtScore");
+    return;
+  }
+  if (string(score->GetTypeName()) != "Double_t" || !score->GetLeafCount() ||
+      string(score->GetLeafCount()->GetName()) != "nShiftDimuonVertex")
+    throw runtime_error("Saved BDT score must be a Double array counted by nShiftDimuonVertex");
+  bdtScoreAvailable = true;
+  vector<string> required = {"nShiftMuon", "nShiftDimuonVertex"};
+  for (string const field : {"muonIdx1", "muonIdx2", "mass", "vx", "vy", "vz",
+                             "topologyMin", "topologyMax", "isOS", "dcaValid", "dca"})
+    required.push_back("ShiftDimuonVertex_" + field);
+  if (enableTruthDiagnostics && !bdtWeightsBranch.empty()) required.push_back(bdtWeightsBranch);
+  if (bdtTruthDiagnostics) {
+    for (string const field : {"hitGenPartIdx", "hitTruthPurity", "hitTruthMatchedLayers", "hitSimTrackId"})
+      required.push_back("ShiftMuon_" + field);
+    for (string const field : {"pdgId", "status", "genPartIdxMother", "vx", "vy", "vz"})
+      required.push_back("GenPart_" + field);
+  }
+  for (auto const& name : required) {
+    if (!tree->GetBranch(name.c_str()))
+      throw runtime_error("Missing saved BDT diagnostic branch: " + name);
+    auto const separator = name.find('_');
+    if (separator == string::npos) continue;
+    string const collection = name.substr(0, separator);
+    if (collection != "ShiftMuon" && collection != "ShiftDimuonVertex" && collection != "GenPart") continue;
+    auto leaf = tree->GetLeaf(name.c_str());
+    if (!leaf || !leaf->GetLeafCount() || string(leaf->GetLeafCount()->GetName()) != "n" + collection)
+      throw runtime_error("Saved BDT diagnostic array has inconsistent collection count: " + name);
+  }
+  if (auto metadata = dynamic_cast<TObjString*>(inputFile->Get("ShiftDimuonVertex_bdtScoreMetadata")))
+    bdtInputMetadata = metadata->GetString().Data();
+  for (auto const& [names, histogram] : histogramsHandler->GetHistograms1D())
+    if (names.first.find("_bdtScore") != string::npos) histogram->Sumw2();
+  map<string, string> const titles = {{"Mass", "m_{#mu#mu}^{reco} [GeV]"},
+      {"Vz", "v_{z}^{reco} [cm]"}, {"VertexR", "r_{vertex}^{reco} [cm]"}};
+  for (auto const& [names, histogram] : histogramsHandler->GetHistograms2D())
+    for (auto const& [axis, title] : titles)
+      if (names.first.find("_bdtScoreVs" + axis) != string::npos) {
+        histogram->Sumw2();
+        histogram->GetXaxis()->SetTitle(title.c_str());
+        histogram->GetYaxis()->SetTitle("dimuon vertex BDT score");
+      }
+}
+
+string ShiftHistogramsFiller::BdtTruthLabel(const shared_ptr<PhysicsObjects>& muons,
+    const shared_ptr<PhysicsObjects>& particles, int first, int second) const {
+  int gen[2];
+  int const reco[2] = {first, second};
+  for (int side = 0; side < 2; ++side) {
+    auto const muon = muons->at(reco[side]);
+    gen[side] = muon->GetAs<int>("hitGenPartIdx");
+    if (gen[side] < 0 || size_t(gen[side]) >= particles->size()) return "Unknown";
+    auto const particle = particles->at(gen[side]);
+    double const purity = muon->GetAs<double>("hitTruthPurity");
+    if (particle->GetAs<int>("status") != 1 || abs(particle->GetAs<int>("pdgId")) != 13 ||
+        !isfinite(purity) || purity < .75 || muon->GetAs<int>("hitTruthMatchedLayers") < 3)
+      return "Unknown";
+  }
+  int const firstTrack = muons->at(first)->GetAs<int>("hitSimTrackId");
+  if (gen[0] == gen[1] || (firstTrack >= 0 && firstTrack == muons->at(second)->GetAs<int>("hitSimTrackId")))
+    return "Accidental";
+  double distanceSquared = 0.;
+  for (string const coordinate : {"vx", "vy", "vz"}) {
+    double const a = particles->at(gen[0])->GetAs<double>(coordinate);
+    double const b = particles->at(gen[1])->GetAs<double>(coordinate);
+    if (!isfinite(a) || !isfinite(b)) return "Unknown";
+    distanceSquared += (a - b) * (a - b);
+  }
+  double const distance = sqrt(distanceSquared);
+  if (distance <= .01) return "Genuine";
+  if (distance >= .1) return "Accidental";
+  return "Unknown";
+}
+
+void ShiftHistogramsFiller::FillBdtDiagnostics(const shared_ptr<Event>& event) {
+  if (!enableBdtDiagnostics || !bdtScoreAvailable) return;
+  double const weight = enableTruthDiagnostics && !bdtWeightsBranch.empty() ?
+      event->GetAs<double>(bdtWeightsBranch) : 1.;
+  if (!isfinite(weight)) throw runtime_error("Nonfinite configured BDT event weight");
+  ++bdtEvents;
+  bdtEventSumw += weight; bdtEventSumw2 += weight * weight;
+  auto const muons = event->GetCollection("ShiftMuon");
+  auto const particles = bdtTruthDiagnostics ? event->GetCollection("GenPart") : nullptr;
+  map<PhysicsObject const*, vector<string>> categories;
+  for (auto const& category : dimuonCategories)
+    for (auto const& pair : *event->GetCollection("ShiftDimuonVertex" + category))
+      categories[pair.get()].push_back(category);
+  for (auto const& pair : *event->GetCollection("ShiftDimuonVertex")) {
+    double const score = pair->GetAs<double>("bdtScore");
+    if (!isfinite(score) || score < 0. || score > 1.)
+      throw runtime_error("Saved BDT score must be finite and between zero and one");
+    int const first = pair->GetAs<int>("muonIdx1"), second = pair->GetAs<int>("muonIdx2");
+    if (first < 0 || second < 0 || first == second || size_t(first) >= muons->size() || size_t(second) >= muons->size())
+      throw runtime_error("Invalid retained BDT dimuon reference");
+    vector<string> labels = {""};
+    if (bdtTruthDiagnostics) {
+      auto const label = BdtTruthLabel(muons, particles, first, second);
+      labels.push_back(label); ++bdtLabelPairs[label];
+    }
+    ++bdtPairs; bdtPairSumw += weight; bdtPairSumw2 += weight * weight;
+    map<string, double> const coordinates = {{"Mass", pair->GetAs<double>("mass")},
+        {"Vz", pair->GetAs<double>("vz")},
+        {"VertexR", hypot(pair->GetAs<double>("vx"), pair->GetAs<double>("vy"))}};
+    for (auto const& [axis, coordinate] : coordinates)
+      if (!isfinite(coordinate)) ++bdtNonfiniteMapCoordinates[axis];
+    for (auto const& category : categories.at(pair.get())) {
+      string const prefix = "ShiftDimuonVertex" + category + "_bdtScore";
+      for (auto const& label : labels) {
+        histogramsHandler->FillWithWeight(prefix + label, score, weight);
+        histogramsHandler->FillUnweighted(prefix + label + "Unweighted", score);
+      }
+      for (auto const& [axis, coordinate] : coordinates)
+        if (isfinite(coordinate)) histogramsHandler->FillWithWeight(prefix + "Vs" + axis, coordinate, score, weight);
+    }
+  }
+}
+
+void ShiftHistogramsFiller::SaveBdtMetadata() {
+  if (!enableBdtDiagnostics) return;
+  string outputPath;
+  ConfigManager::GetInstance().GetValue("histogramsOutputFilePath", outputPath);
+  TDirectory::TContext context;
+  unique_ptr<TFile> output(TFile::Open(outputPath.c_str(), "UPDATE"));
+  if (!output || output->IsZombie()) throw runtime_error("Cannot save BDT diagnostic metadata");
+  if (!bdtInputMetadata.empty())
+    TObjString(bdtInputMetadata.c_str()).Write("ShiftDimuonVertex_bdtScoreMetadata");
+  ostringstream metadata;
+  metadata << setprecision(17) << "{\"schema\":\"shift-dimuon-bdt-histograms-v2\",\"complete\":true,\"scope\":\"input_file\",\"score_available\":"
+      << (bdtScoreAvailable ? "true" : "false") << ",\"truth_diagnostics\":"
+      << (bdtTruthDiagnostics ? "true" : "false") << ",\"score_selection_applied\":false,\"weights_branch\":"
+      << quoted(enableTruthDiagnostics ? bdtWeightsBranch : "")
+      << ",\"weight_application_count\":" << (enableTruthDiagnostics && !bdtWeightsBranch.empty() ? 1 : 0)
+      << ",\"events\":" << bdtEvents << ",\"pairs\":" << bdtPairs
+      << ",\"event_sumw\":" << bdtEventSumw << ",\"event_sumw2\":" << bdtEventSumw2
+      << ",\"pair_sumw\":" << bdtPairSumw << ",\"pair_sumw2\":" << bdtPairSumw2
+      << ",\"label_pairs\":{";
+  for (auto const& label : {"Genuine", "Accidental", "Unknown"}) {
+    if (string(label) != "Genuine") metadata << ',';
+    metadata << quoted(label) << ':' << bdtLabelPairs[label];
+  }
+  metadata << "},\"nonfinite_map_coordinates\":{";
+  for (auto const& axis : {"Mass", "Vz", "VertexR"}) {
+    if (string(axis) != "Mass") metadata << ',';
+    metadata << quoted(axis) << ':' << bdtNonfiniteMapCoordinates[axis];
+  }
+  metadata << "}}";
+  TObjString(metadata.str().c_str()).Write("ShiftDimuonVertex_bdtHistogramMetadata");
+  output->Close();
 }
 
 void ShiftHistogramsFiller::FillConstrainedMuons(const shared_ptr<Event> event) {
