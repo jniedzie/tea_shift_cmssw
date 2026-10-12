@@ -66,27 +66,32 @@ contain `cross_section_pb` and `full_gen_sumw` from the frozen parent GEN
 authority. An optional `histogram_sha256` must match if supplied. Signal rows
 have `process: signal` and distinct names for every mass/lifetime point.
 
-The main `shift_plotter_config.py` reads this inventory and applies
+The optional `shift_bdt_mixing_plotter_config.py` reads this inventory. Its shared
+`utils/shift_bdt_mixing_histogram_inputs.py` helper applies
 `cross_section_pb/full_gen_sumw` to each weighted SM bin before
 combining bins into QCD, DY and J/psi histograms. It preserves raw counts and
 keeps signal points separate. It writes `plot_inputs.json` only as complete
 after every process histogram has been written and checksummed. It never uses
 selected Nano event counts or selected weight sums as the GEN denominator.
 
-Prepare the process mixture and render it in the ordinary TEA plotter:
+Set the study paths in `configs/shift_paths.py`:
+
+```python
+bdt_mixing_histogram_inventory = "/absolute/path/bdt_bin_inputs.json"
+bdt_mixing_preparation_directory = "/absolute/path/new_process_shapes"
+bdt_mixing_plot_output = "/absolute/path/new_plots"
+bdt_mixing_plot_scope = "all"
+```
+
+Then prepare the process mixture and render it in the ordinary TEA plotter:
 
 ```bash
 source tea/setup.sh
-export SHIFT_PLOT_INPUTS=/absolute/path/bdt_bin_inputs.json
-export SHIFT_PLOT_MODE=bdt
-export SHIFT_PLOT_PREPARATION_DIR=/absolute/path/new_process_shapes
-export SHIFT_PLOT_OUTPUT=/absolute/path/new_plots
-export PYTHONPATH="$(pwd)/configs:${PYTHONPATH}"
 cd bin
-python plotter.py --config shift_plotter_config.py
+python plotter.py --config shift_bdt_mixing_plotter_config.py
 ```
 
-`SHIFT_PLOT_OUTPUT` selects the plot directory. The config
+`bdt_mixing_plot_output` selects the plot directory. The config
 produces PDF and PNG score shapes, plus PDF reconstructed-coordinate maps for the
 inclusive and Both-Both categories. The three SM process distributions are
 shown as lines and normalized separately to unit area after the bin mixture
@@ -97,19 +102,21 @@ and is not a classifier metric. The coordinate maps are not proper-lifetime
 maps; a lifetime study requires the corresponding signal MC and truth labels
 for evaluation.
 
-Set `SHIFT_PLOT_SCOPE=sm` for the three SM process overlays, or `all`
+Set `bdt_mixing_plot_scope = "sm"` for the three SM process overlays, or `"all"`
 (the default) to include each signal point. Use distinct
-`SHIFT_PLOT_OUTPUT` directories when rendering both. The all-sample view
+`bdt_mixing_plot_output` directories when rendering both. The all-sample view
 uses an external legend when there are more than five curves and distinct
 signal colors/styles. SM process legends are QCD, DY and J/psi after combining
-their bins. The main config resolves either equivalent EOS user mount while
+their bins. The input helper resolves either equivalent EOS user mount while
 retaining the original input path and checksum in its receipt.
 
 The completed process manifest can also be supplied directly through
-`SHIFT_PLOT_INPUTS`. Existing process preparations are reused only when their
+`bdt_mixing_histogram_inventory`. The inventory schema selects BDT or mixing
+plots. Existing process preparations are reused only when their
 original source hashes, preparation definitions and output hashes still match.
-There is no separate BDT plotter config or preparation script. Ordinary
-campaign plots use the same main config without a study inventory.
+There is no separate preparation command. Ordinary campaign plots continue
+to use `shift_plotter_config.py`; the optional study config handles BDT and
+event-mixing overlays without loading canonical campaign samples.
 
 ## Initial bounded validation, October 9
 

@@ -1,4 +1,5 @@
 """Select validated MC inputs without opening their event data."""
+import ast
 import json
 import hashlib
 import math
@@ -239,3 +240,46 @@ def full_gen_weight_sums(campaign, production_directory=None):
         return result
     except (OSError, ValueError, TypeError, KeyError) as error:
         raise RuntimeError(f"Cannot verify full GEN plot normalization for {campaign}: {error}") from error
+
+
+def load_nano_merge_groups(inventory_path, base_path):
+    """Read exact same-sample input groups without discovering extra files."""
+    inventory_path = Path(inventory_path)
+    inventory = json.loads(inventory_path.read_text())
+    if not isinstance(inventory, dict):
+        raise ValueError("Nano merge inventory must be a JSON object")
+    if inventory.get("schema") == "shift-nano-merge-inputs-v1":
+        groups = inventory.get("merge_input_groups")
+        if not isinstance(groups, dict) or not groups:
+            raise ValueError("Nano merge inventory contains no input groups")
+        result = {}
+        for destination, inputs in groups.items():
+            if (not isinstance(destination, str) or not destination or
+                    not isinstance(inputs, list) or not inputs or
+                    any(not isinstance(path, str) or not path for path in inputs)):
+                raise ValueError("Invalid exact Nano merge group")
+            result[destination] = [resolve_storage_path(path) for path in inputs]
+        return result
+    if not {"campaign", "bins", "inputs_sha256"} <= set(inventory):
+        raise ValueError("Unsupported Nano merge inventory")
+    # Retained production inventories bind their preceding-step input tuples.
+    # Their original logical paths own the process/bin identity after migration.
+    payload = (inventory_path.parent / "histogram_inputs.txt").read_bytes()
+    if hashlib.sha256(payload).hexdigest() != inventory["inputs_sha256"]:
+        raise ValueError("Nano merge input inventory checksum differs")
+    result, counts = {}, Counter()
+    for line in payload.decode().splitlines():
+        entry = ast.literal_eval(line)
+        if (not isinstance(entry, (tuple, list)) or len(entry) != 3 or
+                any(not isinstance(value, str) for value in entry)):
+            raise ValueError("Invalid preceding-step Nano input tuple")
+        nano = Path(entry[0])
+        stratum = nano.parent.parent.name
+        process, bin_name = stratum.split("_", 1)
+        destination = str(tier_directory(base_path, process, bin_name,
+                                         inventory["campaign"], "nanoAOD_merged"))
+        result.setdefault(destination, []).append(resolve_storage_path(nano))
+        counts[stratum] += 1
+    if dict(counts) != inventory["bins"] or not result:
+        raise ValueError("Nano merge groups differ from the frozen per-bin inventory")
+    return result

@@ -1,6 +1,14 @@
 # base_path = "/pnfs/iihe/cms/store/user/jniedzie/shift_cmssw"  # t2b
 base_path = "/eos/home-j/jniedzie/shift_cmssw/"  # lxplus
 
+# Optional exact Nano inputs and BDT/event-mixing histogram views.
+# Leave these unset for the standard campaign workflow.
+nano_merge_inventory = None
+bdt_mixing_histogram_inventory = None
+bdt_mixing_plot_output = None
+bdt_mixing_preparation_directory = None
+bdt_mixing_plot_scope = "all"
+
 sample = "jpsi"
 # sample = "qcd"
 # sample = "dy"

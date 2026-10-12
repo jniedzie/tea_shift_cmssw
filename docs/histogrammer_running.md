@@ -1,22 +1,27 @@
 # Running the SHIFT MC histogrammer
 
-## Main configs for every study
+## Standard and optional study configs
 
 Histogram definitions and study controls belong in
 `configs/shift_histogrammer_config.py`; plotting definitions belong in
-`configs/shift_plotter_config.py`. Use the standard SHIFT application, submitter,
-merger and plotter when the feature fits their ordinary histogram/plot model.
+`configs/shift_plotter_config.py` for standard campaign plots. Optional score
+and event-mixing overlays use `configs/shift_bdt_mixing_plotter_config.py`. Use the
+standard SHIFT application, submitter, merger and plotter when the feature
+fits their ordinary histogram/plot model.
 Specialized diagnostics such as ROC curves, fit checks and uncertainty plots
 belong in `utils/`. Keep calculation/preparation code outside the main configs
 instead of forcing every study into them.
 
 Saved BDT score diagnostics are optional fills in the main histogrammer.
-Unscored inputs retain ordinary histogramming. The main plotter accepts
-`SHIFT_PLOT_INPUTS` for a pinned histogram inventory, with
-`SHIFT_PLOT_MODE=bdt` or `mixing` for the corresponding view. Without an
-inventory it retains the standard campaign plots. Full GEN normalization is
-verified by the existing `shift_sample_paths.py` helper; the selected Nano
-count is never substituted for the parent GEN denominator.
+Unscored inputs retain ordinary histogramming. Set
+`bdt_mixing_histogram_inventory` in `configs/shift_paths.py` to the pinned
+histogram inventory for the optional study config. Its schema identifies BDT
+or event-mixing plots; no separate mode switch is needed.
+`utils/shift_bdt_mixing_histogram_inputs.py` verifies histogram inputs and prepares the SM bin
+mixture; it does not draw plots. The standard plot config stays unchanged.
+Full GEN normalization is verified by the existing `shift_sample_paths.py`
+helper; the selected Nano count is never substituted for the parent GEN
+denominator.
 
 Event mixing constructs pairs from different events and repeats the same
 pair fit; it cannot be replaced by histogram definitions alone. Its calculation
@@ -24,10 +29,25 @@ is one callable backend in `utils/shift_mixing.py`. Configure `eventMixing` and
 set `runEventMixing=True` in the main histogrammer config, then use the same
 `shift_histogrammer` application. The stage validates inputs and same-event fit
 closure before writing mixed rows, source-event uncertainties and ROOT inputs.
-Its completed `mixing_plot_inputs.json` is read by the main plotter with
-`SHIFT_PLOT_INPUTS` and `SHIFT_PLOT_MODE=mixing`. This optional study retains
+Set `bdt_mixing_histogram_inventory` to its completed `mixing_plot_inputs.json`.
+The optional study config reads that inventory. This study retains
 its unvalidated physics/rate status; producing plots does not establish its
 background-rate prediction.
+
+Set the plotting paths in `configs/shift_paths.py`:
+
+```python
+bdt_mixing_histogram_inventory = "/absolute/path/mixing_plot_inputs.json"
+bdt_mixing_plot_output = "/absolute/path/new_mixing_plots"
+```
+
+Render the completed study with the ordinary TEA plotter:
+
+```bash
+source tea/setup.sh
+cd bin
+python plotter.py --config shift_bdt_mixing_plotter_config.py
+```
 
 For specialized coverage and uncertainty-band checks, set
 `eventMixing["diagnostics"] = True`. That optional rendering stays in `utils/`
@@ -38,7 +58,7 @@ The superseded source/configs are byte-verified under workspace
 `validation/tea_consolidation_20261012/before/`. Frozen production deployments
 remain unchanged. The dated October 9 merged-BDT recovery tool reads its two
 historical dependencies from the supplied prior frozen plan; future studies
-use the canonical main configs.
+use the standard configs or the optional study config as appropriate.
 
 ## EOS storage layout after October 9, 2026
 
@@ -256,11 +276,12 @@ Never overwrite a live worker or frozen analysis payload when preparing repairs.
 ## Merge histograms by process-bin
 
 For raw Nano grouping before histogramming, use the existing Nano files config
-and merger, rather than a separate group-merge config:
+and merger, rather than a separate group-merge config. Set
+`nano_merge_inventory = "/absolute/path/nano_merge_inputs.json"` in
+`configs/shift_paths.py`, then run:
 
 ```bash
 source tea/setup.sh
-export SHIFT_NANO_MERGE_INVENTORY=/absolute/path/nano_merge_inputs.json
 cd bin
 python merge.py --files_config shift_nanoAOD_files_config.py \
   --n-files-to-merge 100 --condor --dry

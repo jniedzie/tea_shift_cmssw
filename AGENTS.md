@@ -18,6 +18,15 @@ create task branches or Git worktrees.
 - Specialized diagnostics such as BDT ROC curves, fit checks, closure studies
   and uncertainty plots belong in scripts under `utils/` when they do not fit
   ordinary histogram/plot definitions. Keep these outside the main configs.
+- Use a focused separate plot config when a study needs different inputs,
+  normalization or presentation and supporting it would complicate the main
+  config. Share reusable helpers; avoid a new config for each routine plot.
+- Keep files configs short: paths and options belong there; inventory parsing
+  and validation belong in existing shared input helpers.
+- Name helpers after their actual purpose, such as preparing plot inputs.
+- Follow the existing TEA config convention: input paths and shared options
+  come from `shift_paths.py`. Do not add environment-variable switches for
+  analysis paths or study selection when ordinary config settings suffice.
 - Keep substantial algorithms and preparation code in reusable library code.
   The main configs should primarily define settings, histograms and plots;
   do not bloat them with calculations that do not belong there.

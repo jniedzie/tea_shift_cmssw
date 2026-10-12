@@ -5,11 +5,10 @@ from Histogram import Histogram, Histogram2D
 from HistogramNormalizer import NormalizationType
 from CmsLabelsManager import CmsLabel
 from Logger import warn
-from shift_sample_paths import single_root_file
+from shift_sample_paths import single_root_file, full_gen_weight_sums
 from shift_storage_paths import tier_directory
 from shift_plot_binning import muon_variable_binning, dimuon_variable_binning
 from shift_plot_labels import apply_reconstruction_labels
-from shift_plot_normalization import full_gen_weight_sums
 
 from shift_paths import base_path, cross_sections, campaign
 
