@@ -1,6 +1,7 @@
 """Select validated MC inputs without opening their event data."""
 import json
 import hashlib
+import math
 from collections import Counter
 from pathlib import Path
 import re
@@ -150,3 +151,91 @@ def validated_nano_files(base_path, campaign, production_directory=None, *, allo
         from Logger import warn
         warn(f"Nano production incomplete: {len(files)}/{manifest['jobs']} jobs ready.")
     return files
+
+
+_REPRESENTATIVE_PREFIX = "shift_detector_representative_"
+
+
+def _read_normalization_record(path, expected_digest=None):
+    path = Path(path)
+    payload = path.read_bytes()
+    if expected_digest is not None and hashlib.sha256(payload).hexdigest() != expected_digest:
+        raise RuntimeError(f"Full GEN normalization provenance hash differs: {path}")
+    return json.loads(payload)
+
+
+def full_gen_weight_sums(campaign, production_directory=None):
+    """Return per-stratum parent GEN sums, or None for a legacy campaign.
+
+    Recognized representative campaigns fail closed if their frozen sampling
+    plan or original normalization authorities cannot be verified. Incomplete
+    detector processing never changes these denominators.
+    """
+    if not campaign.startswith(_REPRESENTATIVE_PREFIX):
+        return None
+    if not re.fullmatch(r"shift_detector_representative_[0-9]{8}_v[0-9]+", campaign):
+        raise RuntimeError(f"Invalid representative campaign: {campaign}")
+    root = Path(production_directory) if production_directory is not None else (
+        Path(__file__).resolve().parents[2] / "validation" /
+        ("ntuple_production_" + campaign[len(_REPRESENTATIVE_PREFIX):]))
+    try:
+        manifest = _read_normalization_record(root / "manifest.json")
+        if (manifest["schema"] != "shift-gen-to-nano-plan-v1" or
+                Path(manifest["eos_output"]).name != campaign):
+            raise RuntimeError("Detector manifest does not identify the requested campaign")
+        sampling = manifest["detector_sampling"]
+        if sampling["plan"] != "sampling_plan.json":
+            raise RuntimeError("Detector manifest does not identify the canonical sampling plan")
+        plan = _read_normalization_record(root / "sampling_plan.json", sampling["plan_sha256"])
+        if (plan["schema"] != "shift-detector-pps-sample-v1" or
+                plan["parent_manifest_sha256"] != sampling["parent_manifest_sha256"]):
+            raise RuntimeError("Sampling plan does not identify the frozen full GEN parent")
+        parent = _read_normalization_record(plan["parent_manifest"], plan["parent_manifest_sha256"])
+        strata = plan["strata"]
+        if (parent["schema"] != "shift-gen-to-nano-plan-v1" or
+                set(strata) != set(manifest["strata"]) or set(strata) != set(parent["strata"])):
+            raise RuntimeError("Full GEN and selected detector stratum inventories differ")
+
+        authorities = plan["normalization_authorities"]
+        for kind in ("ordinary", "weighted"):
+            authority = authorities[kind]
+            _read_normalization_record(authority["manifest"], authority["manifest_sha256"])
+            if (authority["manifest"] != parent[kind + "_manifest"] or
+                    authority["manifest_sha256"] != parent[kind + "_manifest_sha256"]):
+                raise RuntimeError(f"The {kind} GEN authority differs from the full parent")
+        weighted = authorities["weighted"]
+        accounting = _read_normalization_record(weighted["accounting"], weighted["accounting_sha256"])
+        if (accounting["schema"] != "shift-weighted-high-bin-final-accounting-v1" or
+                accounting["complete"] is not True or
+                accounting["manifest_sha256"] != weighted["manifest_sha256"] or
+                accounting["strata"] != weighted["strata"]):
+            raise RuntimeError("Weighted full GEN accounting differs from the sampling authority")
+        if not set(accounting["strata"]).issubset(strata):
+            raise RuntimeError("Weighted GEN authority contains an unknown stratum")
+
+        result = {}
+        for name, row in strata.items():
+            exposure = row["original_sumw"]
+            events = row["original_events"]
+            if (isinstance(exposure, bool) or not isinstance(exposure, (int, float)) or
+                    not math.isfinite(exposure) or exposure <= 0 or
+                    isinstance(events, bool) or not isinstance(events, int) or events <= 0 or
+                    events != parent["strata"][name] or
+                    row["realized_events"] != manifest["strata"][name]):
+                raise RuntimeError(f"Invalid full GEN exposure or event inventory for {name}")
+            records = row["original_normalization_records"]
+            if (not records or any(record["stratum"] != name for record in records) or
+                    sum(record["events"] for record in records) != events):
+                raise RuntimeError(f"Full GEN source accounting differs for {name}")
+            if name in accounting["strata"]:
+                original = accounting["strata"][name]
+                if (original["accepted"] != events or
+                        not math.isclose(exposure, original["sumw"], rel_tol=1e-12, abs_tol=0.)):
+                    raise RuntimeError(f"Weighted full GEN sum differs for {name}")
+            elif (exposure != events or
+                    any(record["normalization_record"] is not None for record in records)):
+                raise RuntimeError(f"Unit-weight full GEN exposure differs for {name}")
+            result[name] = float(exposure)
+        return result
+    except (OSError, ValueError, TypeError, KeyError) as error:
+        raise RuntimeError(f"Cannot verify full GEN plot normalization for {campaign}: {error}") from error
