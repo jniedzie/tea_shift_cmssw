@@ -6,6 +6,13 @@ from Logger import info
 from shift_paths import base_path, campaign, sample
 from shift_extra_collections import extraEventCollections
 from shift_sample_paths import latest_merged_sample
+from shift_plot_binning import (
+    linear_bin_edges,
+    dimuon_opening_angle_edges,
+    dimuon_fine_opening_angle_edges,
+    dimuon_origin_chi2_edges,
+)
+from shift_storage_paths import resolve_storage_path
 import re
 import glob
 import os
@@ -267,8 +274,8 @@ histParams = (
 # fmt: on
 
 # Reconstructed pair observables use the indexed ShiftMuon states, without
-# truth matching or additional cuts. Fine-angle and mass plots retain tails in
-# overflow; the full opening-angle spectrum includes the antiparallel endpoint.
+# truth matching or additional cuts. Angular spectra retain the full physical
+# range; fine source bins are merged only when rendering sparsely populated tails.
 for category in dimuonCategories:
     for variable, bins, low, high in (
         ("openingAngle", 630, 0.0, 3.15),
@@ -283,14 +290,14 @@ for category in dimuonCategories:
         ("maxMuonPt", 500, 0.0, 50.0),
         ("rapidity", 400, -10.0, 10.0),
         ("vertexR", 450, 0.0, 450.0),
-        ("massOS", 1000, 0.0, 20.0),
-        ("massSS", 1000, 0.0, 20.0),
+        ("massOS", 5000, 0.0, 100.0),
+        ("massSS", 5000, 0.0, 100.0),
         ("constrainedMass", 1000, 0.0, 100.0),
         ("refittedMass", 1000, 0.0, 100.0),
         ("probability", 101, 0.0, 1.01),
         ("originCompatibilityNormalizedChi2", 500, 0.0, 50.0),
         ("constrainedValid", 2, -0.5, 1.5),
-        ("refitStatus", 16, -11.5, 4.5),
+        ("refitStatus", 34, -32.5, 1.5),
     ):
         histParams += ((f"ShiftDimuonVertex{category}", variable, bins, low, high, "dimuon"),)
 
@@ -341,13 +348,14 @@ muonPtVariableBinEdges = (
     + tuple(22.0 + 2.0 * index for index in range(15))
 )
 muonPzVariableBinEdges = (
-    -2000.0, -1360.0, -880.0, -560.0, -400.0, -320.0, -280.0, -260.0,
-    -240.0, -220.0, -200.0, -180.0, -160.0, -140.0, -120.0, -100.0, -80.0,
-) + tuple(-75.8 + 4.2 * index for index in range(43))
-muonPVariableBinEdges = (
-    tuple(4.2 * index for index in range(25))
-    + (120.0, 140.0, 160.0, 180.0, 200.0, 240.0, 280.0, 320.0, 400.0,
-       480.0, 560.0, 880.0, 1360.0, 2000.0)
+    linear_bin_edges(
+        (-2000.0, -800.0, 100.0), (-800.0, -400.0, 40.0),
+        (-400.0, -200.0, 10.0), (-200.0, -100.0, 5.0), (-100.0, 100.0, 2.0)
+    )
+)
+muonPVariableBinEdges = linear_bin_edges(
+    (0.0, 120.0, 2.0), (120.0, 200.0, 5.0), (200.0, 400.0, 10.0),
+    (400.0, 800.0, 40.0), (800.0, 2000.0, 100.0)
 )
 
 # The dimuon spectrum becomes sparse earlier than the single-muon spectrum.
@@ -357,13 +365,32 @@ dimuonPtVariableBinEdges = (
     + tuple(6.5 + 0.5 * index for index in range(8))
     + tuple(11.0 + index for index in range(10))
 )
-dimuonPzVariableBinEdges = (
-    -1000.0, -680.0, -440.0, -280.0, -200.0, -160.0, -140.0, -120.0, -100.0,
-) + tuple(-94.5 + 5.5 * index for index in range(37))
-dimuonPVariableBinEdges = (
-    tuple(5.5 * index for index in range(19))
-    + (120.0, 140.0, 160.0, 200.0, 240.0, 280.0, 360.0, 440.0, 680.0, 1000.0)
+dimuonPzVariableBinEdges = linear_bin_edges(
+    (-1000.0, -400.0, 50.0), (-400.0, -200.0, 20.0),
+    (-200.0, -100.0, 10.0), (-100.0, 100.0, 2.5)
 )
+dimuonPVariableBinEdges = linear_bin_edges(
+    (0.0, 120.0, 2.5), (120.0, 200.0, 10.0), (200.0, 400.0, 20.0),
+    (400.0, 1000.0, 50.0)
+)
+
+# These are filled explicitly from reconstructed pairs, so they can retain
+# fine core bins and extend their axes without allocating fine empty tails.
+dimuon_source_variable_edges = {
+    "openingAngle": dimuon_opening_angle_edges,
+    "constrainedOpeningAngle": dimuon_opening_angle_edges,
+    "openingAngleFine": dimuon_fine_opening_angle_edges,
+    "originCompatibilityNormalizedChi2": dimuon_origin_chi2_edges,
+}
+histParams = tuple(
+    row for row in histParams
+    if not (row[0].startswith("ShiftDimuonVertex") and row[1] in dimuon_source_variable_edges)
+)
+for category in dimuonCategories:
+    irregularHistParams += tuple(
+        (f"ShiftDimuonVertex{category}", variable, edges, "dimuon")
+        for variable, edges in dimuon_source_variable_edges.items()
+    )
 
 irregularDefaultHistParams = ()
 for name in ["GenMuon", "ShiftMuon"] + [
@@ -519,6 +546,12 @@ dimuonEfficiencyBinning = {
     "eta": frange(-8, -3, 0.5),
     "phi": frange(-3.2, 3.2, 0.8),
     "vz": (14500, 14600, 14700, 14750, 14800, 14850, 14900, 15000, 15100),
+    # Lab-frame angle between the generated daughter momenta, in radians.
+    # Resolve boosted pairs finely while retaining the full physical range.
+    "openingAngle": (
+        0.0, 0.001, 0.002, 0.003, 0.005, 0.01, 0.02, 0.03, 0.05, 0.075,
+        0.1, 0.15, 0.2, 0.3, 0.5, 1.0, 1.5, 2.0, 3.15,
+    ),
 }
 
 muonEfficiencyPrefixes = ["ShiftMuonEfficiency"] + [
@@ -571,7 +604,7 @@ for name in ["RecoVsGenMuon", "RecoVsGenDimuon"]:
 
 
 def latest_versioned_sample():
-    samples_dir = f"{base_path}/{sample}/{campaign}/samples/step4_merged"
+    samples_dir = resolve_storage_path(f"{base_path}/{sample}/{campaign}/samples/step4_merged")
     input_path, provenance_tag = latest_merged_sample(samples_dir)
 
     project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -730,4 +763,28 @@ histParams2D += (
         10.0,
         "vertex_refit_diagnostics",
     ),
+)
+
+# Physical target-constrained values are valid only after a successful target
+# fit. The explicit filler checks constrainedValid; default branch filling
+# would otherwise turn uninitialized zeros into apparent physical peaks.
+def is_constrained_muon_physical_histogram(row):
+    return (
+        row[0].startswith("ShiftMuon")
+        and row[1].startswith("constrained")
+        and row[1] not in ("constrainedValid", "constrainedStatus")
+    )
+
+
+histParams += tuple(
+    row for row in defaultHistParams if is_constrained_muon_physical_histogram(row)
+)
+defaultHistParams = tuple(
+    row for row in defaultHistParams if not is_constrained_muon_physical_histogram(row)
+)
+irregularHistParams += tuple(
+    row for row in irregularDefaultHistParams if is_constrained_muon_physical_histogram(row)
+)
+irregularDefaultHistParams = tuple(
+    row for row in irregularDefaultHistParams if not is_constrained_muon_physical_histogram(row)
 )
