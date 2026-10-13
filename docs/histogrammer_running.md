@@ -85,8 +85,10 @@ and histogram checksum before returning an input.
 The flight values `[None, 5, 30]` mean prompt and estimated mean lab flights of
 5 and 30 metres; they are not proper decay lengths. Set either whole selector
 to `None` to include all of its available values, or `[]` to include none.
-An unfinished selected point or an unknown requested mass/lifetime is an
-error. Unselected unfinished points do not block plotting.
+An unfinished selected point or a missing merged histogram produces a logger
+warning and is omitted; plotting continues with the available points.
+Unknown requested masses/lifetimes and inconsistent checksums, model labels
+or provenance remain errors. Unselected unfinished points produce no warning.
 
 Output is automatic too: `plots/SM_BSM/<bsm_campaign>/` in this repository.
 Set `bsm_campaign = None` for SM-only plots. The optional

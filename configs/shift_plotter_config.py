@@ -312,6 +312,7 @@ for name, label in (
 # Rebin only recorded source bins and display densities, so changing a bin's
 # width does not itself create a rising tail or a false bump. The same edges
 # apply to the inclusive and Both-Endcaps/Both-Both selections and all samples.
+variable_histogram_rebin = 5  # Merge this many adjacent display bins; 1 keeps them.
 for histogram in histograms:
     if histogram.name.startswith("muon/ShiftMuon"):
         rules, object_label = muon_variable_binning, "# muons"
@@ -323,7 +324,7 @@ for histogram in histograms:
     if variable not in rules:
         continue
     histogram.bin_edges = rules[variable]
-    histogram.rebin = 1
+    histogram.rebin = variable_histogram_rebin
     histogram.scale_by_bin_width = True
     unit = next(
         (unit for unit in ("GeV", "cm", "rad") if f"[{unit}]" in histogram.x_label),
@@ -365,6 +366,7 @@ show_cms_labels = True
 cms_label = CmsLabel.pas_sim
 lumi_label_value = luminosity
 label_outside_axes = True
+beam_label = "pp @ 13.6 TeV"
 
 legends = {
     SampleType.background: Legend(0.58, 0.2, 0.9, 0.9, "f", text_size=16),
@@ -384,16 +386,14 @@ show_ratio_plots = False
 # ratio_limits = (0.7, 1.3)  # Optional override; limits are automatic by default.
 
 if bsm_inputs:
-    # These pilots establish shapes, not signal rates. Match each observable's
-    # BSM area to its SM area without using an unvalidated signal cross section.
+    # Match each BSM histogram integral to its SM histogram integral.
     for histogram in histograms:
         histogram.norm_type = NormalizationType.to_background
-        histogram.title = "BSM shapes scaled to SM area (signal rates unvalidated)"
     canvas_size = (1400, 850)
     plot_margins = {"left": 0.10, "right": 0.37, "top": 0.12, "bottom": 0.14}
     legends = {
         SampleType.background: Legend(
-            0.65, 0.48, 0.99, 0.90, "f", title="SM frozen subset", text_size=16
+            0.65, 0.48, 0.99, 0.90, "f", title="SM", text_size=16
         ),
         SampleType.signal: Legend(
             0.65,
@@ -401,8 +401,7 @@ if bsm_inputs:
             0.99,
             0.45,
             "l",
-            title="BSM shapes (rates unvalidated)",
+            title="BSM (normalized to SM integral)",
             text_size=17,
         ),
     }
-    beam_label = "SHIFT; BSM shapes matched to SM"

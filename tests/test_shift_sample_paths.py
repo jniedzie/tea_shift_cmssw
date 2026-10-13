@@ -472,11 +472,16 @@ class BsmCampaignHistogramTest(unittest.TestCase):
     def test_unselected_failed_point_does_not_block_requested_complete_points(self):
         self.reports['m30_lab_5m']['complete'] = False
         self.publish('m30_lab_5m')
-        self.assertEqual(len(self.files([15], [None, 5])), 2)
-        with self.assertRaisesRegex(RuntimeError, 'completion|complete'):
-            self.files([30], [5])
+        with patch('Logger.warn') as warn:
+            self.assertEqual(len(self.files([15], [None, 5])), 2)
+            warn.assert_not_called()
+        with patch('Logger.warn') as warn:
+            rows = self.files([30], [None, 5])
+            self.assertEqual({row['name'] for row in rows}, {'m30_prompt'})
+            warn.assert_called_once()
+            self.assertIn('m30_lab_5m', warn.call_args.args[0])
 
-    def test_missing_selected_report_or_publication_cannot_be_skipped(self):
+    def test_missing_selected_report_or_publication_warns_and_keeps_available_curves(self):
         report = self.reports['m15_lab_5m']
         directory = Path(report['final_output_base'])
         paths = (self.deployment / 'completed_points/m15_lab_5m.json',
@@ -486,10 +491,42 @@ class BsmCampaignHistogramTest(unittest.TestCase):
             before = path.read_bytes()
             path.unlink()
             try:
-                with self.subTest(path=path), self.assertRaises((RuntimeError, OSError)):
-                    self.files([15], [5])
+                with self.subTest(path=path), patch('Logger.warn') as warn:
+                    rows = self.files([15], [None, 5])
+                    self.assertEqual({row['name'] for row in rows}, {'m15_prompt'})
+                    warn.assert_called_once()
+                    self.assertIn('m15_lab_5m', warn.call_args.args[0])
             finally:
                 path.write_bytes(before)
+
+    def test_all_selected_incomplete_points_warn_and_return_no_curves(self):
+        for name in ('m15_prompt', 'm15_lab_5m'):
+            self.reports[name]['complete'] = False
+            self.publish(name)
+        with patch('Logger.warn') as warn:
+            self.assertEqual(self.files([15], [None, 5]), [])
+            self.assertEqual(warn.call_count, 2)
+            messages = [call.args[0] for call in warn.call_args_list]
+            self.assertTrue(any('m15_prompt' in message for message in messages))
+            self.assertTrue(any('m15_lab_5m' in message for message in messages))
+
+    def test_unfinished_local_grouping_scoring_or_marker_warns_and_keeps_available_curves(self):
+        original = copy.deepcopy(self.reports['m15_lab_5m'])
+        for stage in ('union', 'scoring', 'marker'):
+            report = copy.deepcopy(original)
+            if stage == 'union':
+                report['union']['complete'] = False
+            elif stage == 'scoring':
+                report['score_histograms']['complete'] = False
+            else:
+                report['score_histograms']['marker']['complete'] = False
+            self.reports['m15_lab_5m'] = report
+            self.publish('m15_lab_5m')
+            with self.subTest(stage=stage), patch('Logger.warn') as warn:
+                rows = self.files([15], [None, 5])
+                self.assertEqual({row['name'] for row in rows}, {'m15_prompt'})
+                warn.assert_called_once()
+                self.assertIn('m15_lab_5m', warn.call_args.args[0])
 
     def test_unknown_requested_values_and_cross_combination_are_rejected(self):
         for masses, flights in (([999], None), (None, [99]), ([15, 30], [None, 99])):

@@ -405,14 +405,15 @@ def _bsm_selector(values, label, *, allow_prompt=False):
 
 def validated_bsm_campaign_histograms(base_path, campaign, masses=None, mean_lab_flights=None,
                                       *, cache_directory=None, validation_directory=None):
-    """Resolve selected complete signal points from a sealed campaign.
+    """Resolve available selected signal points from a sealed campaign.
 
     Flight values are the grid's estimated mean lab flights in metres, not c*tau.
     None selects every value; a None entry in the flight list selects prompt.
-    A missing requested point is an error, even if other points have finished.
+    Unfinished points warn and are skipped so the available curves can be plotted.
     """
     if campaign is None:
         return []
+    from Logger import warn
     if not isinstance(campaign, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", campaign):
         raise RuntimeError(f"Invalid BSM campaign: {campaign!r}")
     masses = _bsm_selector(masses, "mass")
@@ -460,16 +461,33 @@ def validated_bsm_campaign_histograms(base_path, campaign, masses=None, mean_lab
         if _canonical_path(resolve_storage_path(directory)) != _canonical_path(resolve_storage_path(prefix)):
             raise RuntimeError(f"BSM point namespace differs from the selected campaign: {name}")
         report_path = root / "completed_points" / (name + ".json")
-        if not report_path.is_file():
-            raise RuntimeError(f"Selected BSM point is not complete: {name} ({report_path})")
+        required = (report_path, directory / "metadata/grouping/union.json",
+                    directory / "metadata/bdt_grouped/complete.json",
+                    directory / "histograms_merged/ntuple_0.root")
+        missing_path = next((path for path in required if not path.is_file()), None)
+        if missing_path is not None:
+            warn(f"Skipping unfinished BSM point {name}: required input is missing ({missing_path}). "
+                 "Continuing with the available points.")
+            continue
         report = _read_normalization_record(report_path)
+        if report.get("complete") is not True:
+            warn(f"Skipping unfinished BSM point {name}: production is not complete. "
+                 "Continuing with the available points.")
+            continue
         if (report.get("schema") != "shift-independent-signal-point-complete-v1" or
-                report.get("complete") is not True or report.get("point") != name or
+                report.get("point") != name or
                 report.get("events") != count or report.get("seal_sha256") != seal_hash or
                 (repartitioned and (report.get("plan_sha256") != plan_hash or
                                     report.get("final_output_base") != prefix))):
             raise RuntimeError(f"Selected BSM point has an invalid completion receipt: {name}")
         parent, union = inventory["points"][name], report["union"]
+        scored = report["score_histograms"]
+        marker = scored["marker"]
+        if (union.get("complete") is not True or scored.get("complete") is not True or
+                marker.get("complete") is not True):
+            warn(f"Skipping unfinished BSM point {name}: grouping or histogramming is not complete. "
+                 "Continuing with the available points.")
+            continue
         expected = parent["event_ids"]
         ids = [tuple(event) for event in expected]
         if (type(count) is not int or count <= 0 or parent.get("events") != count or
@@ -479,7 +497,7 @@ def validated_bsm_campaign_histograms(base_path, campaign, masses=None, mean_lab
                 any(parent.get(key) != row[key] for key in
                     ("mass_gev", "epsilon", "proper_ctau_mm", "run_number")) or
                 union.get("schema") != "shift-independent-signal-union-v1" or
-                union.get("complete") is not True or union.get("point") != name or
+                union.get("point") != name or
                 union.get("events") != count or union.get("event_ids") != expected or
                 union.get("parent_gen") != parent or union.get("parent_gen_ledger_count") != 1 or
                 union.get("histogramming_started_after_complete_grouping") is not True or
@@ -492,12 +510,9 @@ def validated_bsm_campaign_histograms(base_path, campaign, masses=None, mean_lab
                 raise RuntimeError(f"BSM native weights differ from the full GEN parent: {name}")
         if _read_normalization_record(directory / "metadata/grouping/union.json") != union:
             raise RuntimeError(f"BSM published grouping receipt differs: {name}")
-        scored = report["score_histograms"]
-        marker = scored["marker"]
         grouped = union["grouped"]
         grouped_hash = grouped.get("sha256")
-        if (scored.get("complete") is not True or marker.get("complete") is not True or
-                marker.get("schema") != "shift-merged-dimuon-bdt-complete-v1" or
+        if (marker.get("schema") != "shift-merged-dimuon-bdt-complete-v1" or
                 marker.get("events") != count or marker.get("selection_applied") is not False or
                 marker.get("plan_sha256") != seal_hash or
                 marker.get("model_sha256") != model_hash or
