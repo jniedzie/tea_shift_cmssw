@@ -211,3 +211,35 @@ annotated figure receipt; the all-sample legend and direct separation panels
 were visually checked. Twelve preparer tests and a native ROOT signed-weight,
 zero-sum and endpoint-score overlay regression passed. Original score ROOT
 files, histograms and earlier plots were preserved.
+
+## October 13 DNN and vertex-category study
+
+The study compares frozen BDT references with validation-selected neural
+models. Specialized score, ROC, category and signal-transfer diagnostics use
+`utils/shift_vertex_dnn_diagnostics.py`,
+`utils/shift_bdt_category_diagnostics.py` and
+`utils/shift_bdt_signal_transfer.py`. Ordinary ntuple histograms and their
+deployed BDT are unchanged.
+
+Final PDF figures, numerical results, models and provenance are under
+[`plots/DNN_vertex_20261013/`](../plots/DNN_vertex_20261013/README.md), inside
+this repository for direct access in VS Code. The reviewed six-model figures
+are in `dnn_comparison_reviewed/`, category figures in `dnn_categories/`, and
+the independent six-point signal comparison in
+`fresh_signal_transfer/evaluation_v2/`. Earlier draft renders are preserved.
+Generated study artifacts remain local and are ignored by Git.
+
+The category-aware DNN keeps 88.8% of genuine Near-Both SM pairs versus
+78.4% for the flatter BDT, with essentially the same pooled fake rejection
+(41.0% versus 40.6%). It keeps 160/173 genuine independent signal pairs
+versus 147/173 for that BDT; the strong BDT keeps 173/173. This is improved
+preservation, not demonstrated better pooled rejection or mass/lifetime
+independence. QCD has no genuine test support. Models and cuts are locked
+before neural test and fresh-signal inference; unknown labels stay separate,
+and all 1,200 fresh GEN parents remain in the denominator audit.
+
+The frozen source and detailed physics record are in
+`CMSSW_17_0_0_pre4/src/PhysicsTools/ShiftDimuonClassifier/` and its
+`DIMUON_VERTEX_CLASSIFIER.md`. Validation passed 132 classifier tests and
+18 targeted analysis tests. Future final results and PDF figures must remain
+inside this repository.

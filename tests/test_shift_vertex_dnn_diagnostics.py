@@ -49,6 +49,8 @@ class DnnDiagnosticBoundary(unittest.TestCase):
         lock = dict(selection_uses_test=False, rejection_winner='nn_a', flatness_winner='nn_a',
                     acceptance_envelope_winner=None, thresholds={'nn_unselected': .2})
         self.assertEqual(selected_models(lock), ['reference_uniform_bdt_3p0_s71', 'expanded_d3_s0_n400', 'nn_a'])
+        self.assertEqual(selected_models(lock, include_flat_bdt=True),
+                         ['reference_uniform_bdt_3p0_s71', 'expanded_d3_s0_n400', 'expanded_d3_s3_n400', 'nn_a'])
         lock['selection_uses_test'] = True
         with self.assertRaisesRegex(ValueError, 'Test-based'):
             selected_models(lock)

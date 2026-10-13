@@ -15,7 +15,7 @@ from shift_bdt_discrimination_diagnostics import clean, digest, load_npz, read, 
 
 
 PROCESSES = (('sm', 'Pooled SM'), ('dy', 'DY'), ('jpsi', 'J/psi'), ('qcd', 'QCD'))
-REFERENCES = ('reference_uniform_bdt_3p0_s71', 'expanded_d3_s0_n400')
+REFERENCES = ('reference_uniform_bdt_3p0_s71', 'expanded_d3_s0_n400', 'expanded_d3_s3_n400')
 
 
 def checked(ref):
@@ -24,12 +24,13 @@ def checked(ref):
     return path
 
 
-def selected_models(lock):
+def selected_models(lock, include_flat_bdt=False):
     require(lock.get('selection_uses_test') is False, 'Test-based model selection is forbidden')
     chosen = [lock[key] for key in ('rejection_winner', 'flatness_winner', 'acceptance_envelope_winner')
               if lock.get(key) is not None]
     require(bool(chosen), 'No validation-selected neural models')
-    return list(dict.fromkeys([*REFERENCES, *chosen]))
+    references = REFERENCES if include_flat_bdt else REFERENCES[:2]
+    return list(dict.fromkeys([*references, *chosen]))
 
 
 def frozen_statistics(path):
@@ -67,7 +68,7 @@ def validate_model_origin(name, result, combined_protocol):
             'model': result['model'], 'history': result['history']}
 
 
-def load_inputs(inputs, training):
+def load_inputs(inputs, training, include_flat_bdt=False):
     completion = read(training / 'completion.json')
     require(completion.get('complete') is True, 'Training study is incomplete')
     require(checked(completion['diagnostic_inputs']).resolve() == inputs.resolve(), 'Wrong diagnostic input manifest')
@@ -107,7 +108,7 @@ def load_inputs(inputs, training):
     earlier_completion = read(earlier_root / 'completion.json')
     require(earlier_completion['development']['scores'] == protocol['bdt_scores'], 'Original BDT score receipt differs')
     earlier_lock = read(checked(earlier_completion['selection']))
-    models, histories = selected_models(lock), {}
+    models, histories = selected_models(lock, include_flat_bdt), {}
     for name in models:
         require(name in scores and name in diagnostic_lock['thresholds'], 'Missing locked model: ' + name)
         require(scores[name].shape == labels['y'].shape and np.isfinite(scores[name]).all(), 'Invalid model scores')
@@ -146,8 +147,8 @@ def acceptance(perf, passed, identities, weights, repeats=200):
     return {'empirical': empirical, 'weighted': weighted}
 
 
-def build(workspace, inputs, training):
-    protocol, lock, reco, labels, scores, test, models, histories = load_inputs(inputs, training)
+def build(workspace, inputs, training, include_flat_bdt=False):
+    protocol, lock, reco, labels, scores, test, models, histories = load_inputs(inputs, training, include_flat_bdt)
     perf = frozen_statistics(training / 'source_snapshot/bdt_performance.py')
     y = labels['y']
     split = scores['expanded_split']
@@ -221,8 +222,10 @@ def render(report, reco, labels, scores, test, dimensions, histories, output):
     import matplotlib.pyplot as plt
     models = report['models']
     palette = dict(zip(models, plt.get_cmap('tab10').colors))
-    titles = {REFERENCES[0]: 'Current uniform BDT', REFERENCES[1]: 'Expanded strong BDT'}
-    for name in models[2:]:
+    titles = {REFERENCES[0]: 'Current uniform BDT', REFERENCES[1]: 'Expanded strong BDT', REFERENCES[2]: 'Expanded flat BDT'}
+    for name in models:
+        if name in REFERENCES:
+            continue
         roles = [key.replace('_winner', '').replace('_', ' ') for key, value in report['selection'].items() if value == name]
         titles[name] = 'DNN: ' + ', '.join(roles)
     report['model_titles'] = titles
@@ -313,7 +316,8 @@ def render(report, reco, labels, scores, test, dimensions, histories, output):
                     ax.set(title=title + ': ' + axis_title, ylabel='Genuine retained' if label == 'genuine' else 'Fake rejected', ylim=(0, 1.03))
                     ax.grid(axis='y', alpha=.2)
             axes[0, 0].legend(fontsize=6, loc='lower left', bbox_to_anchor=(0, .12))
-            fig.suptitle(f'{kind.capitalize()} {label} acceptance at frozen validation cuts; expanded development test\nTraining-defined bins; 95% event bootstrap; open markers are unsupported; empty bins are unmeasured')
+            quantity = 'genuine retention' if label == 'genuine' else 'fake rejection'
+            fig.suptitle(f'{kind.capitalize()} {quantity} at frozen validation cuts; expanded development test\nTraining-defined bins; 95% event bootstrap; open markers are unsupported; empty bins are unmeasured')
             save(fig, kind + '_' + label + '_profiles')
 
     fig, axes = plt.subplots(len(histories), 3, figsize=(15, 3.5 * len(histories)), squeeze=False, layout='constrained')
@@ -338,11 +342,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('workspace', 'inputs', 'training', 'output'):
         parser.add_argument('--' + name, type=Path, required=True)
+    parser.add_argument('--include-flat-bdt', action='store_true', help='Also compare the frozen expanded flat BDT reference')
     args = parser.parse_args()
     workspace, output = args.workspace.resolve(), args.output.resolve()
     require(output.is_relative_to(workspace / 'tea_shift_cmssw/plots'), 'Final diagnostics must be inside project plots')
     require(not output.exists(), 'Refusing to overwrite an existing diagnostic directory')
-    result = build(workspace, args.inputs.resolve(), args.training.resolve())
+    result = build(workspace, args.inputs.resolve(), args.training.resolve(), args.include_flat_bdt)
     output.mkdir(parents=True)
     render(*result, output)
     (output / 'diagnostics.json').write_text(json.dumps(clean(result[0]), indent=2, allow_nan=False) + '\n')
