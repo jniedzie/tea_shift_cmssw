@@ -403,13 +403,98 @@ def _bsm_selector(values, label, *, allow_prompt=False):
     return set(values)
 
 
+def _partial_bsm_plot_histogram(validation_directory, deployment, plan, row, parent,
+                                plan_hash, seal_hash, cache_directory):
+    """Use a prepared histogram of audited completed chunks, with its full GEN parent."""
+    root = Path(validation_directory) if validation_directory is not None else (
+        Path(__file__).resolve().parents[2] / "validation")
+    candidates = []
+    for path in root.glob(f"*/{row['point']}/point_receipt.json"):
+        receipt = _read_normalization_record(path)
+        if (receipt.get("schema") == "shift-bsm-plot-histogram-v1" and
+                receipt.get("campaign") == plan["campaign"] and receipt.get("point") == row["point"]):
+            candidates.append((path, receipt))
+    if not candidates:
+        return None
+    if len(candidates) != 1:
+        raise RuntimeError(f"Ambiguous prepared BSM plot histograms: {row['point']}")
+    path, receipt = candidates[0]
+    count, processed = row["events"], receipt.get("events")
+    if (receipt.get("complete") is not True or receipt.get("partial") is not True or
+            receipt.get("production_complete") is not False or receipt.get("selection_applied") is not False or
+            receipt.get("plan_sha256") != plan_hash or receipt.get("seal_sha256") != seal_hash or
+            receipt.get("parent_gen") != parent or receipt.get("full_gen_events") != count or
+            type(processed) is not int or not 0 < processed < count or
+            any(receipt.get(key) != row[key] for key in
+                ("mass_gev", "epsilon", "proper_ctau_mm", "target_mean_lab_flight_m"))):
+        raise RuntimeError(f"Prepared partial BSM histogram has unrelated provenance: {path}")
+    expected = parent["event_ids"]
+    sources, chunk_ids = [], set()
+    for source in receipt.get("source_chunks", []):
+        chunk_id = source.get("chunk")
+        chunks = [chunk for chunk in row["chunks"] if chunk["chunk"] == chunk_id]
+        if len(chunks) != 1 or chunk_id in chunk_ids:
+            raise RuntimeError("Partial BSM histogram repeats or invents a detector chunk")
+        chunk = chunks[0]
+        origin = plan.get("retained_origins", {}).get(f"{row['point']}/{chunk_id}", dict(
+            status_path=str(deployment / "statuses" / f"{row['point']}_{chunk_id:03d}.json"),
+            plan_sha256=plan_hash, seal_sha256=seal_hash))
+        if source.get("receipt_path") != origin["status_path"]:
+            raise RuntimeError("Partial BSM histogram changed its source receipt authority")
+        checksum = source.get("receipt_sha256")
+        if not isinstance(checksum, str) or not re.fullmatch(r"[0-9a-f]{64}", checksum):
+            raise RuntimeError("Partial BSM histogram has no source receipt checksum")
+        status = _read_normalization_record(source["receipt_path"], checksum)
+        ids = expected[chunk["skip"]:chunk["skip"] + chunk["count"]]
+        nano = status.get("published", {}).get("nanoAOD", {})
+        if (status.get("complete") is not True or status.get("point") != row["point"] or
+                status.get("chunk") != chunk_id or status.get("events") != chunk["count"] or
+                status.get("expected_event_ids") != ids or status.get("native_sumw") != len(ids) or
+                status.get("selection_applied") is not False or
+                status.get("parent_gen_sha256") != parent["gen_sha256"] or
+                status.get("plan_sha256") != origin["plan_sha256"] or
+                status.get("seal_sha256") != origin["seal_sha256"] or
+                source.get("nano_path") != chunk["nano"] or nano.get("path") != chunk["nano"] or
+                source.get("nano_sha256") != nano.get("sha256") or
+                status.get("nano_sha256") != nano.get("sha256")):
+            raise RuntimeError("Partial BSM histogram includes an unvalidated detector chunk")
+        chunk_ids.add(chunk_id)
+        sources.extend(ids)
+    included = {tuple(event) for event in sources}
+    missing = [event for event in expected if tuple(event) not in included]
+    if (len(sources) != processed or len(included) != processed or
+            sources != receipt.get("input_event_ids") or receipt.get("missing_event_ids") != missing or
+            [event for event in expected if tuple(event) in included] != sources or
+            parent.get("events") != count or len(expected) != count or
+            parent.get("native_sumw") != count or parent.get("native_sumw2") != count or
+            receipt.get("native_event_weight_sum") != processed or
+            receipt.get("native_event_weight_sum2") != processed):
+        raise RuntimeError("Partial BSM histogram changed event coverage or native weights")
+    grouped = Path(receipt["grouped_nano_path"])
+    histogram = Path(receipt["histogram_path"])
+    if (not grouped.is_relative_to(path.parent) or not histogram.is_relative_to(path.parent) or
+            not grouped.is_file() or hashlib.sha256(grouped.read_bytes()).hexdigest() != receipt.get("grouped_nano_sha256") or
+            histogram.name != "ntuple_0.root" or not histogram.is_file() or
+            histogram.stat().st_size != receipt.get("histogram_bytes") or
+            hashlib.sha256(histogram.read_bytes()).hexdigest() != receipt.get("histogram_sha256")):
+        raise RuntimeError("Prepared partial BSM histogram or grouped Nano checksum differs")
+    histogram_path = single_root_file(histogram.parent, cache_directory=cache_directory)
+    from Logger import info
+    info(f"Plotting BSM {row['point']} with {processed}/{count} processed events.")
+    return dict(name=row["point"], histogram_path=histogram_path, mass_gev=row["mass_gev"],
+        epsilon=row["epsilon"], mean_lab_flight_m=row["target_mean_lab_flight_m"],
+        events=processed, generated_events=count, initial_weight_sum=parent["native_sumw"],
+        physics_valid=False, normalization_ready=False, production_complete=False)
+
+
 def validated_bsm_campaign_histograms(base_path, campaign, masses=None, mean_lab_flights=None,
                                       *, cache_directory=None, validation_directory=None):
     """Resolve available selected signal points from a sealed campaign.
 
     Flight values are the grid's estimated mean lab flights in metres, not c*tau.
     None selects every value; a None entry in the flight list selects prompt.
-    Unfinished points warn and are skipped so the available curves can be plotted.
+    Prepared histograms of completed subsets are accepted with the full GEN denominator.
+    Points with no available histogram warn and are skipped.
     """
     if campaign is None:
         return []
@@ -466,6 +551,16 @@ def validated_bsm_campaign_histograms(base_path, campaign, masses=None, mean_lab
                     directory / "histograms_merged/ntuple_0.root")
         missing_path = next((path for path in required if not path.is_file()), None)
         if missing_path is not None:
+            partial = _partial_bsm_plot_histogram(validation_directory, root, plan, row,
+                inventory["points"][name], plan_hash, seal_hash, cache_directory)
+            if partial is not None:
+                ids = {tuple(event) for event in inventory["points"][name]["event_ids"]}
+                if identities.intersection(ids) or partial["histogram_path"] in paths:
+                    raise RuntimeError("Partial BSM histogram shares another physical point's events or path")
+                identities.update(ids)
+                paths.add(partial["histogram_path"])
+                result.append(partial)
+                continue
             warn(f"Skipping unfinished BSM point {name}: required input is missing ({missing_path}). "
                  "Continuing with the available points.")
             continue

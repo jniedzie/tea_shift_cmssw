@@ -510,6 +510,89 @@ class BsmCampaignHistogramTest(unittest.TestCase):
             self.assertTrue(any('m15_prompt' in message for message in messages))
             self.assertTrue(any('m15_lab_5m' in message for message in messages))
 
+    def prepare_partial_point(self):
+        name = 'm15_lab_5m'
+        row = next(row for row in self.plan['points'] if row['point'] == name)
+        parent = self.inventory['points'][name]
+        row['chunks'] = [dict(chunk=index, skip=index, count=1,
+            nano=row['final_output_base'] + f'/nanoAOD/chunk_{index:03d}.root') for index in range(2)]
+        self.freeze()
+        (self.deployment / 'completed_points' / (name + '.json')).unlink()
+        source_path = self.deployment / 'statuses' / (name + '_000.json')
+        status = dict(schema='shift-independent-signal-chunk-v1', complete=True, point=name,
+            chunk=0, events=1, native_sumw=1., selection_applied=False,
+            expected_event_ids=parent['event_ids'][:1], parent_gen_sha256=parent['gen_sha256'],
+            plan_sha256=self.plan_hash, seal_sha256=self.seal_hash, nano_sha256='a' * 64,
+            published=dict(nanoAOD=dict(path=row['chunks'][0]['nano'], sha256='a' * 64)))
+        self.write(source_path, status)
+        prepared = self.validation / 'bsm_plot_inputs_fixture' / name
+        grouped = prepared / 'nanoAOD_merged' / 'ntuple_0.root'
+        grouped.parent.mkdir(parents=True)
+        grouped.write_bytes(b'audited merged partial Nano payload')
+        histogram = prepared / 'histograms_merged' / 'ntuple_0.root'
+        histogram.parent.mkdir()
+        histogram.write_bytes(b'partial histogram payload')
+        receipt = dict(row, schema='shift-bsm-plot-histogram-v1', point=name, campaign=self.campaign,
+            complete=True, production_complete=False, partial=True, selection_applied=False,
+            events=1, full_gen_events=2, parent_gen=copy.deepcopy(parent),
+            plan_sha256=self.plan_hash, seal_sha256=self.seal_hash,
+            input_event_ids=copy.deepcopy(parent['event_ids'][:1]),
+            missing_event_ids=copy.deepcopy(parent['event_ids'][1:]),
+            native_event_weight_sum=1., native_event_weight_sum2=1.,
+            grouped_nano_path=str(grouped), grouped_nano_sha256=self.digest(grouped),
+            histogram_path=str(histogram), histogram_bytes=histogram.stat().st_size,
+            histogram_sha256=self.digest(histogram), source_chunks=[dict(chunk=0,
+                receipt_path=str(source_path), receipt_sha256=self.digest(source_path),
+                nano_path=row['chunks'][0]['nano'], nano_sha256='a' * 64)])
+        receipt_path = prepared / 'point_receipt.json'
+        self.write(receipt_path, receipt)
+        return receipt_path, receipt
+
+    def test_partial_point_is_plotted_with_the_original_full_gen_denominator(self):
+        _, receipt = self.prepare_partial_point()
+        with patch('Logger.warn') as warn:
+            rows = self.files([15], [None, 5])
+            warn.assert_not_called()
+        partial = next(row for row in rows if row['name'] == 'm15_lab_5m')
+        self.assertEqual(partial['histogram_path'], receipt['histogram_path'])
+        self.assertEqual(partial['events'], 1)
+        self.assertEqual(partial['generated_events'], 2)
+        self.assertEqual(partial['initial_weight_sum'], 2.)
+        self.assertFalse(partial['production_complete'])
+
+    def test_partial_point_cannot_change_parent_subset_or_native_weights(self):
+        path, original = self.prepare_partial_point()
+        mutations = (lambda item: item['parent_gen'].update(native_sumw=1.),
+            lambda item: item.update(full_gen_events=1),
+            lambda item: item.update(plan_sha256='f' * 64),
+            lambda item: item.update(seal_sha256='f' * 64),
+            lambda item: item.update(native_event_weight_sum=2.),
+            lambda item: item.update(native_event_weight_sum2=2.),
+            lambda item: item.update(input_event_ids=[[999, 1, 1]]),
+            lambda item: item.update(missing_event_ids=[]),
+            lambda item: item['source_chunks'].append(copy.deepcopy(item['source_chunks'][0])),
+            lambda item: item['source_chunks'][0].update(nano_sha256='f' * 64),
+            lambda item: item.update(selection_applied=True))
+        for mutate in mutations:
+            changed = copy.deepcopy(original)
+            mutate(changed)
+            self.write(path, changed)
+            with self.subTest(mutation=mutate), self.assertRaises(RuntimeError):
+                self.files([15], [5])
+
+    def test_partial_point_payloads_and_source_receipts_are_checksum_verified(self):
+        _, receipt = self.prepare_partial_point()
+        paths = (Path(receipt['grouped_nano_path']), Path(receipt['histogram_path']),
+                 Path(receipt['source_chunks'][0]['receipt_path']))
+        for path in paths:
+            original = path.read_bytes()
+            path.write_bytes(original + b'corrupt')
+            try:
+                with self.subTest(path=path), self.assertRaises(RuntimeError):
+                    self.files([15], [5])
+            finally:
+                path.write_bytes(original)
+
     def test_unfinished_local_grouping_scoring_or_marker_warns_and_keeps_available_curves(self):
         original = copy.deepcopy(self.reports['m15_lab_5m'])
         for stage in ('union', 'scoring', 'marker'):

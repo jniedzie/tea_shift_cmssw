@@ -27,6 +27,8 @@ Treat existing analysis-facing files as human-code unless they are already
 marked AI-code. This includes `shift_paths`, `shift_params`, all ordinary
 configs, file configs and `ShiftHistogramsFiller`.
 
+Don't put these labels in `tea` repo, only in the analysis repo `tes_shift_cmssw`.
+
 ## Extend the main SHIFT configs
 
 ## Final analysis results and plots

@@ -78,15 +78,23 @@ Inputs resolve automatically to
 The shared helper finds the unique prepared production plan for that campaign
 under workspace `validation/<task>/plan.json` or
 `validation/<task>/<deployment>/plan.json`. Its seal binds the model labels,
-full GEN inventory and scoring settings. The helper checks each selected
-point's full event coverage, weights, published grouping/completion receipts
-and histogram checksum before returning an input.
+full GEN inventory and scoring settings. The helper checks the selected
+point's weights, grouping/completion receipts and histogram checksum before
+returning an input.
 
 The flight values `[None, 5, 30]` mean prompt and estimated mean lab flights of
 5 and 30 metres; they are not proper decay lengths. Set either whole selector
 to `None` to include all of its available values, or `[]` to include none.
-An unfinished selected point or a missing merged histogram produces a logger
-warning and is omitted; plotting continues with the available points.
+For an unfinished point, a prepared histogram of its completed detector chunks
+is also accepted. Merge those Nano files before running the standard
+histogrammer. The prepared point receipt records the exact processed and
+missing event IDs, source checksums and full parent GEN denominator. These
+plot inputs live in `validation/<preparation>/<point>/point_receipt.json`;
+the helper finds the matching campaign and point automatically. The canonical
+production completion state stays unchanged.
+
+A point with no available merged histogram produces a logger warning and is
+omitted; plotting continues with the available points.
 Unknown requested masses/lifetimes and inconsistent checksums, model labels
 or provenance remain errors. Unselected unfinished points produce no warning.
 
@@ -94,6 +102,12 @@ Output is automatic too: `plots/SM_BSM/<bsm_campaign>/` in this repository.
 Set `bsm_campaign = None` for SM-only plots. The optional
 `histogram_cache_directory` stages content-verified local copies when ROOT
 cannot open mounted EOS inputs; it does not change the canonical files.
+
+Set `variable_histogram_rebin` in `shift_plotter_config.py` to merge adjacent
+display bins in the irregular histograms. For example, `5` combines five bins;
+use `1` to keep the existing display bins. The plotter keeps the full recorded axis and any
+short final group, combines the counts and errors, then divides by the new bin
+widths. SM and BSM use identical bins, and the plotted integrals are preserved.
 
 ```bash
 source tea/setup.sh
