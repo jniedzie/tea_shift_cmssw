@@ -1,5 +1,6 @@
 # Code style: AI-code. AI-generated frozen DNN diagnostic boundary tests.
 import hashlib
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -8,10 +9,42 @@ import unittest
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'utils'))
-from shift_vertex_dnn_diagnostics import acceptance, checked, frozen_statistics, selected_models
+from shift_vertex_dnn_diagnostics import acceptance, checked, frozen_statistics, selected_models, validate_model_origin
 
 
 class DnnDiagnosticBoundary(unittest.TestCase):
+    def test_combined_bundle_preserves_real_model_origin_and_split(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            origin = base / 'round3'
+            origin.mkdir()
+            (origin / 'source_snapshot').mkdir()
+            payload = base / 'data.bin'
+            payload.write_bytes(b'pinned data')
+            ref = lambda p: {'path': str(p), 'sha256': hashlib.sha256(p.read_bytes()).hexdigest()}
+            source = origin / 'source_snapshot/trainer.py'
+            source.write_text('# frozen source\n')
+            splits = origin / 'splits.npz'
+            np.savez(splits, ids=np.array([[1, 1, 9]], dtype=np.uint64), expanded_split=np.array([2]))
+            recipe = {'name': 'chosen', 'mode': 'quality_relative'}
+            protocol = {key: ref(payload) for key in ('cache_manifest', 'reco', 'labels', 'bdt_scores')}
+            protocol.update(recipes=[recipe], splits=ref(splits), sources={'trainer.py': ref(source)})
+            path = origin / 'protocol.json'
+            path.write_text(json.dumps(protocol))
+            result = dict(recipe=recipe, protocol=ref(path), validation={'threshold': .4}, model=ref(payload), history=ref(payload))
+            (origin / 'chosen_validation.json').write_text(json.dumps(result))
+            self.assertEqual(validate_model_origin('chosen', result, protocol)['protocol'], ref(path))
+            changed = dict(result, recipe=dict(recipe, mode='all'))
+            with self.assertRaisesRegex(ValueError, 'recipe'):
+                validate_model_origin('chosen', changed, protocol)
+            other = base / 'other_split.npz'
+            np.savez(other, ids=np.array([[1, 1, 9]], dtype=np.uint64), expanded_split=np.array([0]))
+            with self.assertRaisesRegex(ValueError, 'split differs'):
+                validate_model_origin('chosen', result, dict(protocol, splits=ref(other)))
+            source.write_text('# tampered snapshot\n')
+            with self.assertRaisesRegex(ValueError, 'source snapshot'):
+                validate_model_origin('chosen', result, protocol)
+
     def test_models_are_only_unique_validation_winners_and_fixed_references(self):
         lock = dict(selection_uses_test=False, rejection_winner='nn_a', flatness_winner='nn_a',
                     acceptance_envelope_winner=None, thresholds={'nn_unselected': .2})

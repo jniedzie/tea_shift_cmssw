@@ -105,8 +105,8 @@ cannot open mounted EOS inputs; it does not change the canonical files.
 
 Set `variable_histogram_rebin` in `shift_plotter_config.py` to merge adjacent
 display bins in the irregular histograms. For example, `5` combines five bins;
-use `1` to keep the existing display bins. The plotter keeps the full recorded axis and any
-short final group, combines the counts and errors, then divides by the new bin
+use `1` to keep the existing display bins. The plotter keeps the full recorded
+axis and any short final group, combines the counts and errors, then divides by the new bin
 widths. SM and BSM use identical bins, and the plotted integrals are preserved.
 
 ```bash

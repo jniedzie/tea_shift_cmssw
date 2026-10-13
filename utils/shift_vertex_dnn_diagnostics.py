@@ -43,6 +43,30 @@ def frozen_statistics(path):
     return SimpleNamespace(**{name: namespace[name] for name in names})
 
 
+def validate_model_origin(name, result, combined_protocol):
+    """Keep selected models tied to their actual original training protocols."""
+    protocol_path = checked(result['protocol'])
+    original = read(protocol_path)
+    recipes = [recipe for recipe in original['recipes'] if recipe['name'] == name]
+    require(len(recipes) == 1 and recipes[0] == result['recipe'], 'Model recipe differs from its original protocol')
+    for key in ('cache_manifest', 'reco', 'labels', 'bdt_scores'):
+        checked(original[key])
+        require(original[key] == combined_protocol[key], 'Model trained from different data: ' + key)
+    original_split = load_npz(checked(original['splits']))
+    combined_split = load_npz(checked(combined_protocol['splits']))
+    require(set(original_split) == set(combined_split), 'Origin split fields differ')
+    for key in original_split:
+        require(np.array_equal(original_split[key], combined_split[key]), 'Model origin split differs: ' + key)
+    for filename, ref in original['sources'].items():
+        require(digest(protocol_path.parent / 'source_snapshot' / filename) == ref['sha256'],
+                'Changed original model source snapshot: ' + filename)
+    original_receipt = read(protocol_path.parent / (name + '_validation.json'))
+    for key in ('recipe', 'validation', 'model', 'history', 'protocol'):
+        require(original_receipt[key] == result[key], 'Combined model receipt changed: ' + key)
+    return {'protocol': result['protocol'], 'validation': reference(protocol_path.parent / (name + '_validation.json')),
+            'model': result['model'], 'history': result['history']}
+
+
 def load_inputs(inputs, training):
     completion = read(training / 'completion.json')
     require(completion.get('complete') is True, 'Training study is incomplete')
@@ -93,6 +117,7 @@ def load_inputs(inputs, training):
             require(diagnostic_lock['thresholds'][name] == earlier_lock['thresholds'][name], 'Original BDT threshold changed')
             continue
         result = validation[name]
+        validate_model_origin(name, result, protocol)
         require(result['validation']['threshold'] == lock['thresholds'][name], 'Validation cut differs')
         checked(result['model'])
         history = read(checked(result['history']))
@@ -150,6 +175,9 @@ def build(workspace, inputs, training):
         ('shift_bdt_category_diagnostics.py', 'shift_bdt_candidate_diagnostics.py', 'shift_bdt_discrimination_diagnostics.py')]
     earlier_root = Path(protocol['bdt_scores']['path']).parent
     report['references'] += [reference(earlier_root / 'completion.json'), reference(earlier_root / 'selection_locked.json')]
+    validation = read(checked(lock['validation']))
+    report['model_origins'] = {name: {key: validation[name][key] for key in ('recipe', 'protocol', 'model', 'history')}
+                               for name in models if name not in REFERENCES}
     for process, _ in PROCESSES:
         mask = population(reco, test, process)
         report['counts'][process] = {kind: int((mask & (y == label)).sum()) for label, kind in [(1, 'genuine'), (0, 'fake'), (-1, 'unknown')]}
