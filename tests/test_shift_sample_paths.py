@@ -10,7 +10,7 @@ from unittest.mock import patch
 CONFIGS = Path(__file__).resolve().parents[1] / 'configs'
 sys.path.insert(0, str(CONFIGS))
 sys.path.insert(0, str(CONFIGS.parent / 'tea/pylibs/logger'))
-from shift_sample_paths import latest_merged_sample, validated_nano_files
+from shift_sample_paths import latest_merged_sample, validated_nano_files, validated_bsm_histogram_files
 
 
 class MergedSampleTest(unittest.TestCase):
@@ -257,6 +257,90 @@ class CompleteNanoInventoryTest(unittest.TestCase):
         self.refresh()
         with self.assertRaisesRegex(RuntimeError, 'Unvalidated Nano receipt'):
             self.files()
+
+
+
+class SignalHistogramSampleTest(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.directory = Path(self.temporary.name)
+        self.contract = self.directory / "contract.json"
+        self.contract.write_text(json.dumps(dict(mass_gev=15, epsilon=0.001,
+                                                 requested_events=2, run_number=10)))
+        self.histogram = self.directory / "histograms.root"
+        self.histogram.write_bytes(b"retained histogram payload")
+        self.report = dict(
+            complete=True, input_event_ids=[[10, 1, 1], [10, 1, 2]],
+            native_event_weight_sum=2.0, histogram_bytes=self.histogram.stat().st_size,
+            histogram_sha256=hashlib.sha256(self.histogram.read_bytes()).hexdigest(),
+        )
+        self.point = dict(
+            point="m15_prompt", detector_directory=str(self.directory),
+            signal_contract=str(self.contract),
+            signal_contract_sha256=hashlib.sha256(self.contract.read_bytes()).hexdigest(),
+            events=2, detector_count=2, mass_gev=15, epsilon=0.001,
+            target_mean_lab_flight_m=None,
+        )
+        self.plan = dict(schema="shift-dark-photon-grid-plan-v1", prepared=True,
+                         points=[self.point])
+        self.plan_path = self.directory / "plan.json"
+        self.refresh()
+
+    def refresh(self):
+        self.plan_path.write_text(json.dumps(self.plan))
+        (self.directory / "histogram_report.json").write_text(json.dumps(self.report))
+
+    def test_complete_signal_retains_full_gen_exposure_and_unvalidated_rate(self):
+        rows = validated_bsm_histogram_files(self.plan_path)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["initial_weight_sum"], 2)
+        self.assertEqual(rows[0]["events"], 2)
+        self.assertFalse(rows[0]["normalization_ready"])
+        self.assertFalse(rows[0]["physics_valid"])
+        self.assertIsNone(rows[0]["mean_lab_flight_m"])
+
+    def test_unfinished_signal_cannot_silently_leave_a_partial_plot(self):
+        self.report["complete"] = False
+        self.refresh()
+        with self.assertRaisesRegex(RuntimeError, "coverage"):
+            validated_bsm_histogram_files(self.plan_path)
+
+    def test_missing_zero_reconstruction_event_is_not_a_full_gen_sample(self):
+        self.report["input_event_ids"] = [[10, 1, 1]]
+        self.refresh()
+        with self.assertRaisesRegex(RuntimeError, "full GEN"):
+            validated_bsm_histogram_files(self.plan_path)
+
+    def test_changed_histogram_or_contract_is_rejected(self):
+        for path in (self.histogram, self.contract):
+            with self.subTest(path=path.name):
+                original = path.read_bytes()
+                path.write_bytes(original + b"changed")
+                with self.assertRaisesRegex(RuntimeError, "checksum"):
+                    validated_bsm_histogram_files(self.plan_path)
+                path.write_bytes(original)
+
+    def test_duplicate_grid_point_is_rejected(self):
+        self.plan["points"].append(dict(self.point))
+        self.refresh()
+        with self.assertRaisesRegex(RuntimeError, "duplicate"):
+            validated_bsm_histogram_files(self.plan_path)
+
+    def test_plot_label_cannot_change_the_underlying_model(self):
+        self.point["mass_gev"] = 30
+        self.refresh()
+        with self.assertRaisesRegex(RuntimeError, "model labels"):
+            validated_bsm_histogram_files(self.plan_path)
+
+    def test_refreshed_histograms_keep_the_original_signal_plan(self):
+        refreshed = self.directory / "refreshed" / self.point["point"]
+        refreshed.mkdir(parents=True)
+        (refreshed / "histograms.root").write_bytes(self.histogram.read_bytes())
+        (refreshed / "histogram_report.json").write_text(json.dumps(self.report))
+        rows = validated_bsm_histogram_files(self.plan_path, refreshed.parent)
+        self.assertEqual(rows[0]["histogram_path"], str(refreshed / "histograms.root"))
+        self.assertEqual(rows[0]["events"], self.point["events"])
 
 
 if __name__ == '__main__':

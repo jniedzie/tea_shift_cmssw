@@ -63,5 +63,33 @@ class SingleRootFileTest(unittest.TestCase):
             single_root_file(self.directory, allow_missing=True)
 
 
+    def test_local_cache_preserves_bytes_and_reuses_identical_input(self):
+        source = self.directory / "histograms.root"
+        source.write_bytes(b"one immutable histogram payload")
+        cached = Path(single_root_file(self.directory, cache_directory=self.directory / "cache"))
+        self.assertEqual(cached.read_bytes(), source.read_bytes())
+        modified = cached.stat().st_mtime_ns
+        self.assertEqual(single_root_file(self.directory, cache_directory=cached.parent), str(cached))
+        self.assertEqual(cached.stat().st_mtime_ns, modified)
+
+    def test_corrupt_cache_is_rejected_before_plotting(self):
+        (self.directory / "histograms.root").write_bytes(b"validated input")
+        cached = Path(single_root_file(self.directory, cache_directory=self.directory / "cache"))
+        cached.write_bytes(b"corrupted copy")
+        with self.assertRaisesRegex(RuntimeError, "Cached ROOT input checksum"):
+            single_root_file(self.directory, cache_directory=cached.parent)
+
+    def test_same_filename_in_distinct_bins_cannot_share_wrong_cached_data(self):
+        cache = self.directory / "cache"
+        copies = []
+        for name in ("qcd", "dy"):
+            source = self.directory / name
+            source.mkdir()
+            (source / "ntuple_0.root").write_bytes(name.encode())
+            copies.append(Path(single_root_file(source, cache_directory=cache)))
+        self.assertNotEqual(copies[0], copies[1])
+        self.assertEqual([p.read_bytes() for p in copies], [b"qcd", b"dy"])
+
+
 if __name__ == "__main__":
     unittest.main()
