@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Code style: AI-code. AI-generated BDT diagnostic utility.
 """Count sparse signal transfer at sealed validation cuts, without fitting."""
 import json
 from pathlib import Path

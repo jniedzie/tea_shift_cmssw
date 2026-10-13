@@ -1,3 +1,4 @@
+// Code style: human-code.
 #include "ArgsManager.hpp"
 #include "ConfigManager.hpp"
 #include "EventReader.hpp"

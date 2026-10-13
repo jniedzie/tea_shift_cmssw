@@ -1,3 +1,4 @@
+# Code style: AI-code. AI-generated regression test.
 """Shape matching after density conversion, with physical SM bin weights."""
 
 from array import array

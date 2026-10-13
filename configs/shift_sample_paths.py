@@ -1,3 +1,4 @@
+# Code style: AI-code. AI-generated validation and provenance helper.
 """Select validated MC inputs without opening their event data."""
 import ast
 import json

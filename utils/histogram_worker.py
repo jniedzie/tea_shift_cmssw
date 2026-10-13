@@ -1,3 +1,4 @@
+# Code style: AI-code. AI-generated worker and merge support.
 """Prepare a new immutable worker with bounded retries for runtime startup.
 
 This adapts the checksum-pinned local-runtime wrapper, preserving its analysis

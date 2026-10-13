@@ -1,3 +1,4 @@
+# Code style: AI-code. AI-generated regression test.
 """Physics/provenance boundaries of the retained-pair label audit."""
 import importlib.util
 from pathlib import Path

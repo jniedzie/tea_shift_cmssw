@@ -1,3 +1,4 @@
+# Code style: human-code.
 import os
 
 from shift_paths import base_path, sample, campaign

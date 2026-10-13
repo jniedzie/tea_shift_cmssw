@@ -1,3 +1,4 @@
+# Code style: AI-code. AI-generated regression test.
 """Runtime transfer recovery must never accept a partial or corrupt payload."""
 import importlib.util
 import hashlib

@@ -1,3 +1,4 @@
+<!-- Code style: human-code. -->
 # Dimuon vertex BDT histograms and process overlays
 
 These diagnostics use the saved `ShiftDimuonVertex_bdtScore` Double array.

@@ -1,3 +1,4 @@
+# Code style: AI-code.
 """Run with python3 -m unittest discover -s utils -p test_shift_diagnostics_plotter.py."""
 import importlib.util
 import argparse

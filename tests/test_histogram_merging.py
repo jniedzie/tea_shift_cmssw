@@ -1,3 +1,4 @@
+# Code style: AI-code. AI-generated regression test.
 """Merge the preceding step's outputs with exact inventories and worker checks."""
 import importlib.util
 import hashlib

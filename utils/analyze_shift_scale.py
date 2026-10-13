@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Code style: AI-code.
 """Print robust SHIFT momentum-scale summaries by topology and fit strategy."""
 
 import argparse

@@ -1,3 +1,4 @@
+// Code style: human-code.
 #ifndef UserExtensionsHelpers_hpp
 #define UserExtensionsHelpers_hpp
 

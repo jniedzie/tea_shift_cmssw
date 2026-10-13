@@ -1,3 +1,4 @@
+# Code style: AI-code. AI-generated regression test.
 """Bounded runtime check, enabled with SHIFT_WEIGHT_TEST_EXECUTABLE."""
 
 from array import array

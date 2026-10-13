@@ -1,3 +1,4 @@
+# Code style: human-code.
 """Common density plots: retain fine populated regions and merge sparse tails.
 
 Display edges always come from the input histogram. This permits older files

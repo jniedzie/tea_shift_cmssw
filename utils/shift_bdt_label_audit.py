@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Code style: AI-code. AI-generated BDT diagnostic utility.
 """Trace a dominant genuine QCD pair and audit retained-pair truth coverage.
 
 This consumes completed evaluation evidence and the shared reconstructed-pair

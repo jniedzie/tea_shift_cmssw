@@ -1,3 +1,4 @@
+# Code style: AI-code. AI-generated regression test.
 """Physical geometry and selection checks for offline event-mixing pairs."""
 
 import math

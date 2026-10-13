@@ -1,3 +1,4 @@
+# Code style: human-code.
 nEvents = -1
 
 from shift_storage_paths import resolve_storage_path

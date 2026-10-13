@@ -1,3 +1,4 @@
+# Code style: AI-code. AI-generated regression test.
 import hashlib
 import json
 from pathlib import Path

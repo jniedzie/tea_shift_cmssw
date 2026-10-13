@@ -1,3 +1,4 @@
+# Code style: AI-code. AI-generated regression test.
 """Independent controls for event counting, weights, folds and reused legs."""
 from pathlib import Path
 import hashlib

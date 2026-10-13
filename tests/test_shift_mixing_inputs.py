@@ -1,3 +1,4 @@
+# Code style: AI-code. AI-generated regression test.
 import gzip
 import hashlib
 import json

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Code style: AI-code. AI-generated BDT diagnostic utility.
 """Read sealed candidate scores; audit relative reco observables without retraining."""
 import argparse
 import json

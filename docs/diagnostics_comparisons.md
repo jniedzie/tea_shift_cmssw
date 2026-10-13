@@ -1,3 +1,4 @@
+<!-- Code style: human-code. -->
 # Comparing reconstruction versions
 
 From the analysis directory, run:

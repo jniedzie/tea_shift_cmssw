@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Code style: AI-code. AI-generated BDT diagnostic utility.
 """PDF-only origin-label diagnostics using frozen scores and original splits.
 
 Feature directions/ranking use original training/validation only. No fitting,

@@ -1,3 +1,4 @@
+# Code style: human-code.
 extraEventCollections = {
     "GenMuonPlus": {
         "inputCollections": ["GenPart"],

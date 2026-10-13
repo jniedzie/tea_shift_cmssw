@@ -1,3 +1,4 @@
+# Code style: AI-code. AI-generated storage validation helper.
 """Build the dated storage layout and resolve preserved production paths.
 
 Migration changes file locations, never the immutable production receipts. An

@@ -1,3 +1,4 @@
+# Code style: human-code.
 """Stored reconstruction codes from ShiftMuonTableProducer and its fit helpers.
 
 Keep numerical codes in the labels so failures remain traceable to NanoAOD.

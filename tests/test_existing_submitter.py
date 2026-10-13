@@ -1,3 +1,4 @@
+# Code style: AI-code. AI-generated regression test.
 """Check the existing submitter/runner without executing or submitting jobs."""
 
 import importlib.util

@@ -1,3 +1,4 @@
+# Code style: AI-code.
 """Optional BDT and event-mixing overlays from immutable study inputs.
 
 The standard reconstruction plotter remains shift_plotter_config.py.

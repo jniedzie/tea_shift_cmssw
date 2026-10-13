@@ -1,3 +1,5 @@
+# Code style: human-code. Keep this file short and explicit.
+
 # base_path = "/pnfs/iihe/cms/store/user/jniedzie/shift_cmssw"  # t2b
 base_path = "/eos/home-j/jniedzie/shift_cmssw/"  # lxplus
 
@@ -8,6 +10,13 @@ bdt_mixing_histogram_inventory = None
 bdt_mixing_plot_output = None
 bdt_mixing_preparation_directory = None
 bdt_mixing_plot_scope = "all"
+
+# Optional BSM overlay. Leave these unset until an entire validated signal grid
+# is available to the ordinary plotter.
+bsm_histogram_plan = None
+bsm_histogram_directory = None
+bsm_plot_output = None
+histogram_cache_directory = None
 
 sample = "jpsi"
 # sample = "qcd"

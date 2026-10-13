@@ -1,3 +1,4 @@
+# Code style: AI-code. AI-generated regression test.
 """Bounded reconstructed-pair checks using the built histogrammer."""
 
 from array import array

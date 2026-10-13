@@ -1,3 +1,4 @@
+# Code style: AI-code. AI-generated regression test.
 """Guard truth-class diagnostics against selection leakage and score cosmetics."""
 import importlib.util
 from pathlib import Path

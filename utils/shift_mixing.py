@@ -1,3 +1,4 @@
+# Code style: AI-code. AI-generated event-mixing calculation.
 """Reusable event-mixing calculation selected by shift_histogrammer_config.
 
 This backend extracts audited, event-preserving inputs, reproduces the published

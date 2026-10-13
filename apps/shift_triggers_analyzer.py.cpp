@@ -1,3 +1,4 @@
+// Code style: human-code.
 #include "ConfigManager.hpp"
 #include "CutFlowManager.hpp"
 #include "EventReader.hpp"

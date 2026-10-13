@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Code style: AI-code. AI-generated BDT diagnostic utility.
 """Compare frozen BDT cuts and audit conditional acceptance without fitting.
 
 The extraction is aligned to an existing, immutable performance population.

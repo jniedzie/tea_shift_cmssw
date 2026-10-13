@@ -1,3 +1,4 @@
+// Code style: human-code.
 #ifndef ShiftHistogramsFiller_hpp
 #define ShiftHistogramsFiller_hpp
 

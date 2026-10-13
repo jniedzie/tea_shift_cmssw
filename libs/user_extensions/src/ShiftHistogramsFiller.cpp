@@ -1,3 +1,4 @@
+// Code style: human-code.
 #include "ShiftHistogramsFiller.hpp"
 
 #include "ConfigManager.hpp"

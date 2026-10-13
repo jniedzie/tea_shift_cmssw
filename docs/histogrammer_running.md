@@ -1,3 +1,4 @@
+<!-- Code style: human-code. -->
 # Running the SHIFT MC histogrammer
 
 ## Standard and optional study configs

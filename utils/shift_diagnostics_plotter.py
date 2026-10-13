@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Code style: human-code.
 
 import argparse
 from array import array

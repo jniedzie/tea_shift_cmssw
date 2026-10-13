@@ -1,3 +1,4 @@
+# Code style: human-code.
 import ROOT
 from Sample import Sample, SampleType
 from Legend import Legend

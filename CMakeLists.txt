@@ -1,3 +1,4 @@
+# Code style: human-code.
 cmake_minimum_required(VERSION 3.14...4.0 FATAL_ERROR)
 project(user_analysis)
 

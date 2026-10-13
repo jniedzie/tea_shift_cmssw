@@ -1,3 +1,4 @@
+# Code style: AI-code. AI-generated BDT diagnostic utility.
 """Paired, event-grouped statistics for fixed BDT acceptance comparisons."""
 import numpy as np
 

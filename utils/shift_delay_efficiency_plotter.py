@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Code style: human-code.
 """Plot inclusive and topology-resolved SHIFT efficiency versus physical delay."""
 
 import argparse

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Code style: AI-code.
 """Reco-only distributions and independent hit-truth performance; no angular cuts.
 
 ROOT input is read directly, so this also audits existing productions without

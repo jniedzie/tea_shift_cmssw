@@ -1,3 +1,4 @@
+# Code style: AI-code. AI-generated regression test.
 from pathlib import Path
 import sys
 import tempfile

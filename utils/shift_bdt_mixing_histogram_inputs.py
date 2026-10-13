@@ -1,3 +1,4 @@
+# Code style: AI-code. AI-generated BDT diagnostic utility.
 """Validate ROOT histogram inventories for BDT score and event-mixing plots.
 
 Per-bin cross sections and full parent GEN weights define process mixtures.
