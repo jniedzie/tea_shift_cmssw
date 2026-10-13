@@ -3,6 +3,8 @@ import ast
 import json
 import hashlib
 import math
+import shutil
+import tempfile
 from collections import Counter
 from pathlib import Path
 import re
@@ -10,7 +12,7 @@ import re
 from shift_storage_paths import resolve_storage_path, tier_directory
 
 
-def single_root_file(directory, *, allow_missing=False):
+def single_root_file(directory, *, allow_missing=False, cache_directory=None):
     """Resolve one ROOT file; optionally return None for unavailable inputs."""
     directory = Path(directory)
     try:
@@ -30,7 +32,25 @@ def single_root_file(directory, *, allow_missing=False):
         raise RuntimeError(
             f"Expected exactly one ROOT file in '{directory}', found {len(files)}: {names}"
         )
-    return str(files[0])
+    source = files[0]
+    if cache_directory is None:
+        return str(source)
+    # ROOT can fail on mounted EOS paths even when ordinary byte reads work.
+    # Cache by content, verifying the copy before returning its local path.
+    checksum = hashlib.sha256(source.read_bytes()).hexdigest()
+    cache = Path(cache_directory)
+    cache.mkdir(parents=True, exist_ok=True)
+    target = cache / f"{checksum}_{source.name}"
+    if not target.is_file():
+        with tempfile.TemporaryDirectory(dir=cache, prefix=".copy-") as temporary:
+            copied = Path(temporary) / "input.root"
+            shutil.copyfile(source, copied)
+            if hashlib.sha256(copied.read_bytes()).hexdigest() != checksum:
+                raise RuntimeError(f"ROOT input changed while being copied: {source}")
+            copied.replace(target)
+    if hashlib.sha256(target.read_bytes()).hexdigest() != checksum:
+        raise RuntimeError(f"Cached ROOT input checksum differs: {target}")
+    return str(target)
 
 
 def latest_merged_sample(samples_dir):
@@ -282,4 +302,54 @@ def load_nano_merge_groups(inventory_path, base_path):
         counts[stratum] += 1
     if dict(counts) != inventory["bins"] or not result:
         raise ValueError("Nano merge groups differ from the frozen per-bin inventory")
+    return result
+
+
+def validated_bsm_histogram_files(plan_path, histogram_directory=None):
+    """Read every completed signal point; keep its rate unvalidated."""
+    plan = json.loads(Path(plan_path).read_text())
+    if plan.get("schema") != "shift-dark-photon-grid-plan-v1" or not plan.get("prepared"):
+        raise RuntimeError("Require a prepared dark-photon grid plan")
+    points = plan.get("points", [])
+    if not points or len({point["point"] for point in points}) != len(points):
+        raise RuntimeError("Signal grid contains no points or duplicate names")
+    result, identities, paths = [], set(), set()
+    for point in points:
+        directory = (Path(histogram_directory) / point["point"] if histogram_directory
+                     else Path(point["detector_directory"]))
+        report_path = directory / "histogram_report.json"
+        report = json.loads(report_path.read_text())
+        histogram = Path(resolve_storage_path(directory / "histograms.root"))
+        contract = Path(point["signal_contract"])
+        contract_payload = contract.read_bytes()
+        if hashlib.sha256(contract_payload).hexdigest() != point["signal_contract_sha256"]:
+            raise RuntimeError(f"Signal contract checksum differs: {point['point']}")
+        model = json.loads(contract_payload)
+        expected_events = point["events"]
+        if (model.get("mass_gev") != point["mass_gev"] or
+                model.get("epsilon") != point["epsilon"] or
+                model.get("requested_events") != expected_events):
+            raise RuntimeError(f"Signal model labels differ from the frozen contract: {point['point']}")
+        event_ids = [tuple(event) for event in report.get("input_event_ids", [])]
+        if (report.get("complete") is not True or point["detector_count"] != expected_events or
+                len(event_ids) != expected_events or len(set(event_ids)) != expected_events or
+                any(len(event) != 3 or event[0] != model.get("run_number") for event in event_ids) or
+                identities.intersection(event_ids)):
+            raise RuntimeError(f"Signal histogram coverage differs from the full GEN plan: {point['point']}")
+        if (not histogram.is_file() or histogram in paths or
+                histogram.stat().st_size != report.get("histogram_bytes") or
+                hashlib.sha256(histogram.read_bytes()).hexdigest() != report.get("histogram_sha256")):
+            raise RuntimeError(f"Signal histogram or contract checksum differs: {point['point']}")
+        weight_sum = report.get("native_event_weight_sum")
+        if not isinstance(weight_sum, (int, float)) or not math.isfinite(weight_sum):
+            raise RuntimeError(f"Invalid native signal weight sum: {point['point']}")
+        identities.update(event_ids)
+        paths.add(histogram)
+        result.append(dict(
+            name=point["point"], histogram_path=str(histogram),
+            mass_gev=point["mass_gev"], epsilon=point["epsilon"],
+            mean_lab_flight_m=point.get("target_mean_lab_flight_m"),
+            events=expected_events, initial_weight_sum=weight_sum,
+            physics_valid=False, normalization_ready=False,
+        ))
     return result

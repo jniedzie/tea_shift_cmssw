@@ -136,7 +136,7 @@ if is_mixing:
 else:
     histograms, histograms2D = saved_score_plots()
 output_path = plot_output
-output_formats = ["pdf", "png"]
+output_formats = ["pdf"]
 custom_stacks_order = [sample.name for sample in samples]
 many_samples = len(samples) > 5
 legends = {SampleType.signal: (

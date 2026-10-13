@@ -5,12 +5,24 @@ from Histogram import Histogram, Histogram2D
 from HistogramNormalizer import NormalizationType
 from CmsLabelsManager import CmsLabel
 from Logger import warn
-from shift_sample_paths import single_root_file, full_gen_weight_sums
+from shift_sample_paths import (
+    single_root_file,
+    full_gen_weight_sums,
+    validated_bsm_histogram_files,
+)
 from shift_storage_paths import tier_directory
 from shift_plot_binning import muon_variable_binning, dimuon_variable_binning
 from shift_plot_labels import apply_reconstruction_labels
 
-from shift_paths import base_path, cross_sections, campaign
+from shift_paths import (
+    base_path,
+    cross_sections,
+    campaign,
+    bsm_histogram_plan,
+    bsm_histogram_directory,
+    bsm_plot_output,
+    histogram_cache_directory,
+)
 
 
 samples = []
@@ -68,7 +80,9 @@ for process, colors, label in (
         directory = tier_directory(
             base_path, process, bin_name, campaign, "histograms_merged"
         )
-        file_path = single_root_file(directory, allow_missing=True)
+        file_path = single_root_file(
+            directory, allow_missing=True, cache_directory=histogram_cache_directory
+        )
         if file_path is None:
             warn(
                 f"Skipping sample {process}_{bin_name}: ROOT input directory is missing, "
@@ -94,11 +108,49 @@ for process, colors, label in (
             )
         )
 
+
+signal_masses_to_plot = [
+    15,
+]  # GeV
+
+bsm_inputs = (
+    validated_bsm_histogram_files(bsm_histogram_plan, bsm_histogram_directory)
+    if bsm_histogram_plan
+    else []
+)
+mass_colors = (ROOT.kMagenta + 1, ROOT.kAzure + 2, ROOT.kOrange + 7)
+masses = sorted({point["mass_gev"] for point in bsm_inputs})
+for point in bsm_inputs:
+    mass = point["mass_gev"]
+
+    if mass not in signal_masses_to_plot:
+        continue
+
+    flight = point["mean_lab_flight_m"]
+    lifetime_label = "prompt" if flight is None else f"#LT L #GT #approx {flight:g} m"
+
+    samples.append(
+        Sample(
+            name=point["name"],
+            file_path=point["histogram_path"],
+            type=SampleType.signal,
+            initial_weight_sum=point["initial_weight_sum"],
+            line_color=mass_colors[masses.index(point["mass_gev"]) % len(mass_colors)],
+            line_style=1 if flight is None else 2 if flight <= 5 else 3,
+            line_width=3,
+            fill_alpha=0.0,
+            marker_size=0.0,
+            legend_description=f"A' {point['mass_gev']:g} GeV, {lifetime_label}",
+        )
+    )
+
 # Keep both the stack (bottom to top) and legend in process/bin order.
 # Otherwise the shared plotter sorts all processes together by cross section.
 custom_stacks_order = [sample.name for sample in samples]
 
-output_path = "../plots/plots/"
+output_path = (
+    (bsm_plot_output or "../plots/SM_BSM/") if bsm_inputs else "../plots/plots/"
+)
 
 # Expand automatic axes only when needed to keep distributions clear of legends.
 auto_adjust_axes_for_legend = True
@@ -333,8 +385,33 @@ plotting_options = {
     SampleType.data: "nostack e",
 }
 
+output_formats = ["pdf"]
 canvas_size = (800, 600)
 categorical_canvas_size = (1200, 850)
 categorical_legend_outside = True
 show_ratio_plots = False
 # ratio_limits = (0.7, 1.3)  # Optional override; limits are automatic by default.
+
+if bsm_inputs:
+    # These pilots establish shapes, not signal rates. Match each observable's
+    # BSM area to its SM area without using an unvalidated signal cross section.
+    for histogram in histograms:
+        histogram.norm_type = NormalizationType.to_background
+        histogram.title = "BSM shapes scaled to SM area (signal rates unvalidated)"
+    canvas_size = (1400, 850)
+    plot_margins = {"left": 0.10, "right": 0.37, "top": 0.12, "bottom": 0.14}
+    legends = {
+        SampleType.background: Legend(
+            0.65, 0.48, 0.99, 0.90, "f", title="SM frozen subset", text_size=16
+        ),
+        SampleType.signal: Legend(
+            0.65,
+            0.12,
+            0.99,
+            0.45,
+            "l",
+            title="BSM shapes (rates unvalidated)",
+            text_size=17,
+        ),
+    }
+    beam_label = "SHIFT; BSM shapes matched to SM"

@@ -18,7 +18,7 @@ Unscored inputs retain ordinary histogramming. Set
 histogram inventory for the optional study config. Its schema identifies BDT
 or event-mixing plots; no separate mode switch is needed.
 `utils/shift_bdt_mixing_histogram_inputs.py` verifies histogram inputs and prepares the SM bin
-mixture; it does not draw plots. The standard plot config stays unchanged.
+mixture; it does not draw plots. Standard reconstruction plots use the main config.
 Full GEN normalization is verified by the existing `shift_sample_paths.py`
 helper; the selected Nano count is never substituted for the parent GEN
 denominator.
@@ -59,6 +59,40 @@ The superseded source/configs are byte-verified under workspace
 remain unchanged. The dated October 9 merged-BDT recovery tool reads its two
 historical dependencies from the supplied prior frozen plan; future studies
 use the standard configs or the optional study config as appropriate.
+
+## BSM shapes in the standard reconstruction plots
+
+Use `shift_plotter_config.py` for the nine-point dark-photon grid alongside
+the SM samples. Paths and options are set in `configs/shift_paths.py`:
+
+```python
+bsm_histogram_plan = str(Path(__file__).resolve().parents[2] /
+                         "validation/bsm_grid_production_20261009/preparation_v2/plan.json")
+bsm_histogram_directory = None
+bsm_plot_output = str(Path(__file__).resolve().parents[1] / "plots/SM_BSM_20261012")
+histogram_cache_directory = "/tmp/jniedzie/shift_histogram_cache"
+```
+
+The plan binds the original nine physical points. Set
+`bsm_histogram_directory` to the validated histogram refresh directory when
+its completion receipt is ready; the current refresh target is
+`validation/bsm_sm_plots_20261012/histograms/completed/` below the workspace.
+The optional cache stages content-verified local copies because native ROOT
+opening of the mounted EOS paths failed; canonical files remain unchanged.
+Set `bsm_histogram_plan = None` to restore SM-only plots.
+
+```bash
+source tea/setup.sh
+cd bin
+python plotter.py --config shift_plotter_config.py
+```
+
+Each BSM observable is independently matched to the total SM histogram area
+using `to_background`. The bin-width normalization preserves that area for
+density plots. These are signal shapes, with no BSM cross-section or rate
+claim. SM cross sections and full GEN denominators retain their existing
+normalization. The SM input is the frozen 187,214-event subset, with 149
+original detector jobs omitted; it does not establish complete coverage.
 
 ## EOS storage layout after October 9, 2026
 

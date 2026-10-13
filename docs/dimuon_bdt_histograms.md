@@ -92,7 +92,7 @@ python plotter.py --config shift_bdt_mixing_plotter_config.py
 ```
 
 `bdt_mixing_plot_output` selects the plot directory. The config
-produces PDF and PNG score shapes, plus PDF reconstructed-coordinate maps for the
+produces PDF score shapes and reconstructed-coordinate maps for the
 inclusive and Both-Both categories. The three SM process distributions are
 shown as lines and normalized separately to unit area after the bin mixture
 has been corrected. MC label subsets have separate overlays. These plots
@@ -101,6 +101,11 @@ the performance report. `N_eff` refers to the MC normalization fitted to data,
 and is not a classifier metric. The coordinate maps are not proper-lifetime
 maps; a lifetime study requires the corresponding signal MC and truth labels
 for evaluation.
+
+New plot exports are PDF only, as requested after the October 12 study.
+Project-accessible copies are in `plots/BDT_20261012/`; its index links directly
+to PDFs. Original hash-locked validation archives retain their historical
+renderings for provenance.
 
 Set `bdt_mixing_plot_scope = "sm"` for the three SM process overlays, or `"all"`
 (the default) to include each signal point. Use distinct
@@ -135,6 +140,46 @@ The retained evidence is in workspace `validation/bdt_histograms_20261009/`;
 use `pilot_process_shapes_verified/`, which carries the checked source-bin
 assignments. Full merged-input results are recorded separately by the task
 controller.
+
+## Fixed-model acceptance and label audit, October 12
+
+Specialized classifier diagnostics use `utils/shift_bdt_acceptance.py` and
+`utils/shift_bdt_label_audit.py`. They leave ordinary histogram definitions in
+the main config and perform no fitting or ntuple selection. Acceptance
+extraction checks exact parity with the completed first-look evaluation,
+including integer physical-event identities, scores, labels, nuisance values
+and weights. Truth positions and match diagnostics are separate from model
+predictors. The comparison uses the existing validation thresholds for the
+quality-only and uniformity BDTs, event-grouped uncertainties, signed weights,
+explicit flow bins, topology and joint mass/z/radius cells. Shared paired
+statistics are in `utils/shift_bdt_acceptance_statistics.py`.
+
+Completed evidence is in workspace
+`validation/bdt_acceptance_study_20261012/comparison/`: `results/comparison.json`,
+CSV summaries, unchanged comparison scores, and `plots_reviewed/`. The source
+snapshot, population/partition closure and output hashes are checked in
+`validation.json`. The current uniformity model retains 88.83% genuine pairs
+and rejects 49.85% accidentals, versus 86.65% and 53.04% for quality-only.
+The simpler model does not remove DY mass dependence and has stronger radius
+dependence. Weighted accidental support remains inadequate; neither cut is
+a validated physics selection.
+
+`label_audit/` independently traces the dominant QCD pair and normalization,
+audits unknown matches and label conventions, and distinguishes common origin
+from fitted-vertex precision. Unknowns comprise 18.32% of all retained pairs
+and increase with radius and poorer detector coverage. Angular truth links
+are diagnostics and never replace hit-based labels. The separate
+`comparison/label_identification_limits.json` gives possible unknown-label
+assignment bounds; these are not physics uncertainties or corrections.
+
+Fourteen focused comparison/statistics tests and seven label-audit tests pass.
+`comparison/paired_support.json` separately annotates support for all 180
+existing paired differences. A mathematically available weighted ratio or
+bootstrap interval does not imply adequate independent-event support.
+The reused identification-bound tests cover 1,555 exhaustive patterns. All
+original first-look reports and artifacts are preserved. Scientific decisions
+and remaining acceptance gates are recorded in the classifier task log;
+reconstruction findings remain in `SHIFT_RECONSTRUCTION.md`.
 
 ## First all-sample look, October 12
 

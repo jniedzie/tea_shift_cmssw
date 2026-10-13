@@ -1182,7 +1182,6 @@ def plot_results(output, same, mixed, augmented, events, bootstrap, rng):
             fig.suptitle(f"QCD mixing proof of concept: {key}; normalization/closure unvalidated")
             fig.tight_layout(rect=(0, 0, 1, .96))
             pdf.savefig(fig)
-            fig.savefig(output / f"mass_{key.replace('-', '_')}.png", dpi=150)
             plt.close(fig)
     return result
 
