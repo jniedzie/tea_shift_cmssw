@@ -63,24 +63,35 @@ use the standard configs or the optional study config as appropriate.
 
 ## BSM shapes in the standard reconstruction plots
 
-Use `shift_plotter_config.py` for the nine-point dark-photon grid alongside
-the SM samples. Paths and options are set in `configs/shift_paths.py`:
+Use `shift_plotter_config.py` for dark-photon shapes alongside the SM samples.
+Choose the BSM campaign and points in `configs/shift_paths.py`, just as the SM
+inputs are selected by `campaign`:
 
 ```python
-bsm_histogram_plan = str(Path(__file__).resolve().parents[2] /
-                         "validation/bsm_grid_production_20261009/preparation_v2/plan.json")
-bsm_histogram_directory = None
-bsm_plot_output = str(Path(__file__).resolve().parents[1] / "plots/SM_BSM_20261012")
-histogram_cache_directory = "/tmp/jniedzie/shift_histogram_cache"
+bsm_campaign = "20261012-bdt-acceptance-stage1-split5"
+bsm_masses_to_plot = [15, 30, 50]  # GeV
+bsm_mean_lab_flights_to_plot = [None]  # Prompt points only.
 ```
 
-The plan binds the original nine physical points. Set
-`bsm_histogram_directory` to the validated histogram refresh directory when
-its completion receipt is ready; the current refresh target is
-`validation/bsm_sm_plots_20261012/histograms/completed/` below the workspace.
-The optional cache stages content-verified local copies because native ROOT
-opening of the mounted EOS paths failed; canonical files remain unchanged.
-Set `bsm_histogram_plan = None` to restore SM-only plots.
+Inputs resolve automatically to
+`base_path/darkphoton_<point>/<bsm_campaign>/histograms_merged/ntuple_0.root`.
+The shared helper finds the unique prepared production plan for that campaign
+under workspace `validation/<task>/plan.json` or
+`validation/<task>/<deployment>/plan.json`. Its seal binds the model labels,
+full GEN inventory and scoring settings. The helper checks each selected
+point's full event coverage, weights, published grouping/completion receipts
+and histogram checksum before returning an input.
+
+The flight values `[None, 5, 30]` mean prompt and estimated mean lab flights of
+5 and 30 metres; they are not proper decay lengths. Set either whole selector
+to `None` to include all of its available values, or `[]` to include none.
+An unfinished selected point or an unknown requested mass/lifetime is an
+error. Unselected unfinished points do not block plotting.
+
+Output is automatic too: `plots/SM_BSM/<bsm_campaign>/` in this repository.
+Set `bsm_campaign = None` for SM-only plots. The optional
+`histogram_cache_directory` stages content-verified local copies when ROOT
+cannot open mounted EOS inputs; it does not change the canonical files.
 
 ```bash
 source tea/setup.sh

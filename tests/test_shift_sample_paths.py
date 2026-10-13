@@ -1,4 +1,5 @@
 # Code style: AI-code. AI-generated regression test.
+import copy
 import json
 from pathlib import Path
 import runpy
@@ -12,6 +13,7 @@ CONFIGS = Path(__file__).resolve().parents[1] / 'configs'
 sys.path.insert(0, str(CONFIGS))
 sys.path.insert(0, str(CONFIGS.parent / 'tea/pylibs/logger'))
 from shift_sample_paths import latest_merged_sample, validated_nano_files, validated_bsm_histogram_files
+import shift_sample_paths
 
 
 class MergedSampleTest(unittest.TestCase):
@@ -342,6 +344,337 @@ class SignalHistogramSampleTest(unittest.TestCase):
         rows = validated_bsm_histogram_files(self.plan_path, refreshed.parent)
         self.assertEqual(rows[0]["histogram_path"], str(refreshed / "histograms.root"))
         self.assertEqual(rows[0]["events"], self.point["events"])
+
+
+class BsmCampaignHistogramTest(unittest.TestCase):
+    """Synthetic sealed campaigns; no real EOS or ROOT event data are used."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.base = self.root / 'data'
+        self.validation = self.root / 'validation'
+        self.deployment = self.validation / 'study' / 'replacement'
+        self.campaign = '20261012-bsm-fixture'
+        self.model_hash = 'b' * 64
+        self.plan = dict(schema='shift-independent-signal-repartition-plan-v1', prepared=True,
+                         submitted=False, campaign=self.campaign, points=[], events=8)
+        self.inventory = dict(schema='shift-independent-signal-GEN-inventory-v1', complete=True,
+                              each_parent_ledger_counted_once=True, points={})
+        self.scoring = dict(model_sha256=self.model_hash)
+        self.reports = {}
+        self.histograms = {}
+        for index, (mass, flight) in enumerate(((15, None), (15, 5), (30, None), (30, 5))):
+            name = f'm{mass}_' + ('prompt' if flight is None else 'lab_5m')
+            directory = self.base / ('darkphoton_' + name) / self.campaign
+            epsilon = .001 if flight is None else 1.e-8
+            ctau = .001 if flight is None else 10.
+            run = 100 + index
+            parent = dict(events=2, event_ids=[[run, 1, 1], [run, 1, 2]], native_sumw=2.,
+                          native_sumw2=2., mass_gev=mass, epsilon=epsilon,
+                          proper_ctau_mm=ctau, run_number=run, gen_sha256='c' * 64,
+                          contract_sha256='d' * 64, sample_role='validation_only')
+            self.inventory['points'][name] = parent
+            self.plan['points'].append(dict(point=name, events=2, mass_gev=mass, epsilon=epsilon,
+                proper_ctau_mm=ctau, run_number=run, target_mean_lab_flight_m=flight,
+                final_output_base=str(directory)))
+            histogram = directory / 'histograms_merged' / 'ntuple_0.root'
+            histogram.parent.mkdir(parents=True)
+            histogram.write_bytes(('synthetic histogram ' + name).encode())
+            self.histograms[name] = histogram
+            grouped = dict(path=str(directory / 'nanoAOD_merged_unscored/ntuple_0.root'),
+                           sha256='e' * 64, bytes=128)
+            union = dict(schema='shift-independent-signal-union-v1', complete=True, point=name,
+                events=2, event_ids=copy.deepcopy(parent['event_ids']), parent_gen=copy.deepcopy(parent),
+                native_sumw=2., native_sumw2=2., parent_gen_ledger_count=1,
+                histogramming_started_after_complete_grouping=True, grouped=grouped)
+            marker = dict(schema='shift-merged-dimuon-bdt-complete-v1', complete=True, events=2,
+                model_sha256=self.model_hash, source=grouped['path'], source_sha256=grouped['sha256'],
+                selection_applied=False, published=dict(histograms=dict(path=str(histogram),
+                    bytes=histogram.stat().st_size, sha256=self.digest(histogram))))
+            self.reports[name] = dict(schema='shift-independent-signal-point-complete-v1', complete=True,
+                point=name, events=2, final_output_base=str(directory), union=union,
+                score_histograms=dict(complete=True, marker=marker))
+        self.freeze()
+
+    @staticmethod
+    def digest(path):
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+    @staticmethod
+    def write(path, value):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(value, indent=2) + '\n')
+
+    def freeze(self):
+        for name, value in (('plan.json', self.plan), ('gen_inventory.json', self.inventory),
+                            ('scoring_components.json', self.scoring)):
+            self.write(self.deployment / name, value)
+        self.write(self.deployment / 'seal.json', dict(campaign=self.campaign, files={
+            str((self.deployment / name).resolve()): self.digest(self.deployment / name)
+            for name in ('plan.json', 'gen_inventory.json', 'scoring_components.json')}))
+        self.plan_hash = self.digest(self.deployment / 'plan.json')
+        self.seal_hash = self.digest(self.deployment / 'seal.json')
+        for name, report in self.reports.items():
+            report.update(plan_sha256=self.plan_hash, seal_sha256=self.seal_hash)
+            report['union'].update(plan_sha256=self.plan_hash, seal_sha256=self.seal_hash)
+            report['score_histograms']['marker']['plan_sha256'] = self.seal_hash
+            self.publish(name)
+
+    def publish(self, name):
+        report = self.reports[name]
+        directory = self.base / ('darkphoton_' + name) / self.campaign
+        self.write(self.deployment / 'completed_points' / (name + '.json'), report)
+        self.write(directory / 'metadata/grouping/union.json', report['union'])
+        self.write(directory / 'metadata/bdt_grouped/complete.json', report['score_histograms']['marker'])
+
+    def files(self, masses=None, flights=None, **kwargs):
+        return shift_sample_paths.validated_bsm_campaign_histograms(
+            self.base, self.campaign, masses, flights,
+            validation_directory=self.validation, **kwargs)
+
+    def test_all_points_preserve_full_gen_weights_and_unvalidated_rates(self):
+        rows = self.files()
+        self.assertEqual({row['name'] for row in rows}, set(self.reports))
+        self.assertTrue(all(row['events'] == row['initial_weight_sum'] == 2 for row in rows))
+        self.assertTrue(all(row['physics_valid'] is False and row['normalization_ready'] is False
+                            for row in rows))
+
+    def test_original_stage_schema_keeps_sealed_full_gen_validation(self):
+        self.plan['schema'] = 'shift-bdt-independent-signal-stage-v1'
+        for row in self.plan['points']:
+            prefix = row.pop('final_output_base')
+            row['chunks'] = [dict(nano=prefix + '/nanoAOD/chunk_000.root')]
+            self.reports[row['point']].pop('final_output_base')
+        self.freeze()
+        for name, report in self.reports.items():
+            report.pop('plan_sha256')
+            report['union'].pop('plan_sha256')
+            self.publish(name)
+        rows = self.files([15], [None, 5])
+        self.assertEqual({row['name'] for row in rows}, {'m15_prompt', 'm15_lab_5m'})
+        self.assertTrue(all(row['initial_weight_sum'] == 2 for row in rows))
+        self.reports['m15_prompt']['union']['event_ids'].pop()
+        self.publish('m15_prompt')
+        with self.assertRaisesRegex(RuntimeError, 'GEN'):
+            self.files([15], [None])
+
+    def test_mass_flight_prompt_and_empty_selection(self):
+        self.assertEqual({row['name'] for row in self.files([15], [None, 5])},
+                         {'m15_prompt', 'm15_lab_5m'})
+        self.assertEqual({row['name'] for row in self.files([15], [None])}, {'m15_prompt'})
+        self.assertEqual({row['name'] for row in self.files(None, [5])}, {'m15_lab_5m', 'm30_lab_5m'})
+        self.assertEqual(self.files([], None), [])
+        self.assertEqual(self.files(None, []), [])
+        self.assertEqual(shift_sample_paths.validated_bsm_campaign_histograms(self.base, None), [])
+
+    def test_unselected_failed_point_does_not_block_requested_complete_points(self):
+        self.reports['m30_lab_5m']['complete'] = False
+        self.publish('m30_lab_5m')
+        self.assertEqual(len(self.files([15], [None, 5])), 2)
+        with self.assertRaisesRegex(RuntimeError, 'completion|complete'):
+            self.files([30], [5])
+
+    def test_missing_selected_report_or_publication_cannot_be_skipped(self):
+        report = self.reports['m15_lab_5m']
+        directory = Path(report['final_output_base'])
+        paths = (self.deployment / 'completed_points/m15_lab_5m.json',
+                 directory / 'metadata/grouping/union.json',
+                 directory / 'metadata/bdt_grouped/complete.json', self.histograms['m15_lab_5m'])
+        for path in paths:
+            before = path.read_bytes()
+            path.unlink()
+            try:
+                with self.subTest(path=path), self.assertRaises((RuntimeError, OSError)):
+                    self.files([15], [5])
+            finally:
+                path.write_bytes(before)
+
+    def test_unknown_requested_values_and_cross_combination_are_rejected(self):
+        for masses, flights in (([999], None), (None, [99]), ([15, 30], [None, 99])):
+            with self.subTest(masses=masses, flights=flights), self.assertRaisesRegex(RuntimeError, 'absent'):
+                self.files(masses, flights)
+        self.plan['points'] = [row for row in self.plan['points'] if row['point'] != 'm30_lab_5m']
+        self.inventory['points'].pop('m30_lab_5m')
+        self.plan['events'] = 6
+        self.freeze()
+        # Both values separately exist, but the explicitly requested Cartesian point does not.
+        with self.assertRaisesRegex(RuntimeError, 'points are absent'):
+            self.files([15, 30], [None, 5])
+        self.assertEqual(len(self.files()), 3)
+
+    def test_invalid_selector_values_are_rejected(self):
+        for masses, flights in (([True], None), ([0], None), ([float('nan')], None),
+                                ('15', None), (None, [0]), (None, [float('inf')]), (None, 'prompt')):
+            with self.subTest(masses=masses, flights=flights), self.assertRaises(RuntimeError):
+                self.files(masses, flights)
+
+    def test_changed_sealed_provenance_files_are_rejected(self):
+        for name in ('plan.json', 'gen_inventory.json', 'scoring_components.json'):
+            path = self.deployment / name
+            before = path.read_bytes()
+            path.write_bytes(before + b' ')
+            try:
+                with self.subTest(name=name), self.assertRaisesRegex(RuntimeError, 'checksum|SHA|hash'):
+                    self.files([15], [None])
+            finally:
+                path.write_bytes(before)
+
+    def test_model_labels_cannot_disagree_with_the_full_gen_parent(self):
+        original = copy.deepcopy(self.plan['points'][0])
+        for key, value in (('mass_gev', 25), ('epsilon', .002), ('proper_ctau_mm', .002), ('run_number', 999)):
+            self.plan['points'][0] = dict(original, **{key: value})
+            self.freeze()
+            with self.subTest(key=key), self.assertRaisesRegex(RuntimeError, 'model|GEN'):
+                self.files()
+        self.plan['points'][0] = original
+
+    def test_changed_gen_coverage_weights_and_grouping_are_rejected(self):
+        original = copy.deepcopy(self.reports['m15_prompt'])
+        mutations = (lambda report: report['union']['event_ids'].reverse(),
+            lambda report: report['union']['event_ids'].pop(),
+            lambda report: report['union'].update(native_sumw=1.),
+            lambda report: report['union'].update(native_sumw2=1.),
+            lambda report: report['union'].update(native_sumw=float('nan')),
+            lambda report: report['union'].update(parent_gen_ledger_count=2),
+            lambda report: report['union'].update(histogramming_started_after_complete_grouping=False),
+            lambda report: report['union']['parent_gen'].update(gen_sha256='f' * 64),
+            lambda report: report.update(plan_sha256='f' * 64),
+            lambda report: report['union'].update(seal_sha256='f' * 64))
+        for mutate in mutations:
+            self.reports['m15_prompt'] = copy.deepcopy(original)
+            mutate(self.reports['m15_prompt'])
+            self.publish('m15_prompt')
+            with self.subTest(mutation=mutate), self.assertRaises(RuntimeError):
+                self.files([15], [None])
+
+    def test_duplicate_expected_gen_id_and_cross_point_identity_are_rejected(self):
+        original = copy.deepcopy(self.inventory['points']['m15_prompt'])
+        point = self.inventory['points']['m15_prompt']
+        point['event_ids'][1] = point['event_ids'][0]
+        self.reports['m15_prompt']['union']['parent_gen'] = copy.deepcopy(point)
+        self.reports['m15_prompt']['union']['event_ids'] = copy.deepcopy(point['event_ids'])
+        self.freeze()
+        with self.assertRaisesRegex(RuntimeError, 'GEN'):
+            self.files([15], [None])
+        self.inventory['points']['m15_prompt'] = original
+        self.reports['m15_prompt']['union']['parent_gen'] = copy.deepcopy(original)
+        self.reports['m15_prompt']['union']['event_ids'] = copy.deepcopy(original['event_ids'])
+        other = self.inventory['points']['m30_prompt']
+        other['event_ids'] = copy.deepcopy(original['event_ids'])
+        other['run_number'] = original['run_number']
+        next(row for row in self.plan['points'] if row['point'] == 'm30_prompt')['run_number'] = original['run_number']
+        self.reports['m30_prompt']['union']['parent_gen'] = copy.deepcopy(other)
+        self.reports['m30_prompt']['union']['event_ids'] = copy.deepcopy(other['event_ids'])
+        self.freeze()
+        with self.assertRaisesRegex(RuntimeError, 'GEN'):
+            self.files([15, 30], [None])
+
+    def test_marker_model_source_seal_and_selection_must_match(self):
+        original = copy.deepcopy(self.reports['m15_prompt'])
+        mutations = (lambda marker: marker.update(model_sha256='f' * 64),
+                     lambda marker: marker.update(source_sha256='f' * 64),
+                     lambda marker: marker.update(source='/unrelated/grouped.root'),
+                     lambda marker: marker.update(plan_sha256=self.plan_hash),
+                     lambda marker: marker.update(selection_applied=True),
+                     lambda marker: marker.update(events=1),
+                     lambda marker: marker['published']['histograms'].update(path='/unrelated/histograms.root'))
+        for mutate in mutations:
+            self.reports['m15_prompt'] = copy.deepcopy(original)
+            mutate(self.reports['m15_prompt']['score_histograms']['marker'])
+            self.publish('m15_prompt')
+            with self.subTest(mutation=mutate), self.assertRaises(RuntimeError):
+                self.files([15], [None])
+
+    def test_real_grouping_and_completion_markers_must_match_local_report(self):
+        directory = Path(self.reports['m15_prompt']['final_output_base'])
+        for path in (directory / 'metadata/grouping/union.json',
+                     directory / 'metadata/bdt_grouped/complete.json'):
+            value = json.loads(path.read_text())
+            value['complete'] = False
+            self.write(path, value)
+            with self.subTest(path=path), self.assertRaises(RuntimeError):
+                self.files([15], [None])
+            self.publish('m15_prompt')
+
+    def test_histogram_bytes_and_cached_copy_are_verified(self):
+        histogram = self.histograms['m15_prompt']
+        before = histogram.read_bytes()
+        histogram.write_bytes(before + b'changed')
+        with self.assertRaisesRegex(RuntimeError, 'checksum'):
+            self.files([15], [None])
+        histogram.write_bytes(before)
+        cache = self.root / 'cache'
+        row = self.files([15], [None], cache_directory=cache)[0]
+        copied = Path(row['histogram_path'])
+        self.assertEqual(copied.parent, cache)
+        self.assertEqual(copied.read_bytes(), before)
+        self.assertEqual(histogram.read_bytes(), before)
+        copied.write_bytes(b'corrupt cache')
+        with self.assertRaisesRegex(RuntimeError, 'Cached|checksum'):
+            self.files([15], [None], cache_directory=cache)
+
+    def test_duplicate_points_and_ambiguous_campaign_plans_are_rejected(self):
+        original = copy.deepcopy(self.plan['points'])
+        self.plan['points'].append(copy.deepcopy(original[0]))
+        self.freeze()
+        with self.assertRaisesRegex(RuntimeError, 'duplicate'):
+            self.files()
+        self.plan['points'] = original
+        self.freeze()
+        duplicate = self.validation / 'other'
+        for name in ('plan.json', 'gen_inventory.json', 'scoring_components.json'):
+            path = duplicate / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes((self.deployment / name).read_bytes())
+        self.write(duplicate / 'seal.json', dict(campaign=self.campaign, files={str((duplicate / name).resolve()):
+            self.digest(duplicate / name) for name in ('plan.json', 'gen_inventory.json', 'scoring_components.json')}))
+        with self.assertRaisesRegex(RuntimeError, 'ambiguous|exactly one|found 2'):
+            self.files([15], [None])
+
+    def test_unrelated_non_object_or_partial_plan_does_not_block_campaign_discovery(self):
+        self.write(self.validation / 'unrelated' / 'plan.json', ['an unrelated inventory'])
+        partial = self.validation / 'partial' / 'plan.json'
+        partial.parent.mkdir()
+        partial.write_text('{"schema":')
+        self.assertEqual({row['name'] for row in self.files([15], [None])}, {'m15_prompt'})
+
+    def test_corrupted_requested_plan_cannot_fall_back_to_finished_payloads(self):
+        (self.deployment / 'plan.json').write_text('{"schema":')
+        with self.assertRaises(RuntimeError):
+            self.files([15], [None])
+
+    def test_missing_or_invalid_frozen_model_hash_cannot_match_an_invalid_marker(self):
+        for value in (None, '', 'not-a-sha256'):
+            if value is None:
+                self.scoring.pop('model_sha256', None)
+            else:
+                self.scoring['model_sha256'] = value
+            for report in self.reports.values():
+                marker = report['score_histograms']['marker']
+                if value is None:
+                    marker.pop('model_sha256', None)
+                else:
+                    marker['model_sha256'] = value
+            self.freeze()
+            with self.subTest(value=value), self.assertRaises(RuntimeError):
+                self.files([15], [None])
+
+    def test_missing_or_invalid_grouped_source_hash_cannot_match_an_invalid_marker(self):
+        original = copy.deepcopy(self.reports['m15_prompt'])
+        for value in (None, '', 'not-a-sha256'):
+            report = copy.deepcopy(original)
+            if value is None:
+                report['union']['grouped'].pop('sha256')
+                report['score_histograms']['marker'].pop('source_sha256')
+            else:
+                report['union']['grouped']['sha256'] = value
+                report['score_histograms']['marker']['source_sha256'] = value
+            self.reports['m15_prompt'] = report
+            self.publish('m15_prompt')
+            with self.subTest(value=value), self.assertRaises(RuntimeError):
+                self.files([15], [None])
 
 
 if __name__ == '__main__':

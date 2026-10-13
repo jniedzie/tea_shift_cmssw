@@ -11,11 +11,12 @@ bdt_mixing_plot_output = None
 bdt_mixing_preparation_directory = None
 bdt_mixing_plot_scope = "all"
 
-# Optional BSM overlay. Leave these unset until an entire validated signal grid
-# is available to the ordinary plotter.
-bsm_histogram_plan = None
-bsm_histogram_directory = None
-bsm_plot_output = None
+# BSM campaign and points for the ordinary reconstruction plots.
+bsm_campaign = None  # None gives SM-only plots.
+# bsm_campaign = "20261012-bdt-acceptance-stage1-split5"
+bsm_masses_to_plot = [15]  # GeV; None selects all masses, [] selects none.
+bsm_mean_lab_flights_to_plot = [None, 5, 30]  # metres; None in the list means prompt.
+# Set the whole flight selector to None for all lifetimes, or [] for none.
 histogram_cache_directory = None
 
 sample = "jpsi"

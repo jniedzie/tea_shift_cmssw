@@ -9,7 +9,7 @@ from Logger import warn
 from shift_sample_paths import (
     single_root_file,
     full_gen_weight_sums,
-    validated_bsm_histogram_files,
+    validated_bsm_campaign_histograms,
 )
 from shift_storage_paths import tier_directory
 from shift_plot_binning import muon_variable_binning, dimuon_variable_binning
@@ -19,9 +19,9 @@ from shift_paths import (
     base_path,
     cross_sections,
     campaign,
-    bsm_histogram_plan,
-    bsm_histogram_directory,
-    bsm_plot_output,
+    bsm_campaign,
+    bsm_masses_to_plot,
+    bsm_mean_lab_flights_to_plot,
     histogram_cache_directory,
 )
 
@@ -110,22 +110,14 @@ for process, colors, label in (
         )
 
 
-signal_masses_to_plot = [
-    15,
-]  # GeV
-
-bsm_inputs = (
-    validated_bsm_histogram_files(bsm_histogram_plan, bsm_histogram_directory)
-    if bsm_histogram_plan
-    else []
+bsm_inputs = validated_bsm_campaign_histograms(
+    base_path, bsm_campaign, bsm_masses_to_plot, bsm_mean_lab_flights_to_plot,
+    cache_directory=histogram_cache_directory,
 )
 mass_colors = (ROOT.kMagenta + 1, ROOT.kAzure + 2, ROOT.kOrange + 7)
 masses = sorted({point["mass_gev"] for point in bsm_inputs})
 for point in bsm_inputs:
     mass = point["mass_gev"]
-
-    if mass not in signal_masses_to_plot:
-        continue
 
     flight = point["mean_lab_flight_m"]
     lifetime_label = "prompt" if flight is None else f"#LT L #GT #approx {flight:g} m"
@@ -149,9 +141,7 @@ for point in bsm_inputs:
 # Otherwise the shared plotter sorts all processes together by cross section.
 custom_stacks_order = [sample.name for sample in samples]
 
-output_path = (
-    (bsm_plot_output or "../plots/SM_BSM/") if bsm_inputs else "../plots/plots/"
-)
+output_path = f"../plots/SM_BSM/{bsm_campaign}/" if bsm_inputs else "../plots/plots/"
 
 # Expand automatic axes only when needed to keep distributions clear of legends.
 auto_adjust_axes_for_legend = True

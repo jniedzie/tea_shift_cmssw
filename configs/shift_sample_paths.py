@@ -10,7 +10,7 @@ from collections import Counter
 from pathlib import Path
 import re
 
-from shift_storage_paths import resolve_storage_path, tier_directory
+from shift_storage_paths import _canonical_path, resolve_storage_path, tier_directory
 
 
 def single_root_file(directory, *, allow_missing=False, cache_directory=None):
@@ -353,4 +353,171 @@ def validated_bsm_histogram_files(plan_path, histogram_directory=None):
             events=expected_events, initial_weight_sum=weight_sum,
             physics_valid=False, normalization_ready=False,
         ))
+    return result
+
+
+def _bsm_campaign_records(campaign, validation_directory):
+    """Find the unique sealed production that owns this campaign name."""
+    root = Path(validation_directory) if validation_directory is not None else (
+        Path(__file__).resolve().parents[2] / "validation")
+    schemas = {"shift-bdt-independent-signal-stage-v1",
+               "shift-independent-signal-repartition-plan-v1"}
+    candidates = []
+    # Production evidence sits at the task root or one deployment below it.
+    # Avoid recursive searches through frozen sources and detector scratch.
+    for pattern in ("*/plan.json", "*/*/plan.json"):
+        for path in sorted(root.glob(pattern)):
+            try:
+                plan = json.loads(path.read_text())
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(plan, dict) and plan.get("schema") in schemas and plan.get("campaign") == campaign:
+                candidates.append(path)
+    if len(candidates) != 1:
+        raise RuntimeError(f"Require one BSM production plan for campaign '{campaign}'; "
+                           f"found {len(candidates)}")
+    path = candidates[0]
+    seal = _read_normalization_record(path.parent / "seal.json")
+    if seal.get("campaign") != campaign:
+        raise RuntimeError("BSM production seal identifies a different campaign")
+    records = []
+    for name in ("plan.json", "gen_inventory.json", "scoring_components.json"):
+        source = path.parent / name
+        checksum = seal.get("files", {}).get(str(source.resolve()))
+        if not isinstance(checksum, str) or not re.fullmatch(r"[0-9a-f]{64}", checksum):
+            raise RuntimeError(f"BSM production seal does not pin {source}")
+        records.append(_read_normalization_record(source, checksum))
+    return path.parent, *records, hashlib.sha256((path.parent / "seal.json").read_bytes()).hexdigest()
+
+
+def _bsm_selector(values, label, *, allow_prompt=False):
+    if values is None:
+        return None
+    if not isinstance(values, (list, tuple)):
+        raise RuntimeError(f"BSM {label} selector must be a list or None")
+    for value in values:
+        if allow_prompt and value is None:
+            continue
+        if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+            raise RuntimeError(f"Invalid BSM {label} selection: {value!r}")
+    return set(values)
+
+
+def validated_bsm_campaign_histograms(base_path, campaign, masses=None, mean_lab_flights=None,
+                                      *, cache_directory=None, validation_directory=None):
+    """Resolve selected complete signal points from a sealed campaign.
+
+    Flight values are the grid's estimated mean lab flights in metres, not c*tau.
+    None selects every value; a None entry in the flight list selects prompt.
+    A missing requested point is an error, even if other points have finished.
+    """
+    if campaign is None:
+        return []
+    if not isinstance(campaign, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", campaign):
+        raise RuntimeError(f"Invalid BSM campaign: {campaign!r}")
+    masses = _bsm_selector(masses, "mass")
+    flights = _bsm_selector(mean_lab_flights, "mean lab flight", allow_prompt=True)
+    if masses == set() or flights == set():
+        return []
+    root, plan, inventory, scoring, seal_hash = _bsm_campaign_records(campaign, validation_directory)
+    model_hash = scoring.get("model_sha256")
+    if not isinstance(model_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", model_hash):
+        raise RuntimeError("BSM frozen scoring model has no valid SHA-256 digest")
+    points = plan.get("points", [])
+    names = [row["point"] for row in points]
+    if (plan.get("prepared") is not True or not points or len(set(names)) != len(names) or
+            inventory.get("schema") != "shift-independent-signal-GEN-inventory-v1" or
+            inventory.get("complete") is not True or
+            inventory.get("each_parent_ledger_counted_once") is not True or
+            set(names) != set(inventory.get("points", {}))):
+        raise RuntimeError("BSM campaign has an incomplete or duplicate point inventory")
+    available = {(row["mass_gev"], row["target_mean_lab_flight_m"]) for row in points}
+    if len(available) != len(points):
+        raise RuntimeError("BSM campaign has duplicate mass/lifetime points")
+    if ((masses is not None and masses - {mass for mass, _ in available}) or
+            (flights is not None and flights - {flight for _, flight in available})):
+        raise RuntimeError(f"Requested BSM mass/lifetime values are absent from campaign '{campaign}'")
+    requested = {(mass, flight) for mass, flight in available
+                 if (masses is None or mass in masses) and (flights is None or flight in flights)}
+    missing = ({(mass, flight) for mass in masses for flight in flights} - available
+               if masses is not None and flights is not None else set())
+    if missing:
+        raise RuntimeError(f"Requested BSM mass/lifetime points are absent from campaign '{campaign}': "
+                           f"{sorted(missing, key=repr)}")
+    plan_hash = hashlib.sha256((root / "plan.json").read_bytes()).hexdigest()
+    repartitioned = plan["schema"] == "shift-independent-signal-repartition-plan-v1"
+    result, identities, paths = [], set(), set()
+    for row in points:
+        if (row["mass_gev"], row["target_mean_lab_flight_m"]) not in requested:
+            continue
+        name, count = row["point"], row["events"]
+        if not re.fullmatch(r"[A-Za-z0-9_]+", name):
+            raise RuntimeError(f"Invalid BSM point name: {name!r}")
+        directory = Path(base_path) / ("darkphoton_" + name) / campaign
+        prefix = (row["final_output_base"] if repartitioned else
+                  str(Path(row["chunks"][0]["nano"]).parent.parent))
+        # Compare local EOS aliases in the same canonical namespace.
+        if _canonical_path(resolve_storage_path(directory)) != _canonical_path(resolve_storage_path(prefix)):
+            raise RuntimeError(f"BSM point namespace differs from the selected campaign: {name}")
+        report_path = root / "completed_points" / (name + ".json")
+        if not report_path.is_file():
+            raise RuntimeError(f"Selected BSM point is not complete: {name} ({report_path})")
+        report = _read_normalization_record(report_path)
+        if (report.get("schema") != "shift-independent-signal-point-complete-v1" or
+                report.get("complete") is not True or report.get("point") != name or
+                report.get("events") != count or report.get("seal_sha256") != seal_hash or
+                (repartitioned and (report.get("plan_sha256") != plan_hash or
+                                    report.get("final_output_base") != prefix))):
+            raise RuntimeError(f"Selected BSM point has an invalid completion receipt: {name}")
+        parent, union = inventory["points"][name], report["union"]
+        expected = parent["event_ids"]
+        ids = [tuple(event) for event in expected]
+        if (type(count) is not int or count <= 0 or parent.get("events") != count or
+                len(ids) != count or len(set(ids)) != count or identities.intersection(ids) or
+                any(len(event) != 3 or any(type(value) is not int or value <= 0 for value in event)
+                    or event[0] != row["run_number"] for event in ids) or
+                any(parent.get(key) != row[key] for key in
+                    ("mass_gev", "epsilon", "proper_ctau_mm", "run_number")) or
+                union.get("schema") != "shift-independent-signal-union-v1" or
+                union.get("complete") is not True or union.get("point") != name or
+                union.get("events") != count or union.get("event_ids") != expected or
+                union.get("parent_gen") != parent or union.get("parent_gen_ledger_count") != 1 or
+                union.get("histogramming_started_after_complete_grouping") is not True or
+                (repartitioned and union.get("plan_sha256") != plan_hash) or
+                union.get("seal_sha256") != seal_hash):
+            raise RuntimeError(f"BSM full GEN population or model differs: {name}")
+        for key in ("native_sumw", "native_sumw2"):
+            value = union.get(key)
+            if type(value) not in (int, float) or not math.isfinite(value) or value != parent.get(key):
+                raise RuntimeError(f"BSM native weights differ from the full GEN parent: {name}")
+        if _read_normalization_record(directory / "metadata/grouping/union.json") != union:
+            raise RuntimeError(f"BSM published grouping receipt differs: {name}")
+        scored = report["score_histograms"]
+        marker = scored["marker"]
+        grouped = union["grouped"]
+        grouped_hash = grouped.get("sha256")
+        if (scored.get("complete") is not True or marker.get("complete") is not True or
+                marker.get("schema") != "shift-merged-dimuon-bdt-complete-v1" or
+                marker.get("events") != count or marker.get("selection_applied") is not False or
+                marker.get("plan_sha256") != seal_hash or
+                marker.get("model_sha256") != model_hash or
+                not isinstance(grouped_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", grouped_hash) or
+                grouped.get("path") != prefix + "/nanoAOD_merged_unscored/ntuple_0.root" or
+                marker.get("source") != grouped["path"] or marker.get("source_sha256") != grouped_hash or
+                _read_normalization_record(directory / "metadata/bdt_grouped/complete.json") != marker):
+            raise RuntimeError(f"BSM histogram marker differs from the complete grouped source: {name}")
+        published = marker["published"]["histograms"]
+        if published.get("path") != prefix + "/histograms_merged/ntuple_0.root":
+            raise RuntimeError(f"BSM histogram is outside the selected point namespace: {name}")
+        histogram = single_root_file(directory / "histograms_merged", cache_directory=cache_directory)
+        payload = Path(histogram)
+        if (histogram in paths or payload.stat().st_size != published.get("bytes") or
+                hashlib.sha256(payload.read_bytes()).hexdigest() != published.get("sha256")):
+            raise RuntimeError(f"BSM histogram checksum differs: {name}")
+        identities.update(ids)
+        paths.add(histogram)
+        result.append(dict(name=name, histogram_path=histogram, mass_gev=row["mass_gev"],
+            epsilon=row["epsilon"], mean_lab_flight_m=row["target_mean_lab_flight_m"],
+            events=count, initial_weight_sum=parent["native_sumw"],
+            physics_valid=False, normalization_ready=False))
     return result
