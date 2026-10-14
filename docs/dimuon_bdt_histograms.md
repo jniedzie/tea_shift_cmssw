@@ -243,3 +243,67 @@ The frozen source and detailed physics record are in
 `DIMUON_VERTEX_CLASSIFIER.md`. Validation passed 132 classifier tests and
 18 targeted analysis tests. Future final results and PDF figures must remain
 inside this repository.
+
+The subsequent one-hour information study adds 32 fits and 69 reconstructed
+inputs (associated muon quality/hits/timing and five event occupancy counts).
+Results are in
+[`plots/DNN_vertex_information_20261013/`](../plots/DNN_vertex_information_20261013/README.md).
+Both rich pooled-model seeds pass the reconstructed development acceptance
+checks, rejecting 49.10/49.27% of fakes versus 40.95% for the earlier
+constrained DNN. They keep 90.80/89.93% of genuine SM pairs and 163/173 or
+152/173 genuine signal pairs. Signal seed variation remains unresolved.
+No generated quantity enters inference, no existing labels/cuts are changed,
+and this is an information ablation on the same training events. Reviewed
+PDFs are in `dnn_comparison_reviewed/`, `categories_v2/` and
+`signal_transfer/` within that study. The original study commits are CMSSW
+`0ded56efdf9` and TEA `a890545`; the new study is not committed.
+
+The next response study separates classifier retention from the full generated
+event response. Its final PDF figures and numerical evidence are in
+[`plots/Vertex_efficiency_20261013/`](../plots/Vertex_efficiency_20261013/README.md).
+The six complete points retain all 1,200 GEN parents and use proper lifetimes
+from timed GEN audits. Incomplete points remain unknown. The rich DNN retains
+163/173 or 152/173 genuine signal events, corresponding to 13.6% or 12.7% of
+all generated events; the stronger BDT retains 173/173, or 14.4% of all GEN.
+Local lifetime reweighting is implemented but lacks the required effective
+selected-event support. This is simulated reconstruction and selection response,
+with real recording acceptance and J/psi data corrections still unresolved.
+
+`utils/shift_vertex_signal_cache.py`, `utils/shift_vertex_signal_scores.py` and
+`utils/shift_vertex_efficiency_map.py` process explicitly qualified complete
+signal points with the existing frozen inputs, models and cuts. They preserve
+event identities, native weights and zero-candidate parents, and refuse
+overwrite. New stage-2 simulation is already owned by DAG 12911694; do not
+submit competing signal production or change its sealed deployment.
+
+## October 13 complete-input BDT/DNN and training-size comparison
+
+The next comparison uses all 119 reconstructed variables and five explicit
+category columns for every model. It includes the single-muon and event
+variables. Each of two separate domains has 81 completed fits: three BDT
+settings and three DNN architectures, classification or decorrelation loss,
+25/50/100% nested event-grouped training samples, and three seeds. The current
+sample uses all 187,214 compatible completed SM events. The newly recovered
+historical binned production contains 329,997 events, but uses the old
+IR1/ATLAS proxy geometry and different generation/decay settings. It is a
+separate stress test; its very strong process/class imbalance makes pooled
+performance insufficient evidence of vertex discrimination.
+
+Current development performance at full training size is 77.98% fake
+rejection with 89.86% genuine retention for the regularized depth-five BDT,
+versus 73.41--73.57% rejection with 90.39--91.33% retention for the shared
+64/32 DNN. Both improve with increasing training population. Neither current
+model family passes the fixed acceptance-uniformity requirements. These are
+reused development events, not independent confirmation.
+
+Final PDF ROC, score, mass/position/category and learning-curve diagnostics
+are in
+[`plots/Vertex_complete_20261013/`](../plots/Vertex_complete_20261013/README.md),
+with frozen sources, numerical evidence and independent hash/selection audits.
+Six Condor jobs, `12913514.0` through `.5`, were submitted for a separate
+81-fit current-domain comparison of moderate decorrelation and direct soft
+acceptance losses. Its protocol was frozen before the initial development
+evaluation. Read the study README and `current_refinement/condor/submission.json`
+before resuming. Wait for all archived fit receipts and inspect the six jobs
+before locking families and generating its development or signal figures.
+No new classifier or selection cut is deployed in the ntuples or histograms.

@@ -217,8 +217,8 @@ def screen(inputs, counts, luminosities, signal_only=False):
                      "L_eff covers unmodeled halo/exposure/recording/data-MC losses; simulated reconstructed mass acceptance is applied once",
                      "fixed no-pileup/Fake2-HLT replay is a detector scenario, not final recording acceptance",
                      "pure-DY native-Pythia rate pilot; physical rate closure remains open",
-                     "known-background, no-nuisance exact median 90% CLs screening; MC errors reported separately",
-                     "empty constant-weight MC components use conditional single-component90% binomial upper planning floors; not a joint confidence bound",
+                     "MC yield errors reported separately" if signal_only else "known-background, no-nuisance exact median 90% CLs screening; MC errors reported separately",
+                     "zero selected signal MC events leave acceptance unresolved" if signal_only else "empty constant-weight MC components use conditional single-component90% binomial upper planning floors; not a joint confidence bound",
                      "zero finite-MC cells are unknown; zero components do not establish zero physical rates",
                      "all selected sums retain full GEN denominators; missing detector outputs are not renormalized",
                      "mass hypotheses share events; values are pointwise, with no joint-likelihood claim"],
@@ -281,7 +281,8 @@ def draw(report, output, signal_yields=False, generated_yields=False):
     selection_text = ("Production cross section times effective luminosity; dimuon branching fraction included once."
                       if generated_yields else f"One OS valid candidate per event; reconstructed mass within ±{width:g}% of the hypothesis.")
     fig.text(.5, .13, selection_text, ha="center", fontsize=9)
-    description = ("DY selected cross sections already include the dimuon branching fraction; simulated selection acceptance is applied once."
+    description = ("No detector, reconstruction, mass-window or BDT selection applied." if generated_yields else
+                   "DY selected cross sections already include the dimuon branching fraction; simulated selection acceptance is applied once."
                    if signal_yields else "Known-background screen; empty constant-weight MC components use 90% upper planning floors. No fitted nuisances.")
     fig.text(.5, .09, description, ha="center", fontsize=9)
     fig.text(.5, .05, "Native-Pythia pure-DY rate and no-pileup/Fake2-HLT detector pilots. Points only; no physical exclusion contour.", ha="center", fontsize=9)
@@ -322,6 +323,13 @@ def main():
             continue
         masses = inputs["masses_gev"] if sample in inputs["backgrounds"] else [sample["mass_gev"]]
         counts[sample["name"]] = count_sample(sample, masses, inputs["window_half_width_fraction"])
+        counted = counts[sample["name"]]
+        if "expected_processed_events" in sample and counted["events"] != sample["expected_processed_events"]:
+            raise ValueError("Processed event coverage differs from its inventory: " + sample["name"])
+        if "expected_event_ids_sha256" in sample and counted["event_ids_sha256"] != sample["expected_event_ids_sha256"]:
+            raise ValueError("Processed event identities differ from their GEN slices: " + sample["name"])
+        if sample.get("unit_gen_weights") and not math.isclose(counted["sumw"], counted["events"]):
+            raise ValueError("Expected unit GEN weights: " + sample["name"])
         print(sample["name"], counts[sample["name"]]["events"], "events counted", flush=True)
         receipt = dict(inputs_sha256=input_hash, counts=counts)
         (args.output / "event_counts.json").write_text(json.dumps(receipt, indent=2) + "\n")

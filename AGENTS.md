@@ -54,6 +54,17 @@ Don't put these labels in `tea` repo, only in the analysis repo `tes_shift_cmssw
 - Reuse standard input, submission, ntuple-merging, histogram-merging and
   plotting tools. Extend existing shared helpers for provenance and full GEN
   normalization instead of introducing feature-specific config modules.
+- Ordinary plotting must work with available, possibly partial histogram files.
+  Do not require production validation directories, sealed plans or completion
+  receipts to run the plotter. Use normalization stored in the histogram files;
+  warn and skip samples whose histograms are not ready. Keep production audits
+  and full GEN accounting in the production and offline validation tools.
+- A campaign describes generation and processing settings, rather than the day
+  a new mass or lifetime was added. A shared alias such as `latest` may select
+  compatible runs separately for each point. Keep the previous ready output
+  selected until its replacement has merged histograms. Verify compatibility
+  when publishing an alias and preserve the actual run directories and records;
+  ordinary plotting must not repeat those production checks.
 - Specialized diagnostics such as BDT ROC curves, fit checks, closure studies
   and uncertainty plots belong in scripts under `utils/` when they do not fit
   ordinary histogram/plot definitions. Keep these outside the main configs.

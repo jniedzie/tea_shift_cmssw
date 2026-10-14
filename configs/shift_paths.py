@@ -7,13 +7,19 @@ base_path = "/eos/home-j/jniedzie/shift_cmssw/"  # lxplus
 # BSM samples
 # ==========================
 
-bsm_campaign = "20261012-bdt-acceptance-stage1-split5"  # None gives SM-only plots.
+# None gives SM-only plots.
+# Each point's latest link keeps the newest ready sample with matching settings.
+bsm_campaign = "latest"
+
 
 # None selects all masses, [] selects none.
-bsm_masses_to_plot = [15]  # GeV
+bsm_masses_to_plot = None  # GeV
 
 # None for all lifetimes, or [] for none.  None in the list means prompt.
-bsm_mean_lab_flights_to_plot = [None, 5, 30]  # metres; 
+bsm_mean_lab_flights_to_plot = None  # metres
+
+# None selects all epsilon samples, [] selects none. Use [] above for epsilon-only plots.
+bsm_epsilons_to_plot = None
 
 histogram_cache_directory = None
 

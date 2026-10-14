@@ -56,6 +56,19 @@ class BaselineCountingTest(unittest.TestCase):
 
 
 class ExactClsTest(unittest.TestCase):
+    def test_signal_only_predictions_do_not_invent_background_or_limits(self):
+        sample = dict(name="signal", full_gen_sumw=200., selected_cross_section_pb=2.,
+                      mass_gev=15., epsilon=1.e-6, partial=True, unit_gen_weights=True)
+        counts = dict(events=180, windows={"15.0": dict(sumw=20., sumw2=20., events=20, ess=20.)})
+        inputs = dict(masses_gev=[15.], backgrounds=[], signals=[sample], window_half_width_fraction=.1)
+        report = baseline.screen(inputs, {"signal": counts}, [.3], signal_only=True)
+        point = report["scenarios"][0]["points"][0]
+        self.assertIsNone(point["background"])
+        self.assertNotIn("signal_events_90", point)
+        self.assertAlmostEqual(point["signal"]["events"], 60.)
+        self.assertAlmostEqual(point["signal"]["generated_dimuon_events"], 600.)
+        self.assertAlmostEqual(point["unprocessed_signal_yield_maximum"], 60.)
+
     def test_empty_constant_weight_floor_uses_exact_binomial_bound(self):
         sample = dict(full_gen_sumw=1000., selected_cross_section_pb=2.)
         counts = dict(events=100, sumw=200., sumw2=400.)

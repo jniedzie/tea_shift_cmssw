@@ -8,8 +8,7 @@ from CmsLabelsManager import CmsLabel
 from Logger import warn
 from shift_sample_paths import (
     single_root_file,
-    full_gen_weight_sums,
-    validated_bsm_campaign_histograms,
+    available_bsm_campaign_histograms,
 )
 from shift_storage_paths import tier_directory
 from shift_plot_binning import muon_variable_binning, dimuon_variable_binning
@@ -22,12 +21,12 @@ from shift_paths import (
     bsm_campaign,
     bsm_masses_to_plot,
     bsm_mean_lab_flights_to_plot,
+    bsm_epsilons_to_plot,
     histogram_cache_directory,
 )
 
 
 samples = []
-normalization_sums = full_gen_weight_sums(campaign)
 
 jpsi_colors = {
     "0to1": ROOT.TColor.GetColor("#FEC44F"),  # gold
@@ -96,11 +95,6 @@ for process, colors, label in (
                 file_path=file_path,
                 type=SampleType.background,
                 cross_section=cross_section,
-                initial_weight_sum=(
-                    normalization_sums[f"{process}_{bin_name}"]
-                    if normalization_sums is not None
-                    else -1
-                ),
                 line_alpha=0.0,
                 fill_color=colors[bin_name],
                 fill_alpha=0.7,
@@ -110,29 +104,47 @@ for process, colors, label in (
         )
 
 
-bsm_inputs = validated_bsm_campaign_histograms(
+bsm_inputs = available_bsm_campaign_histograms(
     base_path,
     bsm_campaign,
     bsm_masses_to_plot,
     bsm_mean_lab_flights_to_plot,
+    epsilons=bsm_epsilons_to_plot,
     cache_directory=histogram_cache_directory,
 )
-mass_colors = (ROOT.kMagenta + 1, ROOT.kAzure + 2, ROOT.kOrange + 7)
-masses = sorted({point["mass_gev"] for point in bsm_inputs})
+mass_colors = {
+    2: ROOT.kTeal + 3,
+    5: ROOT.kGreen + 2,
+    10: ROOT.kViolet + 1,
+    12: ROOT.kCyan + 2,
+    15: ROOT.kMagenta + 1,
+    20: ROOT.kRed + 1,
+    30: ROOT.kAzure + 2,
+    40: ROOT.kYellow + 2,
+    50: ROOT.kOrange + 7,
+    70: ROOT.kGray + 2,
+    90: ROOT.kBlack,
+}
+flight_line_styles = {None: 1, 5: 2, 30: 3, 100: 4, 1000: 7}
+epsilon_line_styles = {1e-6: 2, 1e-4: 3, 1e-2: 1}
 for point in bsm_inputs:
     mass = point["mass_gev"]
 
     flight = point["mean_lab_flight_m"]
     lifetime_label = "prompt" if flight is None else f"#LT L #GT #approx {flight:g} m"
+    line_style = flight_line_styles.get(flight, 3)
+    if "epsilon" in point:
+        epsilon = point["epsilon"]
+        lifetime_label = f"#epsilon = {epsilon:g}"
+        line_style = epsilon_line_styles.get(epsilon, 3)
 
     samples.append(
         Sample(
             name=point["name"],
             file_path=point["histogram_path"],
             type=SampleType.signal,
-            initial_weight_sum=point["initial_weight_sum"],
-            line_color=mass_colors[masses.index(point["mass_gev"]) % len(mass_colors)],
-            line_style=1 if flight is None else 2 if flight <= 5 else 3,
+            line_color=mass_colors.get(mass, ROOT.kGray + 1),
+            line_style=line_style,
             line_width=3,
             fill_alpha=0.0,
             marker_size=0.0,
