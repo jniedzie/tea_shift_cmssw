@@ -154,12 +154,21 @@ class AvailableHistogramPlotConfigTest(unittest.TestCase):
         output.Close()
         return path
 
-    def config(self, *, bsm_campaign=None, flights=(100,), epsilons=None):
+    def config(self, *, bsm_campaign=None, flights=(100,), epsilons=None, histogram_rebins=None):
+        from Histogram import Histogram
+
+        def histogram(*args, **kwargs):
+            definition = Histogram(*args, **kwargs)
+            if histogram_rebins and definition.name in histogram_rebins:
+                definition.rebin = histogram_rebins[definition.name]
+            return definition
+
         with patch.multiple('shift_paths', base_path=str(self.base), campaign=self.campaign,
                             cross_sections={'qcd': {'0to1': 2., '1to2': 3.}},
                             bsm_campaign=bsm_campaign, bsm_masses_to_plot=[15],
                             bsm_mean_lab_flights_to_plot=list(flights), bsm_epsilons_to_plot=epsilons,
                             histogram_cache_directory=None), \
+                patch('Histogram.Histogram', side_effect=histogram), \
                 patch('shift_sample_paths.full_gen_weight_sums', side_effect=AssertionError('Full GEN validation')), \
                 patch('shift_sample_paths._read_normalization_record', side_effect=AssertionError('Production records')), \
                 patch('shift_sample_paths._bsm_campaign_records', side_effect=AssertionError('BSM production validation')):
@@ -179,6 +188,38 @@ class AvailableHistogramPlotConfigTest(unittest.TestCase):
         self.assertEqual([sample.name for sample in config.samples], ['qcd_0to1', 'm15_lab_100m'])
         self.assertEqual(config.samples[1].file_path, str(self.signal))
         self.assertTrue(all(sample.initial_weight_sum == -1 for sample in config.samples))
+
+    def test_short_categories_reach_sm_and_bsm_legend_headers(self):
+        from HistogramPlotter import HistogramPlotter
+
+        labels = {
+            'muon/ShiftMuon_pt_variable': 'All',
+            'muon/ShiftMuonBothEndcaps_pt_variable': 'Both',
+            'dimuon/ShiftDimuonVertex_mass': 'All',
+            'dimuon/ShiftDimuonVertexBoth-Both_mass': 'Both-Both',
+            'event/Event_nShiftMuonBothEndcaps': 'Both',
+            'event/Event_nShiftDimuonVertexBoth-Both': 'Both-Both',
+        }
+        for campaign in (None, self.bsm_campaign):
+            with self.subTest(campaign=campaign), patch('Logger.warn'):
+                config = self.config(bsm_campaign=campaign)
+                config.histograms = [histogram for histogram in config.histograms
+                                     if histogram.name in labels]
+                config.output_path = str(self.base / 'plots')
+                plotter = HistogramPlotter(config)
+                for file in plotter.normalizer.input_files.values():
+                    self.addCleanup(file.Close)
+                plotter.histosamples = [(histogram, sample)
+                                       for histogram in config.histograms
+                                       for sample in config.samples]
+                plotter.setupLegends()
+                self.assertEqual(len(plotter.legends), len(labels))
+                for histogram in config.histograms:
+                    category = labels[histogram.name]
+                    for sample_type, legend in plotter.legends[histogram.name].items():
+                        title = config.legends[sample_type].title
+                        expected = f'{title} ({category})' if title else category
+                        self.assertEqual(legend.GetHeader(), expected)
 
     def test_epsilon_samples_use_epsilon_legends_without_production_records(self):
         signal = self.write_histograms(
@@ -211,6 +252,111 @@ class AvailableHistogramPlotConfigTest(unittest.TestCase):
         self.assertAlmostEqual(background_hist.hist.Integral(), 1.2)
         normalizer.normalize(signal_hist, signal, total_backgrounds_integral=background_hist.hist.Integral())
         self.assertAlmostEqual(signal_hist.hist.Integral(), 1.2)
+
+    def test_rebin_one_preserves_recorded_variable_bins_and_density_area(self):
+        from array import array
+        from Histogram import Histogram
+        from Sample import Sample, SampleType
+
+        with patch('Logger.warn'):
+            config = self.config(histogram_rebins={'dimuon/ShiftDimuonVertex_mass': 1})
+        self.assertEqual(config.variable_histogram_rebin, 1)
+        definition = next(histogram for histogram in config.histograms
+                          if histogram.name == 'dimuon/ShiftDimuonVertex_mass')
+        edges = (0., 10., 10.1, 10.2, 30., 31., 32., 50., 51., 52., 100.)
+        source = self.ROOT.TH1D('native_mass_bins', '', len(edges) - 1, array('d', edges))
+        source.SetDirectory(0)
+        source.Sumw2()
+        for index in range(1, source.GetNbinsX() + 1):
+            source.SetBinContent(index, index)
+            source.SetBinError(index, index ** .5)
+        original_area = source.Integral()
+        original_edges = tuple(source.GetBinLowEdge(index)
+                               for index in range(1, source.GetNbinsX() + 2))
+        histogram = Histogram(name=definition.name, rebin=definition.rebin,
+                              bin_edges=definition.bin_edges,
+                              scale_by_bin_width=definition.scale_by_bin_width)
+        histogram.set_hist(source)
+        histogram.setup(Sample(name='signal', type=SampleType.signal))
+        self.assertEqual(tuple(histogram.hist.GetBinLowEdge(index)
+                               for index in range(1, histogram.hist.GetNbinsX() + 2)),
+                         original_edges)
+        self.assertAlmostEqual(histogram.hist.Integral('width'), original_area)
+        for index in range(1, histogram.hist.GetNbinsX() + 1):
+            width = histogram.hist.GetBinWidth(index)
+            self.assertAlmostEqual(histogram.hist.GetBinContent(index) * width, index)
+            self.assertAlmostEqual(histogram.hist.GetBinError(index) * width, index ** .5)
+
+    def test_rebin_one_keeps_all_irregular_momentum_bins_in_every_category(self):
+        from array import array
+        from copy import deepcopy
+        from Sample import Sample, SampleType
+
+        with patch('Logger.warn'):
+            config = self.config()
+        definitions = [histogram for histogram in config.histograms
+                       if histogram.name.endswith('_variable')]
+        self.assertEqual(len(definitions), 12)
+        edges = (0., .1, .2, .3, .4, .5, 1., 2., 4., 8., 16., 32.)
+        for definition in definitions:
+            with self.subTest(histogram=definition.name):
+                source = self.ROOT.TH1D('native_momentum_bins', '', len(edges) - 1,
+                                        array('d', edges))
+                source.SetDirectory(0)
+                source.Sumw2()
+                for index in range(1, source.GetNbinsX() + 1):
+                    source.SetBinContent(index, index)
+                    source.SetBinError(index, index ** .5)
+                original_edges = tuple(source.GetBinLowEdge(index)
+                                       for index in range(1, source.GetNbinsX() + 2))
+                original_area = source.Integral()
+                histogram = deepcopy(definition)
+                histogram.set_hist(source)
+                histogram.setup(Sample(name='signal', type=SampleType.signal))
+                self.assertEqual(histogram.hist.GetNbinsX(), len(edges) - 1)
+                self.assertEqual(tuple(histogram.hist.GetBinLowEdge(index)
+                                       for index in range(1, histogram.hist.GetNbinsX() + 2)),
+                                 original_edges)
+                self.assertAlmostEqual(histogram.hist.Integral('width'), original_area)
+                for index in range(1, histogram.hist.GetNbinsX() + 1):
+                    width = histogram.hist.GetBinWidth(index)
+                    self.assertAlmostEqual(histogram.hist.GetBinContent(index) * width, index)
+                    self.assertAlmostEqual(histogram.hist.GetBinError(index) * width, index ** .5)
+
+    def test_regular_rebin_five_survives_config_and_stack_preparation(self):
+        from HistogramPlotter import HistogramPlotter
+
+        name = 'dimuon/ShiftDimuonVertex_mass'
+        with self.ROOT.TFile.Open(str(self.sm), 'UPDATE') as output:
+            directory = output.mkdir('dimuon')
+            directory.cd()
+            source = self.ROOT.TH1D('ShiftDimuonVertex_mass', '', 100, 0., 100.)
+            source.Sumw2()
+            for index in range(1, 101):
+                source.Fill(index - .5, 1.)
+            source.Write()
+        with patch('Logger.warn'):
+            config = self.config(histogram_rebins={name: 5})
+        definition = next(histogram for histogram in config.histograms if histogram.name == name)
+        self.assertEqual(definition.rebin, 5)
+        self.assertIsNone(definition.bin_edges)
+        config.histograms = [definition]
+        config.histograms2D = []
+        config.output_path = str(self.base / 'plots')
+        config.luminosity = 10.
+        plotter = HistogramPlotter(config)
+        for file in plotter.normalizer.input_files.values():
+            self.addCleanup(file.Close)
+        sample = config.samples[0]
+        plotter.addHistosample(definition, sample, plotter.normalizer.input_files[sample.name])
+        plotter.setupLegends()
+        plotter.buildStacks()
+        histogram = plotter.histosamples[0][0].hist
+        self.assertEqual(histogram.GetNbinsX(), 20)
+        for index in range(1, 21):
+            self.assertEqual(histogram.GetBinWidth(index), 5.)
+        # 100 entries * 2 pb * 10 pb^-1 / 20 original weight sum.
+        self.assertAlmostEqual(histogram.Integral('width'), 100.)
 
 
 if __name__ == "__main__":

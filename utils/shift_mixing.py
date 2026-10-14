@@ -1124,6 +1124,107 @@ def like_sign_transfer(same, augmented, both=False):
     return result, predicted
 
 
+def like_sign_closure_bootstrap(same, augmented, event_count, repetitions, rng,
+                               both=False, partition=None, variable="mass", edges=MASS_EDGES):
+    """Jointly resample SS control, mixed OS/SS and the same-event OS target.
+
+    Every occurrence of an original event shares one Poisson multiplier.
+    This is a diagnostic of the fixed partner graph, not a physical rate
+    validation. Missing nominal controls stay uncovered. A bootstrap sample
+    with lost mixed-SS support is reported, never silently assigned zero.
+    """
+    if event_count < 1 or repetitions < 2:
+        raise ValueError("Closure bootstrap requires source events and at least two repetitions")
+    edges = np.asarray(edges, dtype=float)
+    if edges.ndim != 1 or len(edges) < 2 or not np.isfinite(edges).all() or np.any(np.diff(edges) <= 0):
+        raise ValueError("Closure observable edges must be finite and strictly increasing")
+    keep = lambda row: (not both or row["both_endcaps"]) and (partition is None or row["partition"] == partition)
+    reference, extra = [row for row in same if keep(row)], [row for row in augmented if keep(row)]
+    pool_key = lambda row: (row["stratum"], row["partition"], row["activity_bin"])
+    keys = sorted({pool_key(row) for row in reference + extra})
+    groups = {key: index for index, key in enumerate(keys)}
+    size, bins = len(keys), len(edges) - 1
+
+    def arrays(rows, kind):
+        selected = [row for row in rows if row["kind"] == kind]
+        first = np.asarray([row["anchor_event"] for row in selected], dtype=int)
+        second = np.asarray([row["donor_event"] for row in selected], dtype=int)
+        weight = np.asarray([row["weight"] for row in selected], dtype=float)
+        values = np.asarray([row["pair"][variable] for row in selected], dtype=float)
+        group = np.asarray([groups[pool_key(row)] for row in selected], dtype=int)
+        if (np.any(first < 0) or np.any(second < 0) or np.any(first >= event_count) or np.any(second >= event_count)
+                or not np.isfinite(weight).all() or np.any(weight < 0) or not np.isfinite(values).all()):
+            raise ValueError("Invalid source index, positive weight or closure observable")
+        if np.any((first == second) != kind.startswith("same_")):
+            raise ValueError("Closure rows must preserve same-event or distinct-event source identities")
+        bin_index = np.searchsorted(edges, values, side="right") - 1
+        bin_index[values == edges[-1]] = bins - 1
+        return first, second, weight, group, bin_index
+
+    real_os, real_ss = arrays(reference, "same_os"), arrays(reference, "same_ss")
+    mixed_os, mixed_ss = arrays(extra, "row_os"), arrays(extra, "row_ss")
+    sum_pool = lambda data, weight: np.bincount(data[3], weights=weight, minlength=size)
+    real_control, mixed_control = sum_pool(real_ss, real_ss[2]), sum_pool(mixed_ss, mixed_ss[2])
+    available = (real_control > 0) & (mixed_control > 0)
+    nominal_scale = np.divide(real_control, mixed_control, out=np.zeros(size), where=available)
+    control_squared = sum_pool(real_ss, real_ss[2] * real_ss[2])
+    row_counts = {kind: sum_pool(data, np.ones(len(data[2]), dtype=int)) for kind, data in
+                  (("same_os", real_os), ("same_ss", real_ss), ("mixed_os", mixed_os), ("mixed_ss", mixed_ss))}
+
+    def hist(data, weight):
+        selected = (data[4] >= 0) & (data[4] < bins)
+        return np.bincount(data[4][selected], weights=weight[selected], minlength=bins)
+
+    target_weight = real_os[2] * available[real_os[3]]
+    nominal_target = hist(real_os, target_weight)
+    nominal_prediction = hist(mixed_os, mixed_os[2] * nominal_scale[mixed_os[3]])
+    lost_support = np.zeros(size, dtype=int)
+    zero_real_control = np.zeros(size, dtype=int)
+    predictions, targets = [], []
+    for _ in range(repetitions):
+        counts = rng.poisson(1., event_count)
+        real_ss_weight = real_ss[2] * counts[real_ss[0]]
+        mixed_ss_weight = mixed_ss[2] * counts[mixed_ss[0]] * counts[mixed_ss[1]]
+        control, denominator = sum_pool(real_ss, real_ss_weight), sum_pool(mixed_ss, mixed_ss_weight)
+        missing = available & (denominator <= 0)
+        lost_support += missing
+        zero_real_control += available & (control <= 0)
+        if missing.any():
+            continue
+        scale = np.divide(control, denominator, out=np.zeros(size), where=available)
+        predictions.append(hist(mixed_os, mixed_os[2] * counts[mixed_os[0]] * counts[mixed_os[1]]
+                                * scale[mixed_os[3]]))
+        targets.append(hist(real_os, target_weight * counts[real_os[0]]))
+    summary = dict(variable=variable, edges=edges.tolist(), category="Both-Both" if both else "inclusive",
+        partition=partition or "all", repetitions=repetitions, valid_repetitions=len(predictions),
+        invalid_control_repetitions=repetitions - len(predictions),
+        intervals_conditional_on_retained_control_support=len(predictions) != repetitions,
+        prediction_available=bool(available.any()), available_control_pools=int(available.sum()),
+        covered_same_os_weight=float(target_weight.sum()), all_same_os_weight=float(real_os[2].sum()),
+        same_os_control_coverage=float(target_weight.sum() / real_os[2].sum()) if real_os[2].sum() else None,
+        nominal_prediction=nominal_prediction.tolist(), nominal_target=nominal_target.tolist(),
+        nominal_difference=(nominal_prediction - nominal_target).tolist(),
+        uncertainty_scope="Joint source-event Poisson bootstrap on fixed partner graph; partner-seed variation and physics-model uncertainty are separate.",
+        empirical_zero_bins_are_not_physical_zero_limits=True, physics_valid=False, rate_validated=False,
+        pools={"/".join(key): dict(control_available=bool(available[index]),
+            real_ss_weight=float(real_control[index]), mixed_ss_weight=float(mixed_control[index]),
+            real_ss_effective_rows=float(real_control[index] ** 2 / control_squared[index]) if control_squared[index] else None,
+            raw_rows={kind: int(count[index]) for kind, count in row_counts.items()},
+            lost_mixed_ss_support_repetitions=int(lost_support[index]),
+            zero_real_ss_repetitions=int(zero_real_control[index])) for index, key in enumerate(keys)})
+    if len(predictions) >= 2:
+        predictions, targets = np.asarray(predictions), np.asarray(targets)
+        difference = predictions - targets
+        summary.update(prediction_std=np.std(predictions, axis=0, ddof=1).tolist(),
+            target_std=np.std(targets, axis=0, ddof=1).tolist(),
+            difference_std=np.std(difference, axis=0, ddof=1).tolist(),
+            difference_covariance=np.atleast_2d(np.cov(difference, rowvar=False)).tolist(),
+            difference_quantiles=np.quantile(difference, [.025, .16, .5, .84, .975], axis=0).tolist(),
+            prediction_quantiles=np.quantile(predictions, [.025, .16, .5, .84, .975], axis=0).tolist(),
+            prediction_target_covariance=np.atleast_2d(np.cov(np.concatenate((predictions, targets), axis=1), rowvar=False))[:bins, bins:].tolist())
+    return summary
+
+
 def write_rows(path, rows):
     with gzip.open(path, "wt", encoding="utf8") as output:
         for row in rows:

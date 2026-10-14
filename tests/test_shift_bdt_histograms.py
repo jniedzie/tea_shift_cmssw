@@ -1,5 +1,6 @@
 # Code style: AI-code. AI-generated regression test.
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -16,13 +17,17 @@ REPOSITORY = Path(__file__).resolve().parents[1]
 EXECUTABLE = os.environ.get("SHIFT_BDT_TEST_EXECUTABLE")
 
 
-def run(input_path, output_path, *, data=False, require_score=True):
+def run(input_path, output_path, *, data=False, require_score=True, truth_diagnostics=None,
+        weight_branch="shiftSamplingGenWeight"):
+    if truth_diagnostics is None:
+        truth_diagnostics = not data
     configuration = Path(str(output_path) + ".py")
     configuration.write_text(
         "from shift_histogrammer_config import *\n"
         "defaultHistParams = (('Event', 'nShiftMuon', 10, 0, 10, 'event'),)\n"
         "irregularDefaultHistParams = ()\n"
-        f"enableTruthDiagnostics = {not data}\nrequireBdtScore = {require_score}\n"
+        f"enableTruthDiagnostics = {truth_diagnostics}\nrequireBdtScore = {require_score}\n"
+        f"recoDataMode = {data}\nweightsBranchName = {weight_branch!r}\n"
         + ("extraEventCollections = {n: c for n, c in extraEventCollections.items() if not n.startswith('Gen')}\n"
            if data else "")
     )
@@ -43,7 +48,8 @@ def run(input_path, output_path, *, data=False, require_score=True):
 
 
 def fixture(path, *, omit_score=False, score_type="D", nonfinite=False, data=False, zero_pairs=False,
-            fractional_weight=False, wrong_score_count=False, invalid_reference=False):
+            fractional_weight=False, wrong_score_count=False, invalid_reference=False,
+            weight_branch="shiftSamplingGenWeight", weights=None):
     file = ROOT.TFile(str(path), "RECREATE")
     tree = ROOT.TTree("Events", "Events")
     counts = {name: array("i", [0]) for name in ("nShiftMuon", "nShiftDimuonVertex", "nGenPart")}
@@ -87,11 +93,12 @@ def fixture(path, *, omit_score=False, score_type="D", nonfinite=False, data=Fal
         tree.Branch(name, buffers[name], f"{name}[{count}]/{kind}")
     weight = array("d", [0])
     if not data:
-        tree.Branch("shiftSamplingGenWeight", weight, "shiftSamplingGenWeight/D")
+        tree.Branch(weight_branch, weight, f"{weight_branch}/D")
     for event_index, (pairs, event_weight) in enumerate(((0, -2), (2, 0), (1, 3), (1, -1), (1, 2))):
         counts["nShiftMuon"][0] = counts["nGenPart"][0] = 2
         counts["nShiftDimuonVertex"][0] = pairs = 0 if zero_pairs else pairs
-        weight[0] = event_weight + (.123456789123 if fractional_weight else 0.)
+        weight[0] = weights[event_index] if weights is not None else (
+            event_weight + (.123456789123 if fractional_weight else 0.))
         for index in range(2):
             for name in fields:
                 buffers[name][index] = 0
@@ -226,6 +233,34 @@ class BdtHistogramTest(unittest.TestCase):
             histogram = source["dimuon_bdt/ShiftDimuonVertex_bdtScore"]
             self.assertAlmostEqual(np.sum(histogram.values(flow=True)), sum(weights), places=12)
             self.assertAlmostEqual(np.sum(histogram.variances(flow=True)), sum(w*w for w in weights), places=12)
+
+    def test_truth_plots_off_preserves_recovery_weights_in_bdt_histograms(self):
+        for weights in ((-2.123456789123, 0.123456789123, 3.123456789123,
+                         -0.876543210877, 2.123456789123),
+                        (1e-100, 2e-100, 3e-100, 4e-100, 5e-100)):
+            with self.subTest(weights=weights):
+                fixture(self.input, weight_branch="shiftRecoveryGenWeight", weights=weights)
+                receipt = run(str(self.input), self.output, truth_diagnostics=False,
+                              weight_branch="shiftRecoveryGenWeight")
+                pairs = (weights[1], weights[1], *weights[2:])
+                expected = math.fsum(pairs)
+                self.assertFalse(receipt["truth_diagnostics"])
+                self.assertEqual(receipt["weights_branch"], "shiftRecoveryGenWeight")
+                self.assertEqual(receipt["weight_application_count"], 1)
+                self.assertTrue(math.isclose(receipt["event_sumw"], math.fsum(weights), rel_tol=2e-13, abs_tol=0))
+                self.assertTrue(math.isclose(receipt["pair_sumw"], expected, rel_tol=2e-13, abs_tol=0))
+                with uproot.open(self.output) as source:
+                    for name in ("ShiftDimuonVertex_bdtScore", "ShiftDimuonVertex_bdtScoreVsMass",
+                                 "ShiftDimuonVertexBoth-Both_bdtScore"):
+                        histogram = source["dimuon_bdt/" + name]
+                        self.assertGreater(np.sum(histogram.values(flow=True)), 0)
+                        self.assertTrue(math.isclose(np.sum(histogram.values(flow=True)), expected,
+                                                     rel_tol=2e-13, abs_tol=0), name)
+                        self.assertTrue(math.isclose(np.sum(histogram.variances(flow=True)),
+                            math.fsum(value * value for value in pairs), rel_tol=2e-13, abs_tol=0), name)
+                    self.assertTrue(math.isclose(source["cutFlow"].values()[0], math.fsum(weights),
+                                                 rel_tol=2e-13, abs_tol=0))
+                    self.assertEqual(np.sum(source["dimuon_bdt/ShiftDimuonVertex_bdtScoreGenuine"].values(flow=True)), 0)
 
 
 if __name__ == "__main__":

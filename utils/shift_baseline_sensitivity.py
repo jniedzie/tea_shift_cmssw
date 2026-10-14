@@ -231,7 +231,9 @@ def draw(report, output, signal_yields=False, generated_yields=False):
     import matplotlib.pyplot as plt
     from matplotlib.colors import Normalize
     scenarios = report["scenarios"]
-    fig, axes = plt.subplots(1, len(scenarios), figsize=(5.0 * len(scenarios), 6.3), squeeze=False)
+    presentation = report.get('presentation', {})
+    width = 12. if presentation else 5.0 * len(scenarios)
+    fig, axes = plt.subplots(1, len(scenarios), figsize=(width, 7.5 if presentation else 6.3), squeeze=False)
     def supported(point):
         if generated_yields:
             return True
@@ -253,23 +255,38 @@ def draw(report, output, signal_yields=False, generated_yields=False):
             artist = axis.scatter([p["mass_gev"] for p in ready], [p["epsilon"] for p in ready],
                 c=[value(p) for p in ready], cmap="viridis", norm=norm,
                 s=100, edgecolors="black", linewidths=.5)
-            partial = [p for p in ready if p["partial"] and not generated_yields]
+            partial = [p for p in points if p["partial"] and not generated_yields]
             if partial:
                 axis.scatter([p["mass_gev"] for p in partial], [p["epsilon"] for p in partial],
                     facecolors="none", edgecolors="red", s=145, linewidths=1., label="Partial detector coverage")
         if unknown:
             axis.scatter([p["mass_gev"] for p in unknown], [p["epsilon"] for p in unknown],
                          marker="x", c="gray", s=65, label="Unknown: no selected MC")
+        if presentation.get('show_mc_support'):
+            sparse = [p for p in ready if p['signal']['selected_mc_events'] < 10]
+            axis.scatter([p['mass_gev'] for p in sparse], [p['epsilon'] for p in sparse],
+                facecolors='none', edgecolors='gray', s=195,
+                label='Outer ring: fewer than 10 selected MC events')
+        if presentation.get('annotate_yields'):
+            for point in points:
+                upper = point.get('zero_selected_one_sided95_upper_events')
+                text = f'<{upper:.2g}*' if upper is not None else f'{point["signal"]["events"]:.2g}'
+                axis.annotate(text, (point['mass_gev'], point['epsilon']),
+                              xytext=(5, 5), textcoords='offset points', fontsize=8)
+            axis.set_xlim(min(p['mass_gev'] for p in points)*.87, max(p['mass_gev'] for p in points)*1.14)
+            axis.set_ylim(min(p['epsilon'] for p in points)*.55, max(p['epsilon'] for p in points)*3.)
+        luminosity_symbol = presentation.get('luminosity_symbol', 'L_{eff}')
         axis.set(xscale="log", yscale="log", xlabel=r"$m_{A'}$ [GeV]",
-                 title=f"{scenario['luminosity_role']}\n$L_{{eff}}$ = {scenario['luminosity_fb']:g} fb$^{{-1}}$")
+                 title=f"{scenario['luminosity_role']}\n${luminosity_symbol}$ = {scenario['luminosity_fb']:g} fb$^{{-1}}$")
         axis.grid(alpha=.2)
         axis.spines[["right", "top"]].set_visible(False)
-        if unknown or any(p["partial"] for p in ready) and not generated_yields:
+        if unknown or presentation.get('show_mc_support') or any(p["partial"] for p in ready) and not generated_yields:
             axis.legend(fontsize=8, loc="lower left")
     axes[0, 0].set_ylabel(r"$\epsilon$")
     title = "SHIFT baseline signal yield — MC scenario, no BDT" if signal_yields else "SHIFT baseline sensitivity screen — MC scenario, no BDT"
     if generated_yields:
         title = "SHIFT dark-photon dimuon yield before detector selection — DY model"
+    title = presentation.get('title', title)
     fig.suptitle(title, fontsize=15)
     fig.subplots_adjust(left=.07, right=.88, bottom=.25, top=.86, wspace=.25)
     if artist is not None:
@@ -277,17 +294,267 @@ def draw(report, output, signal_yields=False, generated_yields=False):
         colorbar.set_label(r"$\log_{10}(N)$, generated dimuon events" if generated_yields else
                           r"$\log_{10}(S)$, selected signal events" if signal_yields else
                           r"$\log_{10}(S/S_{90})$; 0 is the nominal screening boundary")
-    width = 100. * report["selection"]["window_half_width_fraction"]
+    width = 100. * report.get("selection", {}).get("window_half_width_fraction", 0.)
     selection_text = ("Production cross section times effective luminosity; dimuon branching fraction included once."
                       if generated_yields else f"One OS valid candidate per event; reconstructed mass within ±{width:g}% of the hypothesis.")
+    selection_text = presentation.get('selection_text', selection_text)
     fig.text(.5, .13, selection_text, ha="center", fontsize=9)
     description = ("No detector, reconstruction, mass-window or BDT selection applied." if generated_yields else
                    "DY selected cross sections already include the dimuon branching fraction; simulated selection acceptance is applied once."
                    if signal_yields else "Known-background screen; empty constant-weight MC components use 90% upper planning floors. No fitted nuisances.")
+    description = presentation.get('description', description)
     fig.text(.5, .09, description, ha="center", fontsize=9)
-    fig.text(.5, .05, "Native-Pythia pure-DY rate and no-pileup/Fake2-HLT detector pilots. Points only; no physical exclusion contour.", ha="center", fontsize=9)
-    fig.savefig(output, metadata={"Title": "SHIFT provisional baseline sensitivity screen"})
+    fig.text(.5, .05, presentation.get('footer', "Native-Pythia pure-DY rate and no-pileup/Fake2-HLT detector pilots. Points only; no physical exclusion contour."), ha="center", fontsize=9)
+    if presentation.get('annotate_yields'):
+        fig.text(.5, .02, 'Labels: expected events. * Exact one-sided 95% MC upper bound for zero selected events; finite-MC intervals in numerical receipt.', ha='center', fontsize=8)
+    fig.savefig(output, metadata={"Title": presentation.get('metadata_title', "SHIFT provisional baseline sensitivity screen")})
     plt.close(fig)
+
+
+def _selected_signal_yield_rows(response_report, theory_manifest, lumi_fb):
+    """Combine full-parent event-OR response with already physical dimuon rates.
+
+    This pure calculation is separate from the older mass-window screen.
+    Constant-weight parent intervals use integer trials, never effective counts.
+    Variable-weight nominal responses remain usable, but finite-sample interval
+    coverage is not inferred from their asymptotic standard error.
+    """
+    if not math.isfinite(lumi_fb) or lumi_fb <= 0:
+        raise ValueError("Hypothetical luminosity must be finite and positive")
+    if (theory_manifest.get("schema") != "shift-vertex-theory-yield-inputs-v1"
+            or theory_manifest.get("complete") is not True):
+        raise ValueError("Require a complete explicit theory yield manifest")
+    for key in ("branching_included_in_sigma", "epsilon_correction_already_in_sigma"):
+        if theory_manifest.get(key) is not True:
+            raise ValueError("Physical selected rate must already include " + key)
+    if response_report.get("selection_uses_signal") is not False:
+        raise ValueError("Signal response cannot select or tune the classifier")
+    threshold = float(response_report["threshold"])
+    if not math.isfinite(threshold):
+        raise ValueError("Nonfinite fixed classifier cut")
+    if "fixed_classifier_cut" in theory_manifest and theory_manifest["fixed_classifier_cut"] != threshold:
+        raise ValueError("Theory and response classifier cuts differ")
+    response_points, theory_points = response_report["signal_points"], theory_manifest["points"]
+    if not response_points or set(response_points) != set(theory_points):
+        raise ValueError("Theory and complete response point populations differ")
+    rows = {}
+    for point, item in response_points.items():
+        rate = theory_points[point]; response = item["response"]
+        if response["cut"] != threshold or response["cut_comparison"] != ">=":
+            raise ValueError("Response changed the frozen inclusive cut: " + point)
+        for key in ("mass_gev", "proper_ctau_mm", "native_sumw", "native_sumw2"):
+            actual, expected = float(item[key]), float(rate[key])
+            if not math.isfinite(actual) or not math.isclose(actual, expected, rel_tol=1e-12, abs_tol=0.):
+                raise ValueError("Response/theory mismatch: " + point + " " + key)
+        if item["full_GEN_events"] != rate["full_GEN_events"]:
+            raise ValueError("Full GEN population count differs: " + point)
+        identity_hash = item["full_GEN_event_ids_sha256"]
+        if len(identity_hash) != 64 or identity_hash != rate["full_GEN_event_ids_sha256"]:
+            raise ValueError("Full GEN identities differ: " + point)
+        if item["gen_audit"] != rate["gen_audit"]:
+            raise ValueError("GEN audit authority differs: " + point)
+        empirical = response["full_parent_selected"]["empirical"]
+        weighted = response["full_parent_selected"]["weighted"]
+        total, selected = empirical["total"], empirical["passed"]
+        if (isinstance(total, bool) or isinstance(selected, bool)
+                or int(total) != total or int(selected) != selected
+                or total <= 0 or not 0 <= selected <= total):
+            raise ValueError("Invalid full-parent event-OR counts: " + point)
+        if total != item["full_GEN_events"] or total != response["counts"]["GEN_parents"]:
+            raise ValueError("Incomplete full GEN response denominator: " + point)
+        if selected != response["counts"]["parents_selected_by_genuine_pair"]:
+            raise ValueError("Selected parent accounting differs: " + point)
+        sumw, sumw2 = float(item["native_sumw"]), float(item["native_sumw2"])
+        numerator = float(weighted["numerator_sumw"])
+        if (not all(math.isfinite(v) for v in (sumw, sumw2, numerator))
+                or sumw <= 0 or sumw2 <= 0 or not 0 <= numerator <= sumw):
+            raise ValueError("Invalid nonnegative native GEN weight sums: " + point)
+        if (not math.isclose(sumw, weighted["denominator_sumw"], rel_tol=1e-12)
+                or not math.isclose(sumw2, weighted["denominator_sumw2"], rel_tol=1e-12)):
+            raise ValueError("Weighted response lost the full GEN denominator: " + point)
+        efficiency = numerator / sumw
+        if not math.isclose(efficiency, weighted["efficiency"], rel_tol=1e-12, abs_tol=1e-15):
+            raise ValueError("Stored response ratio is inconsistent: " + point)
+        sigma = float(rate["physical_selected_sigma_pb"])
+        sigma_error = float(rate["physical_selected_sigma_stat_error_pb"])
+        epsilon = float(rate["epsilon"])
+        if (not all(math.isfinite(v) for v in (sigma, sigma_error, epsilon))
+                or sigma <= 0 or sigma_error < 0 or epsilon <= 0
+                or float(item["mass_gev"]) <= 0 or float(item["proper_ctau_mm"]) < 0):
+            raise ValueError("Invalid physical point or selected cross section: " + point)
+        normalization = lumi_fb * 1000. * sigma
+        constant_weights = math.isclose(sumw * sumw / sumw2, total, rel_tol=1e-10)
+        interval = None; zero_upper = None
+        if constant_weights:
+            if not math.isclose(efficiency, selected/total, rel_tol=1e-10, abs_tol=1e-14):
+                raise ValueError("Constant-weight response differs from event counts: " + point)
+            if selected == 0:
+                zero_upper = -math.expm1(math.log(.05) / total)
+                interval = [0., normalization * zero_upper]
+                method = "exact one-sided95 binomial upper bound for zero selected parents"
+            else:
+                from shift_vertex_efficiency import _wilson95
+                interval = [normalization * value for value in _wilson95(selected, total)]
+                method = "Wilson95 independent full-GEN parent trials; constant native weights"
+        else:
+            method = "finite-sample weighted interval unresolved; parent-cluster asymptotic SE separate"
+        response_error = weighted.get("standard_error")
+        if response_error is not None and (not math.isfinite(response_error) or response_error < 0):
+            raise ValueError("Invalid weighted response standard error: " + point)
+        rows[point] = dict(point=point, mass_gev=float(item["mass_gev"]),
+            proper_ctau_mm=float(item["proper_ctau_mm"]), epsilon=epsilon,
+            full_GEN_events=total, selected_qualified_signal_parents=selected,
+            full_GEN_event_ids_sha256=identity_hash, native_sumw=sumw, native_sumw2=sumw2,
+            selected_native_sumw=numerator, full_parent_response=efficiency,
+            physical_selected_sigma_pb=sigma, physical_selected_sigma_stat_error_pb=sigma_error,
+            produced_dimuons=normalization, expected_selected_events=normalization*efficiency,
+            selected_event_mc_interval95=interval, mc_interval_method=method,
+            response_asymptotic_standard_error_events=None if response_error is None else normalization*response_error,
+            rate_mc_standard_error_events=lumi_fb*1000.*sigma_error*efficiency,
+            zero_count_one_sided95_efficiency_upper=zero_upper,
+            zero_observed_selected=selected == 0, sparse_selected_mc=selected < 5,
+            constant_native_weights=constant_weights, gen_audit=rate["gen_audit"])
+    if "full_GEN_events" in theory_manifest and sum(row["full_GEN_events"] for row in rows.values()) != theory_manifest["full_GEN_events"]:
+        raise ValueError("Theory total full GEN population differs")
+    return rows
+
+
+def _verify_selected_yield_references(value, checked):
+    """Verify explicit metadata/cache authorities without discovering inputs."""
+    from shift_vertex_signal_scores import verify
+    if isinstance(value, dict):
+        if "path" in value and "sha256" in value:
+            key = (value["path"], value["sha256"])
+            if key not in checked:
+                verify(value); checked.add(key)
+        else:
+            for child in value.values():
+                _verify_selected_yield_references(child, checked)
+    elif isinstance(value, list):
+        for child in value:
+            _verify_selected_yield_references(child, checked)
+
+
+def render_selected_signal_yields(response_report, theory_manifest, outputdir, lumi_fb=3):
+    """Write fixed-cut full-GEN selected yields from two sealed JSON paths.
+
+    ``signal_points`` and theory ``points`` are dictionaries with identical
+    keys. Both carry mass, proper ctau, full GEN count, native sumw/sumw2,
+    GEN audit reference and SHA256 of ordered little-endian uint64 parent IDs.
+    The physical selected cross section already includes epsilon and BR_mumu.
+    This adds no mass window and makes no recording-acceptance or limit claim.
+    """
+    from shift_vertex_signal_scores import reference, verify
+    response_path, theory_path, output = Path(response_report), Path(theory_manifest), Path(outputdir)
+    if output.exists():
+        raise ValueError("Refusing existing selected-yield output: " + str(output))
+    response_ref, theory_ref = reference(response_path), reference(theory_path)
+    response, theory = json.loads(response_path.read_text()), json.loads(theory_path.read_text())
+    checked = set()
+    for value in (response, theory):
+        _verify_selected_yield_references(value, checked)
+    for key in ("selection", "signal_cache"):
+        if key not in response or not {"path", "sha256"}.issubset(response[key]):
+            raise ValueError("Response must pin its " + key)
+        theory_references = theory.get("references", {})
+        # Theory-only manifests may use references for a bibliography rather
+        # than cache bindings; their exact GEN authorities remain mandatory.
+        theory_ref_for_key = theory_references.get(key) if isinstance(theory_references, dict) else None
+        if theory_ref_for_key is not None and theory_ref_for_key != response[key]:
+            raise ValueError("Theory and response have different " + key)
+    points = _selected_signal_yield_rows(response, theory, float(lumi_fb))
+    verify(response_ref); verify(theory_ref)
+    report = dict(schema="shift-selected-signal-yields-v1", complete=True,
+        luminosity_fb_inverse=float(lumi_fb), luminosity_pb_inverse=float(lumi_fb)*1000.,
+        formula="L_pb_inverse * physical_selected_sigma_pb * selected_native_parent_sumw/full_GEN_sumw",
+        response=response_ref, theory=theory_ref, selection=response["selection"],
+        signal_cache=response["signal_cache"], threshold=response["threshold"], points=points,
+        full_GEN_events=sum(row["full_GEN_events"] for row in points.values()),
+        selected_qualified_signal_parents=sum(row["selected_qualified_signal_parents"] for row in points.values()),
+        point_count=len(points), zero_selected_mc_points=sum(row["zero_observed_selected"] for row in points.values()),
+        sparse_selected_mc_points=sum(row["sparse_selected_mc"] for row in points.values()),
+        positive_selected_mc_points=sum(not row["zero_observed_selected"] for row in points.values()),
+        verified_reference_count=len(checked), extra_branching_or_epsilon_factor_applied=False,
+        added_mass_window=False, event_selection="OR of qualified signal pairs above the frozen inclusive score cut",
+        recording_acceptance_established=False, production_rate_validated=False,
+        background_neglected=True, exclusion_or_sensitivity_inferred=False,
+        assumptions=["Hypothetical target luminosity; pure on-shell DY LO production model remains provisional",
+            "Physical dimuon cross section includes branching and coupling corrections once",
+            "Truth-matched known-signal nominal yield; unknown and known-fake passing candidates are excluded",
+            "Full GEN parents retained, including parents with no reconstructed candidate",
+            "No added mass window; actual recording/readout and data/MC corrections unresolved",
+            "Intervals show finite response MC only; rate MC error separate, no production-model/PDF/scale uncertainty supplied",
+            "Three events is only a yield reference; no contour, interpolation or background calculation"],
+        source=reference(__file__))
+    output.mkdir(parents=True, exist_ok=False)
+    _draw_selected_signal_yields(report, output/"signal_mass_lifetime.pdf")
+    report["figure"] = reference(output/"signal_mass_lifetime.pdf")
+    with (output/"expected_signal_yields.json").open("x") as stream:
+        json.dump(report, stream, indent=2, allow_nan=False); stream.write("\n")
+    return report
+
+
+def _draw_selected_signal_yields(report, output):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import LogNorm
+    from matplotlib.lines import Line2D
+    from matplotlib.backends.backend_pdf import PdfPages
+    rows = list(report["points"].values())
+    nonzero = [row for row in rows if row["expected_selected_events"] > 0]
+    zeros = [row for row in rows if row["zero_observed_selected"]]
+    values = [row["expected_selected_events"] for row in nonzero]
+    lower, upper = min(values, default=1e-3), max(values, default=1.)
+    if lower == upper:
+        lower /= 2.; upper *= 2.
+    norm = LogNorm(vmin=lower, vmax=upper)
+    with PdfPages(output) as pdf:
+        fig, axis = plt.subplots(figsize=(10.5, 7.5))
+        if nonzero:
+            dots = axis.scatter([r["mass_gev"] for r in nonzero], [r["epsilon"] for r in nonzero],
+                c=values, norm=norm, cmap="viridis", s=85, edgecolors="black", linewidths=.5)
+            fig.colorbar(dots, ax=axis, label="Expected qualified signal events (log color)")
+        sparse = [r for r in nonzero if r["sparse_selected_mc"]]
+        if sparse:
+            axis.scatter([r["mass_gev"] for r in sparse], [r["epsilon"] for r in sparse],
+                         s=155, facecolors="none", edgecolors="darkorange", linewidths=1.5)
+        if zeros:
+            axis.scatter([r["mass_gev"] for r in zeros], [r["epsilon"] for r in zeros],
+                         marker="x", c="gray", s=70)
+        handles = [Line2D([],[],marker="o",color="black",linestyle="none",label="Positive nominal yield"),
+                   Line2D([],[],marker="o",markerfacecolor="none",color="darkorange",linestyle="none",label="1–4 selected MC parents: sparse"),
+                   Line2D([],[],marker="x",color="gray",linestyle="none",label="Zero selected MC: finite upper bound, not zero sensitivity"),
+                   Line2D([],[],color="none",label="3 expected events: reference only; no contour inferred")]
+        axis.legend(handles=handles, fontsize=8, loc="best")
+        axis.set(xscale="log",yscale="log",xlabel=r"$m_{A'}$ [GeV]",ylabel=r"$\epsilon$",
+                 title=f"Frozen-classifier signal yield at hypothetical {report['luminosity_fb_inverse']:g} fb$^{{-1}}$")
+        axis.grid(alpha=.2)
+        fig.text(.5,.055,"Pure-DY LO rate model: provisional. Truth-matched event-OR response; full GEN denominator.\n"
+                 "No added mass window; recording unresolved; backgrounds neglected. Points only, no exclusion claim.",ha="center",fontsize=9)
+        fig.tight_layout(rect=(0,.1,1,1));pdf.savefig(fig);plt.close(fig)
+        ordered = sorted(rows, key=lambda r:(r["mass_gev"],r["epsilon"],r["point"]))
+        for offset in range(0,len(ordered),24):
+            chunk=ordered[offset:offset+24]
+            fig, axis=plt.subplots(figsize=(11,max(5,len(chunk)*.29+2)))
+            for i,row in enumerate(chunk):
+                value=row["expected_selected_events"]; interval=row["selected_event_mc_interval95"]
+                if row["zero_observed_selected"]:
+                    if interval is not None:
+                        axis.scatter(interval[1],i,marker="<",c="gray",s=45)
+                    else:
+                        axis.text(.01,i,"zero; weighted upper bound unresolved",transform=axis.get_yaxis_transform(),fontsize=7)
+                elif interval is not None:
+                    axis.errorbar(value,i,xerr=[[max(0.,value-interval[0])],[max(0.,interval[1]-value)]],
+                                  fmt="o",color="darkorange" if row["sparse_selected_mc"] else "#2468a0",capsize=2)
+                else:
+                    axis.scatter(value,i,marker="o",c="darkorange")
+            axis.set_yticks(range(len(chunk)),[f"{r['point']}  ({r['selected_qualified_signal_parents']}/{r['full_GEN_events']} MC)" for r in chunk],fontsize=7)
+            axis.invert_yaxis();axis.set_xscale("log");axis.set_xlabel("Expected qualified signal events; finite-response MC95% intervals")
+            axis.set_title("Fixed physical points and frozen classifier cut; no point interpolation")
+            axis.grid(axis="x",alpha=.25)
+            fig.text(.5,.025,"Zero-MC triangles mark one-sided95% upper yields. Rate MC error is separate; model uncertainties not included.",ha="center",fontsize=8)
+            fig.tight_layout(rect=(0,.06,1,1));pdf.savefig(fig);plt.close(fig)
 
 
 def main():

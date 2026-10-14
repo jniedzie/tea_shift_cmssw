@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "utils"))
 from shift_mixing import (activity_bin, coverage, event_bootstrap, event_replacement,
                           feature_table, label_pair, like_sign_transfer, pools_for, row_augmentation,
                           same_event_closure)
-from shift_mixing import common_parent, validate_inventory
+from shift_mixing import common_parent, validate_inventory, like_sign_closure_bootstrap
 from shift_mixing import event_partition
 from shift_mixing import DEFAULT_CONFIG, select_pairs
 from shift_mixing import MASS_EDGES, run_event_mixing, write_mixing_histograms
@@ -245,6 +245,67 @@ class MixingTest(unittest.TestCase):
         self.assertEqual(report["qcd_0to1/test/4"]["uncovered_same_os_pb"], 7.)
         self.assertEqual(report["qcd_0to1/test/4"]["control_missing_reason"], "no_same_event_ss_yield")
         self.assertTrue(all(row["partition"] == "train" for row in predicted))
+
+    def test_closure_bootstrap_preserves_shared_control_and_target_covariance(self):
+        row = dict(stratum="qcd_0to1", partition="test", activity_bin="4", both_endcaps=True,
+                   pair={"mass": 3.}, anchor_event=0, donor_event=0, weight=10.)
+        same = [dict(row, kind=kind) for kind in ("same_ss", "same_os")]
+        mixed = [dict(row, kind=kind, donor_event=1, weight=2.) for kind in ("row_ss", "row_os")]
+        class FixedCounts:
+            def __init__(self):
+                self.counts = iter((np.array([1, 1]), np.array([2, 3]), np.array([3, 1])))
+            def poisson(self, mean, count):
+                return next(self.counts)
+        result = like_sign_closure_bootstrap(same, mixed, 2, 3, FixedCounts(), edges=[2., 4.])
+        self.assertGreater(result["prediction_std"][0], 0)
+        self.assertEqual(result["difference_std"], [0.])
+        self.assertEqual(result["nominal_prediction"], result["nominal_target"])
+        self.assertGreater(result["prediction_target_covariance"][0][0], 0)
+
+    def test_more_copies_of_mixed_pairs_do_not_create_source_statistics(self):
+        row = dict(stratum="qcd_0to1", partition="train", activity_bin="4", both_endcaps=True,
+                   pair={"mass": 3.}, anchor_event=0, donor_event=0, weight=10.)
+        same = [dict(row, kind="same_ss"), dict(row, kind="same_os", anchor_event=1, donor_event=1)]
+        mixed = [dict(row, kind=kind, donor_event=1, weight=2.) for kind in ("row_ss", "row_os")]
+        first = like_sign_closure_bootstrap(same, mixed, 2, 50, np.random.default_rng(8), edges=[2., 4.])
+        copied = like_sign_closure_bootstrap(same, mixed * 20, 2, 50, np.random.default_rng(8), edges=[2., 4.])
+        np.testing.assert_allclose(copied["difference_std"], first["difference_std"])
+        self.assertEqual(copied["invalid_control_repetitions"], first["invalid_control_repetitions"])
+
+    def test_sparse_bootstrap_control_is_reported_instead_of_zero_error(self):
+        row = dict(stratum="qcd_0to1", partition="train", activity_bin="4", both_endcaps=True,
+                   pair={"mass": 3.}, anchor_event=0, donor_event=0, weight=10.)
+        same = [dict(row, kind="same_ss"), dict(row, kind="same_os")]
+        mixed = [dict(row, kind=kind, donor_event=1, weight=2.) for kind in ("row_ss", "row_os")]
+        class FixedCounts:
+            def __init__(self):
+                self.counts = iter((np.array([1, 0]), np.array([1, 1])))
+            def poisson(self, mean, count):
+                return next(self.counts)
+        result = like_sign_closure_bootstrap(same, mixed, 2, 2, FixedCounts(), edges=[2., 4.])
+        self.assertEqual(result["invalid_control_repetitions"], 1)
+        self.assertTrue(result["intervals_conditional_on_retained_control_support"])
+        self.assertNotIn("difference_std", result)
+
+    def test_uncovered_and_training_pools_do_not_enter_held_out_closure(self):
+        row = dict(stratum="qcd_0to1", partition="test", activity_bin="4", both_endcaps=True,
+                   pair={"mass": 3.}, anchor_event=0, donor_event=0, weight=10.)
+        same = [dict(row, kind="same_os"), dict(row, kind="same_ss", partition="train")]
+        mixed = [dict(row, kind=kind, donor_event=1, weight=2.) for kind in ("row_ss", "row_os")]
+        result = like_sign_closure_bootstrap(same, mixed, 2, 20, np.random.default_rng(9), partition="test", edges=[2., 4.])
+        self.assertFalse(result["prediction_available"])
+        self.assertEqual(result["same_os_control_coverage"], 0.)
+
+    def test_joint_closure_does_not_use_os_to_choose_normalization(self):
+        row = dict(stratum="qcd_0to1", partition="test", activity_bin="4", both_endcaps=True,
+                   pair={"mass": 3.}, anchor_event=0, donor_event=0, weight=10.)
+        same = [dict(row, kind="same_ss"), dict(row, kind="same_os")]
+        mixed = [dict(row, kind=kind, donor_event=1, weight=2.) for kind in ("row_ss", "row_os")]
+        before = like_sign_closure_bootstrap(same, mixed, 2, 50, np.random.default_rng(8), edges=[2., 4.])
+        same[1]["weight"] = 1000.
+        after = like_sign_closure_bootstrap(same, mixed, 2, 50, np.random.default_rng(8), edges=[2., 4.])
+        self.assertEqual(after["nominal_prediction"], before["nominal_prediction"])
+        self.assertEqual(after["prediction_std"], before["prediction_std"])
 
 
 if __name__ == "__main__":

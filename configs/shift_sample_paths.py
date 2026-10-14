@@ -186,14 +186,103 @@ def _read_normalization_record(path, expected_digest=None):
     return json.loads(payload)
 
 
-def full_gen_weight_sums(campaign, production_directory=None):
+def full_gen_normalization_authority(campaign, authority_path, authority_sha256):
+    """Read a pinned copy of surviving full GEN normalization records.
+
+    Detector selection, recovered events and histogram cutflows never enter
+    these original GEN exposures. Historical missing manifests retain their
+    recorded hashes; this bundle does not claim to reproduce their bytes.
+    """
+    if not isinstance(authority_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", authority_sha256):
+        raise RuntimeError("Full GEN normalization authority requires its frozen SHA-256")
+    authority_path = Path(authority_path)
+    try:
+        authority = _read_normalization_record(authority_path, authority_sha256)
+        if (authority.get("schema") != "shift-preserved-full-GEN-normalization-v1" or
+                authority.get("complete") is not True or authority.get("campaign") != campaign):
+            raise RuntimeError("Full GEN normalization authority identifies a different or incomplete campaign")
+
+        def read_record(name):
+            record = authority["records"][name]
+            relative = Path(record["file"])
+            if relative.is_absolute() or ".." in relative.parts:
+                raise RuntimeError("Full GEN normalization records must remain inside their frozen bundle")
+            return _read_normalization_record(authority_path.parent / relative, record["sha256"])
+
+        plan = read_record("sampling_plan")
+        ordinary = read_record("ordinary_completion")
+        if plan.get("schema") != "shift-detector-pps-sample-v1":
+            raise RuntimeError("Full GEN authority requires the original detector sampling plan")
+        weighted = plan["normalization_authorities"]["weighted"]["strata"]
+        historical = {
+            "parent_manifest_sha256": plan["parent_manifest_sha256"],
+            "ordinary_manifest_sha256": plan["normalization_authorities"]["ordinary"]["manifest_sha256"],
+            "weighted_manifest_sha256": plan["normalization_authorities"]["weighted"]["manifest_sha256"],
+            "weighted_accounting_sha256": plan["normalization_authorities"]["weighted"]["accounting_sha256"],
+        }
+        if authority["recorded_original_hashes"] != historical:
+            raise RuntimeError("Full GEN authority changed historical source hashes")
+        if (ordinary.get("complete") is not True or ordinary.get("mode") != "complete" or
+                ordinary.get("manifest_sha256") != historical["ordinary_manifest_sha256"]):
+            raise RuntimeError("Ordinary full GEN completion differs from its original source")
+        strata = plan["strata"]
+        if (set(authority["strata"]) != set(strata) or not set(weighted).issubset(strata) or
+                set(ordinary["totals"]) != set(strata) - set(weighted) or
+                set(ordinary["normalization_inputs"]) != set(ordinary["totals"])):
+            raise RuntimeError("Full GEN normalization stratum inventories differ")
+        result = {}
+        for name, original in strata.items():
+            declared = authority["strata"][name]
+            events, exposure = original["original_events"], original["original_sumw"]
+            records = original["original_normalization_records"]
+            if (type(events) is not int or events <= 0 or type(exposure) not in (int, float) or
+                    not math.isfinite(exposure) or exposure <= 0 or not records or
+                    any(record["stratum"] != name for record in records) or
+                    sum(record["events"] for record in records) != events):
+                raise RuntimeError(f"Invalid original full GEN exposure for {name}")
+            if name in weighted:
+                source = weighted[name]
+                if (source["accepted"] != events or type(source["trials"]) is not int or
+                        source["trials"] < events or
+                        not math.isclose(source["sumw"], exposure, rel_tol=1e-12, abs_tol=0)):
+                    raise RuntimeError(f"Weighted full GEN exposure differs for {name}")
+                cross_section = source["sigma_mb"] * 1e9
+                trials = source["trials"]
+            else:
+                source = ordinary["normalization_inputs"][name]
+                if (ordinary["totals"][name] != events or source["events"] != events or
+                        exposure != events or
+                        any(record["normalization_record"] is not None for record in records)):
+                    raise RuntimeError(f"Ordinary full GEN exposure differs for {name}")
+                cross_section = source["cross_section_pb"]
+                trials = None
+            if (type(cross_section) not in (int, float) or not math.isfinite(cross_section) or cross_section <= 0 or
+                    declared["events"] != events or declared["sumw"] != exposure or
+                    declared["trials"] != trials or type(declared["cross_section_pb"]) not in (int, float) or
+                    not math.isclose(declared["cross_section_pb"], cross_section, rel_tol=1e-12, abs_tol=0)):
+                raise RuntimeError(f"Declared full GEN denominator or cross section differs for {name}")
+            result[name] = dict(events=events, sumw=float(exposure), cross_section_pb=float(cross_section), trials=trials)
+        if sum(row["events"] for row in result.values()) != authority["full_original_events"]:
+            raise RuntimeError("Full GEN normalization total differs from all original strata")
+        return result
+    except (OSError, ValueError, TypeError, KeyError) as error:
+        raise RuntimeError(f"Cannot verify preserved full GEN normalization for {campaign}: {error}") from error
+
+
+def full_gen_weight_sums(campaign, production_directory=None, *, normalization_authority=None,
+                         normalization_authority_sha256=None):
     """Return per-stratum parent GEN sums for offline normalization accounting.
 
     Recognized representative campaigns fail closed if their frozen sampling
     plan or original normalization authorities cannot be verified. Incomplete
     detector processing never changes these denominators. Ordinary plotting
     uses the available histogram files' cutFlow instead of this audit.
+    A pinned preserved authority can supply the same original exposures when
+    historical local files are absent; it never uses reconstructed counts.
     """
+    if normalization_authority is not None:
+        records = full_gen_normalization_authority(campaign, normalization_authority, normalization_authority_sha256)
+        return {name: row["sumw"] for name, row in records.items()}
     if not campaign.startswith(_REPRESENTATIVE_PREFIX):
         return None
     if not re.fullmatch(r"shift_detector_representative_[0-9]{8}_v[0-9]+", campaign):

@@ -21,7 +21,7 @@ class SamplingWeightRuntimeTest(unittest.TestCase):
         self.addCleanup(scratch.cleanup)
         self.scratch = Path(scratch.name)
 
-    def input(self, weights, weight_type="D"):
+    def input(self, weights, weight_type="D", weight_branch="shiftSamplingGenWeight"):
         output = self.ROOT.TFile(str(self.scratch / "input.root"), "RECREATE")
         clone = self.ROOT.TTree("Events", "Synthetic empty SHIFT collections")
         buffers = {}
@@ -34,7 +34,7 @@ class SamplingWeightRuntimeTest(unittest.TestCase):
         clone.Branch("genWeight", native, "genWeight/F")
         value = array("d" if weight_type == "D" else "f", [0.0])
         if weights is not None:
-            clone.Branch("shiftSamplingGenWeight", value, f"shiftSamplingGenWeight/{weight_type}")
+            clone.Branch(weight_branch, value, f"{weight_branch}/{weight_type}")
         for index in range(3):
             if weights is not None:
                 value[0] = weights[index]
@@ -43,11 +43,15 @@ class SamplingWeightRuntimeTest(unittest.TestCase):
         output.Close()
         return self.scratch / "input.root"
 
-    def run_histograms(self, weights, weight_type="D"):
-        source = self.input(weights, weight_type)
+    def run_histograms(self, weights, weight_type="D", weight_branch="shiftSamplingGenWeight",
+                       truth_diagnostics=True, data_mode=False):
+        source = self.input(weights, weight_type, weight_branch)
         config = self.scratch / "config.py"
         config.write_text(
             "from shift_histogrammer_config import *\nnEvents = 3\n"
+            f"weightsBranchName = {weight_branch!r}\n"
+            f"enableTruthDiagnostics = {truth_diagnostics!r}\n"
+            f"recoDataMode = {data_mode!r}\n"
             "# Synthetic fixture has no detector-diagnostic scalar branches.\n"
             "defaultHistParams = tuple(entry for entry in defaultHistParams "
             "if not (entry[0] == 'Event' and entry[1].startswith('ShiftRecoDiag_')))\n"
@@ -71,16 +75,54 @@ class SamplingWeightRuntimeTest(unittest.TestCase):
         self.assertAlmostEqual(histogram.Integral(0, histogram.GetNbinsX() + 1), 1.5)
         root.Close()
 
-    def test_double_to_float_boundary_agrees_with_single_rounding(self):
+    def test_double_weights_reach_histograms_and_cutflow_without_float_rounding(self):
         weights = [1.0 / 3.0, -1.0 / 7.0, 0.0]
         result, output = self.run_histograms(weights)
         self.assertEqual(result.returncode, 0, result.stdout[-6000:] + result.stderr[-3000:])
         root = self.ROOT.TFile.Open(str(output))
         histogram = root.Get("event/Event_nShiftMuon")
         measured = histogram.Integral(0, histogram.GetNbinsX() + 1)
-        rounded = sum(array("f", weights))
-        self.assertAlmostEqual(measured, rounded, places=8)
-        self.assertLess(abs(measured - sum(weights)), 6e-8)
+        expected = math.fsum(weights)
+        self.assertTrue(math.isclose(measured, expected, rel_tol=2e-13, abs_tol=0))
+        self.assertTrue(math.isclose(root.Get("cutFlow").GetBinContent(1), expected, rel_tol=2e-13, abs_tol=0))
+        root.Close()
+
+    def test_recovery_weights_are_used_with_truth_plots_on_and_off(self):
+        for truth_diagnostics in (False, True):
+            with self.subTest(truth_diagnostics=truth_diagnostics):
+                result, output = self.run_histograms([2.5, -1.0, 0.0], weight_branch="shiftRecoveryGenWeight",
+                    truth_diagnostics=truth_diagnostics)
+                self.assertEqual(result.returncode, 0, result.stdout[-3000:] + result.stderr[-3000:])
+                root = self.ROOT.TFile.Open(str(output))
+                self.assertEqual(root.Get("cutFlow").GetBinContent(1), 1.5)
+                self.assertEqual(root.Get("rawEventsCutFlow").GetBinContent(1), 3)
+                histogram = root.Get("event/Event_nShiftMuon")
+                self.assertEqual(histogram.Integral(0, histogram.GetNbinsX() + 1), 1.5)
+                root.Close()
+
+    def test_tiny_double_recovery_weights_remain_positive(self):
+        weights = [1e-100, 2e-100, 0.0]
+        result, output = self.run_histograms(weights, weight_branch="shiftRecoveryGenWeight",
+            truth_diagnostics=False)
+        self.assertEqual(result.returncode, 0, result.stdout[-3000:] + result.stderr[-3000:])
+        root = self.ROOT.TFile.Open(str(output))
+        histogram = root.Get("event/Event_nShiftMuon")
+        measured = histogram.Integral(0, histogram.GetNbinsX() + 1)
+        self.assertGreater(measured, 0)
+        self.assertTrue(math.isclose(measured, math.fsum(weights), rel_tol=2e-13, abs_tol=0))
+        self.assertTrue(math.isclose(root.Get("cutFlow").GetBinContent(1), math.fsum(weights), rel_tol=2e-13, abs_tol=0))
+        self.assertTrue(math.isclose(sum(histogram.GetBinError(index) ** 2 for index in range(histogram.GetNbinsX() + 2)),
+                                    math.fsum(weight * weight for weight in weights), rel_tol=2e-13, abs_tol=0))
+        root.Close()
+
+    def test_explicit_data_mode_uses_unit_weights(self):
+        result, output = self.run_histograms([2.5, -1.0, 0.0], weight_branch="shiftRecoveryGenWeight",
+            truth_diagnostics=False, data_mode=True)
+        self.assertEqual(result.returncode, 0, result.stdout[-3000:] + result.stderr[-3000:])
+        root = self.ROOT.TFile.Open(str(output))
+        self.assertEqual(root.Get("cutFlow").GetBinContent(1), 3)
+        histogram = root.Get("event/Event_nShiftMuon")
+        self.assertEqual(histogram.Integral(0, histogram.GetNbinsX() + 1), 3)
         root.Close()
 
     def test_missing_sampling_weight_refuses_output(self):
@@ -98,7 +140,7 @@ class SamplingWeightRuntimeTest(unittest.TestCase):
         root.Close()
 
 
-    def efficiency_input(self, events=None):
+    def efficiency_input(self, events=None, weight_branch="shiftSamplingGenWeight"):
         output = self.ROOT.TFile(str(self.scratch / "efficiency_input.root"), "RECREATE")
         tree = self.ROOT.TTree("Events", "Synthetic Jpsi reconstruction outcomes")
         source = (Path(__file__).resolve().parents[1] / "libs/user_extensions/src/ShiftHistogramsFiller.cpp").read_text()
@@ -117,7 +159,7 @@ class SamplingWeightRuntimeTest(unittest.TestCase):
                 tree.Branch(f"{collection}_{field}", value, f"{collection}_{field}[n{collection}]/{kind}")
         weight = array("d", [1.0])
         native = array("f", [7.0])
-        tree.Branch("shiftSamplingGenWeight", weight, "shiftSamplingGenWeight/D")
+        tree.Branch(weight_branch, weight, f"{weight_branch}/D")
         tree.Branch("genWeight", native, "genWeight/F")
         defaults = {
             "GenPart_pdgId": [443, 13, -13], "GenPart_status": [2, 1, 1],
@@ -157,6 +199,40 @@ class SamplingWeightRuntimeTest(unittest.TestCase):
         tree.Write()
         output.Close()
         return self.scratch / "efficiency_input.root"
+
+    def test_recovery_double_weights_reach_truth_efficiencies_and_diagnostics(self):
+        first, second = 1.0 / 3.0, 1.0 / 7.0
+        source = self.efficiency_input(events=(
+            {"weight": first, "reconstructed": False},
+            {"weight": second, "reconstructed": True},
+        ), weight_branch="shiftRecoveryGenWeight")
+        config = self.scratch / "recovery_efficiency.py"
+        config.write_text(
+            "from shift_histogrammer_config import *\nnEvents = 2\n"
+            "weightsBranchName = 'shiftRecoveryGenWeight'\n"
+            "enableTruthDiagnostics = True\nrecoDataMode = False\n"
+            "defaultHistParams = (('Event', 'nShiftMuon', 10, 0, 10, 'event'),)\n"
+            "irregularDefaultHistParams = ()\n"
+        )
+        output = self.scratch / "recovery_efficiency.root"
+        result = subprocess.run([os.environ["SHIFT_WEIGHT_TEST_EXECUTABLE"], "--config", str(config),
+                                "--input_path", str(source), "--output_hists_path", str(output)],
+                               capture_output=True, text=True, timeout=180)
+        self.assertEqual(result.returncode, 0, result.stdout[-3000:] + result.stderr[-3000:])
+        root = self.ROOT.TFile.Open(str(output))
+        integral = lambda histogram: histogram.Integral(0, histogram.GetNbinsX() + 1)
+        for name, expected in (
+            ("efficiency/ShiftMuonEfficiency_pt_total", 2 * (first + second)),
+            ("efficiency/ShiftMuonEfficiency_pt_pass", 2 * second),
+            ("efficiency/ShiftDimuonVertexEfficiency_pt_total", first + second),
+            ("efficiency/ShiftDimuonVertexEfficiency_pt_pass", second),
+            ("truth_diagnostics/TruthDiagnostics_hitMatched", 2 * second),
+        ):
+            histogram = root.Get(name)
+            self.assertTrue(histogram, name)
+            self.assertTrue(math.isclose(integral(histogram), expected, rel_tol=2e-13, abs_tol=0), name)
+        self.assertTrue(math.isclose(root.Get("cutFlow").GetBinContent(1), first + second, rel_tol=2e-13, abs_tol=0))
+        root.Close()
 
     def test_unequal_weights_correct_muon_dimuon_efficiencies_and_diagnostic_shapes(self):
         source = self.efficiency_input()
