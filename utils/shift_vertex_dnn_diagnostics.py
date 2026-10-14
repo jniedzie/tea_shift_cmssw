@@ -4,6 +4,7 @@
 import argparse
 import ast
 import json
+import textwrap
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -24,10 +25,18 @@ def checked(ref):
     return path
 
 
-def selected_models(lock, include_flat_bdt=False):
+def selected_models(lock, include_flat_bdt=False, include_paired_seeds=False):
     require(lock.get('selection_uses_test') is False, 'Test-based model selection is forbidden')
     chosen = [lock[key] for key in ('rejection_winner', 'flatness_winner', 'acceptance_envelope_winner')
               if lock.get(key) is not None]
+    for field in ('representative_models', 'paired_seed_models'):
+        if field == 'paired_seed_models' and not include_paired_seeds:
+            continue
+        additional = lock.get(field, [])
+        require(isinstance(additional, list) and all(isinstance(name, str) and name for name in additional),
+                'Invalid locked model list: ' + field)
+        require(all(name in lock['thresholds'] for name in additional), 'Missing validation threshold for locked representatives')
+        chosen.extend(additional)
     require(bool(chosen), 'No validation-selected neural models')
     references = REFERENCES if include_flat_bdt else REFERENCES[:2]
     return list(dict.fromkeys([*references, *chosen]))
@@ -68,7 +77,7 @@ def validate_model_origin(name, result, combined_protocol):
             'model': result['model'], 'history': result['history']}
 
 
-def load_inputs(inputs, training, include_flat_bdt=False):
+def load_inputs(inputs, training, include_flat_bdt=False, include_paired_seeds=False):
     completion = read(training / 'completion.json')
     require(completion.get('complete') is True, 'Training study is incomplete')
     require(checked(completion['diagnostic_inputs']).resolve() == inputs.resolve(), 'Wrong diagnostic input manifest')
@@ -108,7 +117,7 @@ def load_inputs(inputs, training, include_flat_bdt=False):
     earlier_completion = read(earlier_root / 'completion.json')
     require(earlier_completion['development']['scores'] == protocol['bdt_scores'], 'Original BDT score receipt differs')
     earlier_lock = read(checked(earlier_completion['selection']))
-    models, histories = selected_models(lock, include_flat_bdt), {}
+    models, histories = selected_models(lock, include_flat_bdt, include_paired_seeds), {}
     for name in models:
         require(name in scores and name in diagnostic_lock['thresholds'], 'Missing locked model: ' + name)
         require(scores[name].shape == labels['y'].shape and np.isfinite(scores[name]).all(), 'Invalid model scores')
@@ -147,8 +156,8 @@ def acceptance(perf, passed, identities, weights, repeats=200):
     return {'empirical': empirical, 'weighted': weighted}
 
 
-def build(workspace, inputs, training, include_flat_bdt=False):
-    protocol, lock, reco, labels, scores, test, models, histories = load_inputs(inputs, training, include_flat_bdt)
+def build(workspace, inputs, training, include_flat_bdt=False, include_paired_seeds=False):
+    protocol, lock, reco, labels, scores, test, models, histories = load_inputs(inputs, training, include_flat_bdt, include_paired_seeds)
     perf = frozen_statistics(training / 'source_snapshot/bdt_performance.py')
     y = labels['y']
     split = scores['expanded_split']
@@ -172,6 +181,12 @@ def build(workspace, inputs, training, include_flat_bdt=False):
               'history_summary': {}, 'references': [reference(inputs), reference(training / 'completion.json'),
                   reference(training / 'selection_locked.json'), reference(Path(__file__)), *read(inputs).values(),
                   protocol['splits'], reference(training / 'source_snapshot/bdt_performance.py')]}
+    report['locked_representatives'] = lock.get('representative_models', [])
+    report['locked_paired_seeds'] = lock.get('paired_seed_models', [])
+    report['robust_family'] = lock.get('robust_family')
+    if 'family_validation' in lock:
+        checked(lock['family_validation'])
+        report['references'].append(lock['family_validation'])
     report['references'] += [reference(Path(__file__).with_name(name)) for name in
         ('shift_bdt_category_diagnostics.py', 'shift_bdt_candidate_diagnostics.py', 'shift_bdt_discrimination_diagnostics.py')]
     earlier_root = Path(protocol['bdt_scores']['path']).parent
@@ -227,7 +242,19 @@ def render(report, reco, labels, scores, test, dimensions, histories, output):
         if name in REFERENCES:
             continue
         roles = [key.replace('_winner', '').replace('_', ' ') for key, value in report['selection'].items() if value == name]
-        titles[name] = 'DNN: ' + ', '.join(roles)
+        recipe = report['model_origins'][name]['recipe']
+        if report.get('robust_family') and recipe.get('family') == report['robust_family']:
+            roles = [role for role in roles if role != 'acceptance envelope'] + ['both-seed validation family']
+        if not roles:
+            roles = ['paired seed' if name in report.get('locked_paired_seeds', []) else 'locked representative']
+        suffix = ' (seed ' + str(recipe['seed']) + ')' if 'representative_models' in report or report.get('locked_representatives') else ''
+        titles[name] = 'DNN: ' + ', '.join(roles) + suffix
+        if report.get('robust_family') and recipe.get('family') == report['robust_family']:
+            architecture = 'pooled' if recipe.get('architecture') == 'global' else recipe.get('architecture', 'network')
+            titles[name] = f'DNN {recipe.get("inputs", "")} {architecture} s{recipe["seed"]} (both-seed gate)'
+        elif recipe.get('acceptance_strength', 0) > 0:
+            role = 'rejection' if report['selection']['rejection_winner'] == name else 'paired'
+            titles[name] = f'DNN cut-loss s{recipe["seed"]} ({role})'
     report['model_titles'] = titles
     paths = []
 
@@ -250,7 +277,7 @@ def render(report, reco, labels, scores, test, dimensions, histories, output):
             ax.axvline(report['threshold_counts'][name]['threshold'], color='black', linestyle=':', label='Locked cut')
             if not report['counts'][process]['genuine']:
                 ax.text(.03, .65, 'No genuine pairs;\nno ROC/retention estimate', transform=ax.transAxes, fontsize=8)
-            ax.set(title=titles[name] + '\n' + title, xlabel='Unchanged classifier score', ylabel='Fraction within label class', xlim=(0, 1))
+            ax.set(title=textwrap.fill(titles[name], 38) + '\n' + title, xlabel='Unchanged classifier score', ylabel='Fraction within label class', xlim=(0, 1))
             ax.legend(fontsize=7)
     fig.suptitle('Expanded development test; genuine origin, accidental origin and unknown labels\nModels and cuts selected using validation only')
     save(fig, 'truth_class_scores')
@@ -343,11 +370,12 @@ def main():
     for name in ('workspace', 'inputs', 'training', 'output'):
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--include-flat-bdt', action='store_true', help='Also compare the frozen expanded flat BDT reference')
+    parser.add_argument('--include-paired-seeds', action='store_true', help='Also show explicitly locked paired-seed controls')
     args = parser.parse_args()
     workspace, output = args.workspace.resolve(), args.output.resolve()
     require(output.is_relative_to(workspace / 'tea_shift_cmssw/plots'), 'Final diagnostics must be inside project plots')
     require(not output.exists(), 'Refusing to overwrite an existing diagnostic directory')
-    result = build(workspace, args.inputs.resolve(), args.training.resolve(), args.include_flat_bdt)
+    result = build(workspace, args.inputs.resolve(), args.training.resolve(), args.include_flat_bdt, args.include_paired_seeds)
     output.mkdir(parents=True)
     render(*result, output)
     (output / 'diagnostics.json').write_text(json.dumps(clean(result[0]), indent=2, allow_nan=False) + '\n')

@@ -16,6 +16,110 @@ from shift_sample_paths import latest_merged_sample, validated_nano_files, valid
 import shift_sample_paths
 
 
+class AvailableBsmHistogramsTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.base = Path(temporary.name)
+        self.campaign = '20261013-partial-histograms'
+
+    def histogram(self, point):
+        directory = self.base / ('darkphoton_' + point) / self.campaign / 'histograms_merged'
+        directory.mkdir(parents=True)
+        path = directory / 'available.root'
+        path.write_bytes(b'available partial histogram')
+        return path
+
+    def inputs(self, masses=None, flights=None, epsilons=None):
+        with patch('shift_sample_paths._bsm_campaign_records', side_effect=AssertionError('Production validation')):
+            return shift_sample_paths.available_bsm_campaign_histograms(self.base, self.campaign, masses, flights,
+                                                                      epsilons=epsilons)
+
+    def test_epsilon_points_and_lifetime_points_have_independent_selectors(self):
+        self.histogram('m15_prompt')
+        epsilon = self.histogram('m15_epsilon_1e-06')
+        self.histogram('m15_epsilon_0p01')
+        self.histogram('m30p5_epsilon_3p1622777e-08')
+        self.assertEqual(len(self.inputs()), 4)
+        rows = self.inputs([15], [], [1.e-6])
+        self.assertEqual(rows, [dict(name='m15_epsilon_1e-06', histogram_path=str(epsilon),
+                                    mass_gev=15., mean_lab_flight_m=None, epsilon=1.e-6)])
+        self.assertEqual([row['name'] for row in self.inputs([15], [None], [])], ['m15_prompt'])
+        self.assertEqual(self.inputs(None, [], []), [])
+        self.assertEqual(self.inputs([30.5], [], [3.1622777e-8])[0]['epsilon'], 3.1622777e-8)
+
+    def test_missing_epsilon_point_warns_without_hiding_ready_point(self):
+        self.histogram('m15_epsilon_1e-06')
+        with patch('Logger.warn') as warn:
+            rows = self.inputs([15], [], [1.e-6, 1.e-4])
+        self.assertEqual([row['name'] for row in rows], ['m15_epsilon_1e-06'])
+        warn.assert_called_once()
+        self.assertIn('epsilon 0.0001', warn.call_args.args[0])
+
+    def test_files_need_no_validation_or_completion_records(self):
+        path = self.histogram('m15_lab_100m')
+        # A stale/incomplete record is irrelevant to ordinary plotting too.
+        (path.parent.parent / 'complete.json').write_text('{not a completion record')
+        rows = self.inputs([15], [100])
+        self.assertEqual(rows, [dict(name='m15_lab_100m', histogram_path=str(path),
+                                    mass_gev=15., mean_lab_flight_m=100.)])
+
+    def test_unfinished_points_warn_and_do_not_hide_available_points(self):
+        path = self.histogram('m15_prompt')
+        (self.base / 'darkphoton_m15_lab_5m' / self.campaign / 'histograms_merged').mkdir(parents=True)
+        with patch('Logger.warn') as warn:
+            rows = self.inputs([15, 30], [None, 5])
+        self.assertEqual([row['histogram_path'] for row in rows], [str(path)])
+        self.assertEqual(warn.call_count, 3)
+
+    def test_selectors_and_decimal_point_names(self):
+        self.histogram('m15_prompt')
+        self.histogram('m15_lab_1000m')
+        self.histogram('m30p5_lab_0p5m')
+        self.assertEqual([row['name'] for row in self.inputs(None, [None])], ['m15_prompt'])
+        self.assertEqual([row['name'] for row in self.inputs([15], None)], ['m15_prompt', 'm15_lab_1000m'])
+        self.assertEqual(self.inputs([30.5], [.5])[0]['mean_lab_flight_m'], .5)
+        self.assertEqual(len(self.inputs()), 3)
+
+    def test_disabled_or_unavailable_campaign_does_not_need_validation(self):
+        self.assertEqual(self.inputs([], None), [])
+        self.assertEqual(self.inputs(None, []), [])
+        self.assertEqual(shift_sample_paths.available_bsm_campaign_histograms(self.base, None), [])
+        with patch('Logger.warn'):
+            self.assertEqual(self.inputs([15], [5]), [])
+            self.assertEqual(shift_sample_paths.available_bsm_campaign_histograms(self.base / 'missing', self.campaign), [])
+
+    def test_one_alias_can_select_different_runs_for_different_points(self):
+        prompt = self.histogram('m15_prompt')
+        self.campaign = '20261014-same-settings-more-lifetimes'
+        displaced = self.histogram('m15_lab_1000m')
+        for path in (prompt, displaced):
+            campaign_directory = path.parent.parent
+            (campaign_directory.parent / 'latest').symlink_to(campaign_directory.name,
+                                                            target_is_directory=True)
+        self.campaign = 'latest'
+        rows = self.inputs([15], [None, 1000])
+        self.assertEqual([row['name'] for row in rows], ['m15_prompt', 'm15_lab_1000m'])
+        self.assertEqual([Path(row['histogram_path']).resolve() for row in rows], [prompt, displaced])
+
+    def test_alias_keeps_ready_histograms_until_new_output_is_published(self):
+        previous = self.histogram('m15_prompt')
+        point_directory = previous.parent.parent.parent
+        alias = point_directory / 'latest'
+        alias.symlink_to(self.campaign, target_is_directory=True)
+        self.campaign = '20261014-same-settings-more-events'
+        pending = point_directory / self.campaign
+        pending.mkdir()
+        self.campaign = 'latest'
+        self.assertEqual(Path(self.inputs([15], [None])[0]['histogram_path']).resolve(), previous)
+        self.campaign = pending.name
+        ready = self.histogram('m15_prompt')
+        alias.unlink()
+        alias.symlink_to(self.campaign, target_is_directory=True)
+        self.campaign = 'latest'
+        self.assertEqual(Path(self.inputs([15], [None])[0]['histogram_path']).resolve(), ready)
+
+
 class MergedSampleTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

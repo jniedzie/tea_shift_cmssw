@@ -55,6 +55,16 @@ class DnnDiagnosticBoundary(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Test-based'):
             selected_models(lock)
 
+    def test_both_locked_family_seeds_are_retained_and_controls_are_optional(self):
+        lock = dict(selection_uses_test=False, rejection_winner='strong71', flatness_winner='robust71',
+                    acceptance_envelope_winner='robust71', representative_models=['robust71', 'robust72', 'strong71'],
+                    paired_seed_models=['strong72'], thresholds={name: .5 for name in ('robust71', 'robust72', 'strong71', 'strong72')})
+        self.assertEqual(selected_models(lock)[2:], ['strong71', 'robust71', 'robust72'])
+        self.assertEqual(selected_models(lock, include_paired_seeds=True)[2:], ['strong71', 'robust71', 'robust72', 'strong72'])
+        del lock['thresholds']['robust72']
+        with self.assertRaisesRegex(ValueError, 'Missing validation threshold'):
+            selected_models(lock)
+
     def test_hash_tampering_fails_before_loading_scores(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'scores.npz'

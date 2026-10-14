@@ -1,5 +1,5 @@
 # Code style: AI-code. AI-generated validation and provenance helper.
-"""Select validated MC inputs without opening their event data."""
+"""Find available plot inputs and audit production inputs when requested."""
 import ast
 import json
 import hashlib
@@ -187,11 +187,12 @@ def _read_normalization_record(path, expected_digest=None):
 
 
 def full_gen_weight_sums(campaign, production_directory=None):
-    """Return per-stratum parent GEN sums, or None for a legacy campaign.
+    """Return per-stratum parent GEN sums for offline normalization accounting.
 
     Recognized representative campaigns fail closed if their frozen sampling
     plan or original normalization authorities cannot be verified. Incomplete
-    detector processing never changes these denominators.
+    detector processing never changes these denominators. Ordinary plotting
+    uses the available histogram files' cutFlow instead of this audit.
     """
     if not campaign.startswith(_REPRESENTATIVE_PREFIX):
         return None
@@ -401,6 +402,70 @@ def _bsm_selector(values, label, *, allow_prompt=False):
         if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
             raise RuntimeError(f"Invalid BSM {label} selection: {value!r}")
     return set(values)
+
+
+def available_bsm_campaign_histograms(base_path, campaign, masses=None, mean_lab_flights=None,
+                                      *, epsilons=None, cache_directory=None):
+    """Find ready lifetime and epsilon samples without production validation files.
+
+    The two selectors apply to their named sample families independently. Use
+    an empty lifetime list for epsilon-only plots, or an empty epsilon list to
+    keep only the existing prompt/lab-flight samples.
+    """
+    if campaign is None:
+        return []
+    if not isinstance(campaign, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", campaign):
+        raise RuntimeError(f"Invalid BSM campaign: {campaign!r}")
+    masses = _bsm_selector(masses, "mass")
+    flights = _bsm_selector(mean_lab_flights, "mean lab flight", allow_prompt=True)
+    epsilons = _bsm_selector(epsilons, "epsilon")
+    if masses == set() or (flights == set() and epsilons == set()):
+        return []
+    from Logger import warn
+    pattern = re.compile(r"darkphoton_(m([0-9]+(?:p[0-9]+)?)_(?:prompt|lab_([0-9]+(?:p[0-9]+)?)m|epsilon_([0-9]+(?:p[0-9]+)?(?:e[+-]?[0-9]+)?)))")
+    points = []
+    try:
+        for directory in Path(base_path).iterdir():
+            match = pattern.fullmatch(directory.name)
+            if not match or not directory.is_dir():
+                continue
+            name = match.group(1)
+            mass = float(match.group(2).replace("p", "."))
+            flight = float(match.group(3).replace("p", ".")) if match.group(3) else None
+            epsilon = float(match.group(4).replace("p", ".")) if match.group(4) else None
+            if masses is not None and mass not in masses:
+                continue
+            if epsilon is None and flights is not None and flight not in flights:
+                continue
+            if epsilon is not None and epsilons is not None and epsilon not in epsilons:
+                continue
+            points.append((mass, flight, epsilon, name, directory))
+    except OSError as error:
+        warn(f"Cannot read BSM histogram directories in {base_path}: {error}. Continuing with available samples.")
+        return []
+    result = []
+    for mass, flight, epsilon, name, directory in sorted(points, key=lambda point:
+            (point[0], point[2] is not None, -1 if point[1] is None else point[1], point[2] or 0)):
+        histogram_directory = directory / campaign / "histograms_merged"
+        histogram = single_root_file(histogram_directory, allow_missing=True, cache_directory=cache_directory)
+        if histogram is None:
+            warn(f"Skipping BSM {name}: no histogram file is available in {histogram_directory}.")
+            continue
+        row = dict(name=name, histogram_path=histogram, mass_gev=mass, mean_lab_flight_m=flight)
+        if epsilon is not None:
+            row['epsilon'] = epsilon
+        result.append(row)
+    if masses is not None and flights is not None:
+        present = {(point[0], point[1]) for point in points if point[2] is None}
+        for mass, flight in sorted({(mass, flight) for mass in masses for flight in flights} - present,
+                                  key=lambda point: (point[0], -1 if point[1] is None else point[1])):
+            label = "prompt" if flight is None else f"mean lab flight {flight:g} m"
+            warn(f"Skipping BSM mass {mass:g} GeV, {label}: no sample directory is available in {base_path}.")
+    if masses is not None and epsilons is not None:
+        present = {(point[0], point[2]) for point in points if point[2] is not None}
+        for mass, epsilon in sorted({(mass, epsilon) for mass in masses for epsilon in epsilons} - present):
+            warn(f"Skipping BSM mass {mass:g} GeV, epsilon {epsilon:g}: no sample directory is available in {base_path}.")
+    return result
 
 
 def _partial_bsm_plot_histogram(validation_directory, deployment, plan, row, parent,

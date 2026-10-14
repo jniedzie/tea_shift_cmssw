@@ -138,7 +138,7 @@ def main():
         edges[name] = np.r_[-np.inf, boundaries, np.inf]
     report = {'schema': 'shift-frozen-category-diagnostics-v1', 'references': refs,
               'source': reference(Path(__file__)), 'population': 'Expanded event-disjoint development test; previously inspected',
-              'selection_changed': False, 'test_pairs': int(test.sum()), 'minimum_support': MIN_SUPPORT,
+              'selection_changed': False, 'evaluation_role': 'previously_inspected_SM_development_test', 'independent_confirmation': False, 'test_pairs': int(test.sum()), 'minimum_support': MIN_SUPPORT,
               'support_policy': 'ROC: >=20 train and test parents in each class. Profile: >=20 in the displayed class in train and test. This is a display support gate, not a precision guarantee.',
               'binning': 'Pooled genuine training quartiles, inclusive underflow/overflow',
               'profile_edges': clean(edges), 'categories_merged': False,
@@ -210,7 +210,7 @@ def main():
                                 cell['classes'][label] = entry
                             row['profiles'][obs].append(cell)
                     rows[key] = row
-                fig.suptitle(f'{model} | {process} | locked cut {cut:.4f}\nExpanded test; raw pair shapes; unknown separate; sparse categories descriptive', fontsize=11)
+                fig.suptitle(f'{model} | {process} | locked cut {cut:.4f}\nDevelopment test (previously inspected); raw pair shapes; unknown separate', fontsize=11)
                 pdf.savefig(fig); plt.close(fig)
             fig, axes = plt.subplots(2, 2, figsize=(12, 9), constrained_layout=True)
             for axis, process in zip(axes.flat, PROCESSES):
@@ -233,7 +233,7 @@ def main():
                         value = entry['raw']; low, high = entry['raw_wilson95']
                         if label == 'fake': value, low, high = 1-value, 1-high, 1-low
                         xx.append(ci+(index-1.5)*.14); yy.append(value); errors.append([value-low,high-value])
-                    if xx: axis.errorbar(xx, yy, yerr=np.array(errors).T, fmt='o', label=process, capsize=2)
+                    if xx: axis.errorbar(xx, yy, yerr=np.maximum(np.array(errors).T, 0.), fmt='o', label=process, capsize=2)
                 axis.set(xticks=range(6), xticklabels=CATEGORIES, ylim=(0,1.03), title=title)
                 axis.tick_params(axis='x',rotation=35); axis.legend(fontsize=8)
             fig.suptitle(model+f' | Fixed validation cut {cut:.4f}; Wilson 95% intervals; unsupported cells omitted',fontsize=11)
@@ -250,7 +250,7 @@ def main():
                             value = entry['raw']; low, high = entry['raw_wilson95']
                             if label == 'fake': value, low, high = 1-value, 1-high, 1-low
                             xx.append(index); yy.append(value); errors.append([value-low, high-value])
-                        if xx: axis.errorbar(xx,yy,yerr=np.array(errors).T,fmt='o-',label=category,capsize=2)
+                        if xx: axis.errorbar(xx,yy,yerr=np.maximum(np.array(errors).T, 0.),fmt='o-',label=category,capsize=2)
                     labels_text = [f'{low:.3g} to {high:.3g}' for low,high in zip(bins[:-1],bins[1:])]
                     axis.set(title=obs,xticks=range(len(labels_text)),xticklabels=labels_text,ylim=(0,1.03),ylabel='Retention' if label=='genuine' else 'Rejection')
                     axis.tick_params(axis='x',rotation=25)

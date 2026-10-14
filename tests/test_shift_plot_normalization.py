@@ -2,9 +2,12 @@
 import hashlib
 import json
 from pathlib import Path
+import runpy
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "configs"))
@@ -115,6 +118,99 @@ class FullGenPlotNormalizationTest(unittest.TestCase):
         self.refresh()
         with self.assertRaisesRegex(RuntimeError, "inventories differ"):
             self.sums()
+
+
+class AvailableHistogramPlotConfigTest(unittest.TestCase):
+    def setUp(self):
+        import ROOT
+        self.ROOT = ROOT
+        self.repository = Path(__file__).resolve().parents[1]
+        for name in ('tea/pylibs/plotting', 'tea/pylibs/logger'):
+            directory = str(self.repository / name)
+            sys.path.insert(0, directory)
+            self.addCleanup(sys.path.remove, directory)
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.base = Path(temporary.name)
+        self.campaign = 'shift_detector_representative_20261007_v10'
+        self.bsm_campaign = '20261013-unfinished-production'
+        self.sm = self.write_histograms(
+            self.base / 'qcd_pThat0to1GeV' / self.campaign / 'histograms_merged', 20.)
+        self.signal = self.write_histograms(
+            self.base / 'darkphoton_m15_lab_100m' / self.bsm_campaign / 'histograms_merged', 5.)
+
+    def write_histograms(self, directory, initial_sum):
+        directory.mkdir(parents=True)
+        path = directory / 'partial.root'
+        output = self.ROOT.TFile(str(path), 'RECREATE')
+        cutflow = self.ROOT.TH1D('cutFlow', '', 2, 0, 2)
+        cutflow.SetBinContent(1, initial_sum)
+        cutflow.SetBinContent(2, 4.)
+        cutflow.Write()
+        histogram = self.ROOT.TH1D('available_observable', '', 2, 0, 2)
+        histogram.Fill(.5, 3.)
+        histogram.Fill(1.5, 1.)
+        histogram.Write()
+        output.Close()
+        return path
+
+    def config(self, *, bsm_campaign=None, flights=(100,), epsilons=None):
+        with patch.multiple('shift_paths', base_path=str(self.base), campaign=self.campaign,
+                            cross_sections={'qcd': {'0to1': 2., '1to2': 3.}},
+                            bsm_campaign=bsm_campaign, bsm_masses_to_plot=[15],
+                            bsm_mean_lab_flights_to_plot=list(flights), bsm_epsilons_to_plot=epsilons,
+                            histogram_cache_directory=None), \
+                patch('shift_sample_paths.full_gen_weight_sums', side_effect=AssertionError('Full GEN validation')), \
+                patch('shift_sample_paths._read_normalization_record', side_effect=AssertionError('Production records')), \
+                patch('shift_sample_paths._bsm_campaign_records', side_effect=AssertionError('BSM production validation')):
+            return SimpleNamespace(**runpy.run_path(str(self.repository / 'configs/shift_plotter_config.py')))
+
+    def test_partial_sm_plots_without_any_production_validation(self):
+        with patch('Logger.warn') as warn:
+            config = self.config()
+        self.assertEqual([sample.name for sample in config.samples], ['qcd_0to1'])
+        self.assertEqual(config.samples[0].file_path, str(self.sm))
+        self.assertEqual(config.samples[0].initial_weight_sum, -1)
+        self.assertTrue(warn.called)  # The missing bin does not block the ready one.
+
+    def test_partial_bsm_needs_no_plan_marker_or_complete_campaign(self):
+        with patch('Logger.warn'):
+            config = self.config(bsm_campaign=self.bsm_campaign, flights=(None, 100))
+        self.assertEqual([sample.name for sample in config.samples], ['qcd_0to1', 'm15_lab_100m'])
+        self.assertEqual(config.samples[1].file_path, str(self.signal))
+        self.assertTrue(all(sample.initial_weight_sum == -1 for sample in config.samples))
+
+    def test_epsilon_samples_use_epsilon_legends_without_production_records(self):
+        signal = self.write_histograms(
+            self.base / 'darkphoton_m15_epsilon_1e-06' / self.bsm_campaign / 'histograms_merged', 5.)
+        with patch('Logger.warn'):
+            config = self.config(bsm_campaign=self.bsm_campaign, flights=(), epsilons=[1.e-6])
+        self.assertEqual([sample.name for sample in config.samples], ['qcd_0to1', 'm15_epsilon_1e-06'])
+        self.assertEqual(config.samples[1].file_path, str(signal))
+        self.assertIn('#epsilon = 1e-06', config.samples[1].legend_description)
+        self.assertEqual(config.samples[1].line_style, 2)
+        self.assertEqual(config.samples[1].initial_weight_sum, -1)
+
+    def test_native_normalization_uses_available_cutflow_and_matches_signal_area(self):
+        from HistogramNormalizer import HistogramNormalizer, NormalizationType
+        with patch('Logger.warn'):
+            config = self.config(bsm_campaign=self.bsm_campaign)
+        config.luminosity = 3.
+        normalizer = HistogramNormalizer(config)
+        self.addCleanup(lambda: [file.Close() for file in normalizer.input_files.values()])
+        background, signal = config.samples
+        self.assertEqual(normalizer.background_initial_sum_weights[(background.name, -1)], 20.)
+        self.assertEqual(normalizer.signal_initial_sum_weights[signal.name], 5.)
+        def histogram(sample):
+            native = normalizer.input_files[sample.name].Get('available_observable').Clone(sample.name)
+            native.SetDirectory(0)
+            return SimpleNamespace(name='available_observable', hist=native,
+                                   norm_type=NormalizationType.to_background, scale_by_bin_width=False)
+        background_hist, signal_hist = histogram(background), histogram(signal)
+        normalizer.normalize(background_hist, background)
+        self.assertAlmostEqual(background_hist.hist.Integral(), 1.2)
+        normalizer.normalize(signal_hist, signal, total_backgrounds_integral=background_hist.hist.Integral())
+        self.assertAlmostEqual(signal_hist.hist.Integral(), 1.2)
 
 
 if __name__ == "__main__":
