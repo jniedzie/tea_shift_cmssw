@@ -25,6 +25,16 @@ from shift_paths import (
     histogram_cache_directory,
 )
 
+bsm_inputs = available_bsm_campaign_histograms(
+    base_path,
+    bsm_campaign,
+    bsm_masses_to_plot,
+    bsm_mean_lab_flights_to_plot,
+    epsilons=bsm_epsilons_to_plot,
+    cache_directory=histogram_cache_directory,
+)
+
+output_path = f"../plots/SM_BSM/{bsm_campaign}/" if bsm_inputs else "../plots/plots/"
 
 samples = []
 
@@ -104,29 +114,35 @@ for process, colors, label in (
         )
 
 
-bsm_inputs = available_bsm_campaign_histograms(
-    base_path,
-    bsm_campaign,
-    bsm_masses_to_plot,
-    bsm_mean_lab_flights_to_plot,
-    epsilons=bsm_epsilons_to_plot,
-    cache_directory=histogram_cache_directory,
-)
 mass_colors = {
-    2: ROOT.kTeal + 3,
-    5: ROOT.kGreen + 2,
+    2: ROOT.kMagenta + 1,
+    5: ROOT.kOrange + 7,
+    15: ROOT.kTeal + 3,
+    50: ROOT.kGreen + 2,
     10: ROOT.kViolet + 1,
     12: ROOT.kCyan + 2,
-    15: ROOT.kMagenta + 1,
     20: ROOT.kRed + 1,
     30: ROOT.kAzure + 2,
     40: ROOT.kYellow + 2,
-    50: ROOT.kOrange + 7,
     70: ROOT.kGray + 2,
     90: ROOT.kBlack,
 }
+lifetime_colors = {
+    None: ROOT.kBlack,
+    5: ROOT.kAzure + 2,
+    30: ROOT.kGreen + 2,
+    100: ROOT.kOrange + 7,
+    1000: ROOT.kMagenta + 1,
+}
 flight_line_styles = {None: 1, 5: 2, 30: 3, 100: 4, 1000: 7}
 epsilon_line_styles = {1e-6: 2, 1e-4: 3, 1e-2: 1}
+
+# With one mass and several lifetimes, colours make that comparison easier to read.
+# With several masses, retain the mass colour and use the line style for lifetime.
+selected_masses = {point["mass_gev"] for point in bsm_inputs}
+selected_flights = {point["mean_lab_flight_m"] for point in bsm_inputs}
+color_by_lifetime = len(selected_masses) == 1 and len(selected_flights) > 1
+
 for point in bsm_inputs:
     mass = point["mass_gev"]
 
@@ -137,13 +153,20 @@ for point in bsm_inputs:
         epsilon = point["epsilon"]
         lifetime_label = f"#epsilon = {epsilon:g}"
         line_style = epsilon_line_styles.get(epsilon, 3)
+    if "proper_ctau_mm" in point:
+        lifetime_label = f"c#tau = {point['proper_ctau_mm']:.3g} mm"
+
+    line_color = mass_colors.get(mass, ROOT.kGray + 1)
+    if color_by_lifetime:
+        line_color = lifetime_colors.get(flight, ROOT.kGray + 1)
+        line_style = 1
 
     samples.append(
         Sample(
             name=point["name"],
             file_path=point["histogram_path"],
             type=SampleType.signal,
-            line_color=mass_colors.get(mass, ROOT.kGray + 1),
+            line_color=line_color,
             line_style=line_style,
             line_width=3,
             fill_alpha=0.0,
@@ -156,8 +179,6 @@ for point in bsm_inputs:
 # Otherwise the shared plotter sorts all processes together by cross section.
 custom_stacks_order = [sample.name for sample in samples]
 
-output_path = f"../plots/SM_BSM/{bsm_campaign}/" if bsm_inputs else "../plots/plots/"
-
 # Expand automatic axes only when needed to keep distributions clear of legends.
 auto_adjust_axes_for_legend = True
 
@@ -169,50 +190,50 @@ histograms = []
 
 for category in muon_categories:
   histograms.extend([
-    Histogram(f"event/Event_nShiftMuon{category}"    , "", False, True, NormalizationType.to_lumi,  1, None, None, None, None, "n_{#mu}"          , "# events"      ),
+    Histogram(f"event/Event_nShiftMuon{category}"    , "", False, True, NormalizationType.to_lumi, 1, None, None, None, None, "n_{#mu}"          , "# events"      ),
 
-    Histogram(f"muon/ShiftMuon{category}_pt"         , "", False, True, NormalizationType.to_lumi,  1, None, None, None, None, "p_{T}^{#mu} [GeV]", "# events"      ),
-    Histogram(f"muon/ShiftMuon{category}_pz"         , "", False, True, NormalizationType.to_lumi,  1, None, None, None, None, "p_{Z}^{#mu} [GeV]", "# events"      ),
-    Histogram(f"muon/ShiftMuon{category}_pt_variable", "", False, True, NormalizationType.to_lumi, 10, None, None, None, None, "p_{T}^{#mu} [GeV]", "# events / GeV", scale_by_bin_width=True),
-    Histogram(f"muon/ShiftMuon{category}_pz_variable", "", False, True, NormalizationType.to_lumi,  1, None, None, None, None, "p_{Z}^{#mu} [GeV]", "# events / GeV", scale_by_bin_width=True),
-    Histogram(f"muon/ShiftMuon{category}_p_variable" , "", False, True, NormalizationType.to_lumi,  1, None, None, None, None, "p^{#mu} [GeV]"    , "# events / GeV", scale_by_bin_width=True),
-    Histogram(f"muon/ShiftMuon{category}_eta"        , "", False, True, NormalizationType.to_lumi,  1, None, None, None, None, "#eta^{#mu}"       , "# events"      ),
-    Histogram(f"muon/ShiftMuon{category}_phi"        , "", False, True, NormalizationType.to_lumi,  1, None, None, None, None, "#phi^{#mu}"       , "# events"      ),
+    Histogram(f"muon/ShiftMuon{category}_pt"         , "", False, True, NormalizationType.to_lumi, 1, None, None, None, None, "p_{T}^{#mu} [GeV]", "# events"      ),
+    Histogram(f"muon/ShiftMuon{category}_pz"         , "", False, True, NormalizationType.to_lumi, 1, None, None, None, None, "p_{Z}^{#mu} [GeV]", "# events"      ),
+    Histogram(f"muon/ShiftMuon{category}_pt_variable", "", False, True, NormalizationType.to_lumi, 1, None, None, None, None, "p_{T}^{#mu} [GeV]", "# events / GeV", scale_by_bin_width=True),
+    Histogram(f"muon/ShiftMuon{category}_pz_variable", "", False, True, NormalizationType.to_lumi, 1, None, None, None, None, "p_{Z}^{#mu} [GeV]", "# events / GeV", scale_by_bin_width=True),
+    Histogram(f"muon/ShiftMuon{category}_p_variable" , "", False, True, NormalizationType.to_lumi, 1, None, None, None, None, "p^{#mu} [GeV]"    , "# events / GeV", scale_by_bin_width=True),
+    Histogram(f"muon/ShiftMuon{category}_eta"        , "", False, True, NormalizationType.to_lumi, 1, None, None, None, None, "#eta^{#mu}"       , "# events"      ),
+    Histogram(f"muon/ShiftMuon{category}_phi"        , "", False, True, NormalizationType.to_lumi, 1, None, None, None, None, "#phi^{#mu}"       , "# events"      ),
 
-    Histogram(f"muon/ShiftMuon{category}_vx"         , "", False, True, NormalizationType.to_lumi,  1, None, None, None, None, "v_{x}^{#mu} [cm]" , "# events"      ),
-    Histogram(f"muon/ShiftMuon{category}_vy"         , "", False, True, NormalizationType.to_lumi,  1, None, None, None, None, "v_{y}^{#mu} [cm]" , "# events"      ),
-    Histogram(f"muon/ShiftMuon{category}_vz"         , "", False, True, NormalizationType.to_lumi,  1, None, None, None, None, "v_{z}^{#mu} [cm]" , "# events"      ),
-    Histogram(f"muon/ShiftMuon{category}_dz"         , "", False, True, NormalizationType.to_lumi,  1, None, None, None, None, "d_{z}^{#mu} [cm]" , "# events"      ),
+    Histogram(f"muon/ShiftMuon{category}_vx"         , "", False, True, NormalizationType.to_lumi, 1, None, None, None, None, "v_{x}^{#mu} [cm]" , "# events"      ),
+    Histogram(f"muon/ShiftMuon{category}_vy"         , "", False, True, NormalizationType.to_lumi, 1, None, None, None, None, "v_{y}^{#mu} [cm]" , "# events"      ),
+    Histogram(f"muon/ShiftMuon{category}_vz"         , "", False, True, NormalizationType.to_lumi, 1, None, None, None, None, "v_{z}^{#mu} [cm]" , "# events"      ),
+    Histogram(f"muon/ShiftMuon{category}_dz"         , "", False, True, NormalizationType.to_lumi, 1, None, None, None, None, "d_{z}^{#mu} [cm]" , "# events"      ),
 
-    Histogram(f"muon/ShiftMuon{category}_nCSCHits"   , "", False, True, NormalizationType.to_lumi,  1, None, None, None, None, "n_{CSCHits}^{#mu}", "# events"      ),
-    Histogram(f"muon/ShiftMuon{category}_nDTHits"    , "", False, True, NormalizationType.to_lumi,  1, None, None, None, None, "n_{DTHits}^{#mu}" , "# events"      ),
-    Histogram(f"muon/ShiftMuon{category}_nRPCHits"   , "", False, True, NormalizationType.to_lumi,  1, None, None, None, None, "n_{RPCHits}^{#mu}", "# events"      ),
+    Histogram(f"muon/ShiftMuon{category}_nCSCHits"   , "", False, True, NormalizationType.to_lumi, 1, None, None, None, None, "n_{CSCHits}^{#mu}", "# events"      ),
+    Histogram(f"muon/ShiftMuon{category}_nDTHits"    , "", False, True, NormalizationType.to_lumi, 1, None, None, None, None, "n_{DTHits}^{#mu}" , "# events"      ),
+    Histogram(f"muon/ShiftMuon{category}_nRPCHits"   , "", False, True, NormalizationType.to_lumi, 1, None, None, None, None, "n_{RPCHits}^{#mu}", "# events"      ),
   ])
 
 for category in dimuon_categories:
   # name        title         logx   logy   norm_type                  rebin  xmin  xmax  ymin  ymax  xlabel         ylabel
   histograms.extend([
-      Histogram(f"event/Event_nShiftDimuonVertex{category}"                 , "", False, True, NormalizationType.to_lumi,  1, None, None, None, None, "n_{#mu#mu}"          , "# events"        ),
+      Histogram(f"event/Event_nShiftDimuonVertex{category}"                 , "", False, True , NormalizationType.to_lumi,  1, None, None, None, None, "n_{#mu#mu}"          , "# events"        ),
 
-      Histogram(f"dimuon/ShiftDimuonVertex{category}_pt"                    , "", False, True, NormalizationType.to_lumi,  1, None, None, None, None, "p_{T}^{#mu#mu} [GeV]", "# events"        ),
-      Histogram(f"dimuon/ShiftDimuonVertex{category}_pz"                    , "", False, True, NormalizationType.to_lumi,  1, None, None, None, None, "p_{Z}^{#mu#mu} [GeV]", "# events"        ),
-      Histogram(f"dimuon/ShiftDimuonVertex{category}_pt_variable"           , "", False, True, NormalizationType.to_lumi,  1, None, None, None, None, "p_{T}^{#mu#mu} [GeV]", "# events / GeV"  , scale_by_bin_width=True      ),
-      Histogram(f"dimuon/ShiftDimuonVertex{category}_pz_variable"           , "", False, True, NormalizationType.to_lumi,  1, None, None, None, None, "p_{Z}^{#mu#mu} [GeV]", "# events / GeV"  , scale_by_bin_width=True      ),
-      Histogram(f"dimuon/ShiftDimuonVertex{category}_p_variable"            , "", False, True, NormalizationType.to_lumi,  1, None, None, None, None, "p^{#mu#mu} [GeV]"    , "# events / GeV"  , scale_by_bin_width=True      ),
-      Histogram(f"dimuon/ShiftDimuonVertex{category}_eta"                   , "", False, True, NormalizationType.to_lumi,  2, None, None, None, None, "#eta^{#mu#mu}"       , "# events"        ),
-      Histogram(f"dimuon/ShiftDimuonVertex{category}_phi"                   , "", False, True, NormalizationType.to_lumi,  1, None, None, None, None, "#phi^{#mu#mu}"       , "# events"        ),
-      Histogram(f"dimuon/ShiftDimuonVertex{category}_mass"                  , "", False, True, NormalizationType.to_lumi,  1, None, None, None, None, "m_{#mu#mu} [GeV]"    , "# events"        , allow_legend_x_extension=True),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_pt"                    , "", False, True , NormalizationType.to_lumi,  1, None, None, None, None, "p_{T}^{#mu#mu} [GeV]", "# events"        ),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_pz"                    , "", False, True , NormalizationType.to_lumi,  1, None, None, None, None, "p_{Z}^{#mu#mu} [GeV]", "# events"        ),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_pt_variable"           , "", False, True , NormalizationType.to_lumi,  1, None, None, None, None, "p_{T}^{#mu#mu} [GeV]", "# events / GeV"  , scale_by_bin_width=True      ),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_pz_variable"           , "", False, True , NormalizationType.to_lumi,  1, None, None, None, None, "p_{Z}^{#mu#mu} [GeV]", "# events / GeV"  , scale_by_bin_width=True      ),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_p_variable"            , "", False, True , NormalizationType.to_lumi,  1, None, None, None, None, "p^{#mu#mu} [GeV]"    , "# events / GeV"  , scale_by_bin_width=True      ),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_eta"                   , "", False, True , NormalizationType.to_lumi,  2, None, None, None, None, "#eta^{#mu#mu}"       , "# events"        ),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_phi"                   , "", False, True , NormalizationType.to_lumi,  1, None, None, None, None, "#phi^{#mu#mu}"       , "# events"        ),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_mass"                  , "", False, False, NormalizationType.to_lumi, 30, None, None, None, None, "m_{#mu#mu} [GeV]"    , "# events"        , allow_legend_x_extension=True),
 
-      Histogram(f"dimuon/ShiftDimuonVertex{category}_vx"                    , "", False, True, NormalizationType.to_lumi,  5, None, None, None, None, "v_{x}^{#mu#mu} [cm]" , "# events"        ),
-      Histogram(f"dimuon/ShiftDimuonVertex{category}_vy"                    , "", False, True, NormalizationType.to_lumi,  5, None, None, None, None, "v_{y}^{#mu#mu} [cm]" , "# events"        ),
-      Histogram(f"dimuon/ShiftDimuonVertex{category}_vz"                    , "", False, True, NormalizationType.to_lumi, 20, None, None, None, None, "v_{z}^{#mu#mu} [cm]" , "# events"        ),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_vx"                    , "", False, True , NormalizationType.to_lumi,  5, None, None, None, None, "v_{x}^{#mu#mu} [cm]" , "# events"        ),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_vy"                    , "", False, True , NormalizationType.to_lumi,  5, None, None, None, None, "v_{y}^{#mu#mu} [cm]" , "# events"        ),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_vz"                    , "", False, False, NormalizationType.to_lumi, 20, 3e3 , 2e4 , None, None, "v_{z}^{#mu#mu} [cm]" , "# events"        ),
 
-      Histogram(f"dimuon/ShiftDimuonVertex{category}_chi2"                  , "", False, True, NormalizationType.to_lumi,  1, None, None, None, None, "#chi^{2}"            , "# events"        ),
-      Histogram(f"dimuon/ShiftDimuonVertex{category}_normalizedChi2"        , "", False, True, NormalizationType.to_lumi,  2, None, None, None, None, "#chi^{2}/ndof"       , "# events"        ),
-      Histogram(f"dimuon/ShiftDimuonVertex{category}_dca"                   , "", False, True, NormalizationType.to_lumi,  4, None, None, None, None, "DCA [cm]"            , "# events"        ),
-      Histogram(f"dimuon/ShiftDimuonVertex{category}_isOS"                  , "", False, True, NormalizationType.to_lumi,  1, None, None, None, None, "isOS"                , "# events"        ),
-      Histogram(f"dimuon/ShiftDimuonVertex{category}_genPid"                , "", False, True, NormalizationType.to_lumi,  1, None, None, None, None, "generator mother"    , "# dimuons"       ),
-      Histogram(f"dimuon/ShiftDimuonVertex{category}_genPidDifferentMothers", "", False, True, NormalizationType.to_lumi,  1, None, None, None, None, "generator mother"    , "# dimuon mothers"),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_chi2"                  , "", False, True , NormalizationType.to_lumi,  1, None, None, None, None, "#chi^{2}"            , "# events"        ),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_normalizedChi2"        , "", False, True , NormalizationType.to_lumi,  2, None, None, None, None, "#chi^{2}/ndof"       , "# events"        ),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_dca"                   , "", False, True , NormalizationType.to_lumi,  4, None, None, None, None, "DCA [cm]"            , "# events"        ),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_isOS"                  , "", False, True , NormalizationType.to_lumi,  1, None, None, None, None, "isOS"                , "# events"        ),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_genPid"                , "", False, True , NormalizationType.to_lumi,  1, None, None, None, None, "generator mother"    , "# dimuons"       ),
+      Histogram(f"dimuon/ShiftDimuonVertex{category}_genPidDifferentMothers", "", False, True , NormalizationType.to_lumi,  1, None, None, None, None, "generator mother"    , "# dimuon mothers"),
 
   ])
 # fmt: on
@@ -327,7 +348,8 @@ for name, label in (
 # Rebin only recorded source bins and display densities, so changing a bin's
 # width does not itself create a rising tail or a false bump. The same edges
 # apply to the inclusive and Both-Endcaps/Both-Both selections and all samples.
-variable_histogram_rebin = 20  # Merge this many adjacent display bins; 1 keeps them.
+# Extra coarsening for variable-bin plots. Each histogram's own rebin still applies.
+variable_histogram_rebin = 1  # 1 disables extra coarsening.
 
 for histogram in histograms:
     if histogram.name.startswith("muon/ShiftMuon"):
@@ -336,11 +358,15 @@ for histogram in histograms:
         rules, object_label = dimuon_variable_binning, "# dimuons"
     else:
         continue
+    # These momentum histograms already have irregular source bins.
+    if histogram.name.endswith("_variable"):
+        histogram.rebin *= variable_histogram_rebin
+        continue
     variable = histogram.name.rsplit("_", 1)[-1]
     if variable not in rules:
         continue
-    histogram.bin_edges = rules[variable]
-    histogram.rebin = variable_histogram_rebin
+    histogram.bin_edges = None if variable_histogram_rebin == 1 else rules[variable]
+    histogram.rebin *= variable_histogram_rebin
     histogram.scale_by_bin_width = True
     unit = next(
         (unit for unit in ("GeV", "cm", "rad") if f"[{unit}]" in histogram.x_label),
@@ -359,21 +385,21 @@ for histogram in histograms:
 apply_reconstruction_labels(histograms)
 
 histograms2D = []
-for category in dimuon_categories:
-    for variable, label in (
-        ("massVsOpeningAngle", "#alpha_{#mu#mu} [rad]"),
-        ("massVsPtAsymmetry", "|p_{T,1}-p_{T,2}|/(p_{T,1}+p_{T,2})"),
-    ):
-        histograms2D.append(
-            Histogram2D(
-                name=f"dimuon/ShiftDimuonVertex{category}_{variable}",
-                log_z=True,
-                norm_type=NormalizationType.none,
-                x_label=label,
-                y_label="m_{#mu#mu} [GeV]",
-                z_label="weighted dimuons",
-            )
-        )
+# for category in dimuon_categories:
+#     for variable, label in (
+#         ("massVsOpeningAngle", "#alpha_{#mu#mu} [rad]"),
+#         ("massVsPtAsymmetry", "|p_{T,1}-p_{T,2}|/(p_{T,1}+p_{T,2})"),
+#     ):
+#         histograms2D.append(
+#             Histogram2D(
+#                 name=f"dimuon/ShiftDimuonVertex{category}_{variable}",
+#                 log_z=True,
+#                 norm_type=NormalizationType.none,
+#                 x_label=label,
+#                 y_label="m_{#mu#mu} [GeV]",
+#                 z_label="weighted dimuons",
+#             )
+#         )
 canvas_size_2Dhists = (800, 700)
 
 luminosity = 0.01 * 300000.0  # pb^-1 (1% of Run 3)
@@ -393,6 +419,9 @@ plotting_options = {
     SampleType.signal: "nostack hist",
     SampleType.data: "nostack e",
 }
+
+# Draw statistical error bars on signal curves; automatic ranges include them.
+show_signal_stat_uncertainty = True
 
 output_formats = ["pdf"]
 canvas_size = (800, 600)

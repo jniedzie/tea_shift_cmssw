@@ -1,9 +1,18 @@
 # Code style: human-code.
-"""Stored reconstruction codes from ShiftMuonTableProducer and its fit helpers.
+"""Short category names and stored reconstruction codes for SHIFT plots.
 
 Keep numerical codes in the labels so failures remain traceable to NanoAOD.
 The forward target code -1 also represents an unavailable diagnostic.
 """
+
+MUON_CATEGORY_SHORT_LABELS = {
+    "": "All categories",
+    "NearEndcapOnly": "Near Endcap",
+    "NearEndcapAndBarrel": "Near Endcap + Barrel",
+    "BothEndcaps": "Both Endcaps",
+    "FarEndcapOnly": "Far Endcap",
+    "Unclassified": "Unclassified",
+}
 
 MUON_TOPOLOGY_LABELS = {
     0: "0: near endcap only",
@@ -68,6 +77,16 @@ TARGET_FORWARD_LABELS = {
 def apply_reconstruction_labels(histograms):
     for histogram in histograms:
         name = histogram.name
+        for prefix in ("muon/ShiftMuon", "event/Event_nShiftMuon"):
+            if name.startswith(prefix):
+                category = name[len(prefix) :].split("_", 1)[0]
+                histogram.legend_label = MUON_CATEGORY_SHORT_LABELS.get(
+                    category, category
+                )
+        for prefix in ("dimuon/ShiftDimuonVertex", "event/Event_nShiftDimuonVertex"):
+            if name.startswith(prefix):
+                category = name[len(prefix) :].split("_", 1)[0]
+                histogram.legend_label = category or "All categories"
         variable = name.rsplit("_", 1)[-1]
         if name.startswith("muon/ShiftMuon") and variable == "topology":
             histogram.bin_labels = MUON_TOPOLOGY_LABELS

@@ -10,16 +10,20 @@ base_path = "/eos/home-j/jniedzie/shift_cmssw/"  # lxplus
 # None gives SM-only plots.
 # Each point's latest link keeps the newest ready sample with matching settings.
 bsm_campaign = "latest"
+# bsm_campaign = None
 
 
 # None selects all masses, [] selects none.
-bsm_masses_to_plot = None  # GeV
+# bsm_masses_to_plot = [40]  # GeV
+bsm_masses_to_plot = [2, 5, 10, 15, 40, 70]  # GeV
+# bsm_masses_to_plot = [2, 5, 10, 12, 15, 20, 30, 40, 50, 70, 90]  # GeV
 
 # None for all lifetimes, or [] for none.  None in the list means prompt.
-bsm_mean_lab_flights_to_plot = None  # metres
+# bsm_mean_lab_flights_to_plot = [None, 5, 30, 100, 1000]  # metres
+bsm_mean_lab_flights_to_plot = [None]  # metres
 
 # None selects all epsilon samples, [] selects none. Use [] above for epsilon-only plots.
-bsm_epsilons_to_plot = None
+bsm_epsilons_to_plot = []
 
 histogram_cache_directory = None
 
@@ -90,3 +94,15 @@ bdt_mixing_histogram_inventory = None
 bdt_mixing_plot_output = None
 bdt_mixing_preparation_directory = None
 bdt_mixing_plot_scope = "all"
+
+# ==========================
+# Simplified expected limits
+# ==========================
+
+limits_study = "first_20261014"
+limits_output_path = f"../plots/limits/{limits_study}/"
+limits_yields_path = limits_output_path + "yields.json"
+limits_lifetime_output_path = "../plots/limits/lifetime_m15_20261015/"
+limits_combine_path = (
+    "/eos/home-j/jniedzie/combine/CMSSW_16_0_0/src/HiggsAnalysis/CombinedLimit"
+)

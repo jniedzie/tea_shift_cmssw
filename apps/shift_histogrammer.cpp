@@ -6,7 +6,9 @@
 #include "HistogramsFiller.hpp"
 #include "HistogramsHandler.hpp"
 #include "ShiftHistogramsFiller.hpp"
-#include "NanoEventProcessor.hpp"
+
+#include <cmath>
+#include <stdexcept>
 
 using namespace std;
 
@@ -23,17 +25,20 @@ int RunHistogrammer(int argc, char** argv) {
   if (runEventMixing)
     return PyRun_SimpleString("run_mixing_stage(eventMixing)") == 0 ? 0 : 1;
 
-  bool enableTruthDiagnostics = true;
-  ConfigManager::GetInstance().GetValue("enableTruthDiagnostics", enableTruthDiagnostics);
-  // Cutflow and custom fills must share the data unit-weight convention.
-  if (!enableTruthDiagnostics && PyRun_SimpleString("weightsBranchName = ''") != 0) return 1;
+  bool recoDataMode = false;
+  try {
+    ConfigManager::GetInstance().GetValue("recoDataMode", recoDataMode);
+  } catch (const Exception&) {}
+  // Turning off MC truth plots does not change the event normalization.
+  if (recoDataMode && PyRun_SimpleString("weightsBranchName = ''") != 0) return 1;
+  string weightsBranchName;
+  ConfigManager::GetInstance().GetValue("weightsBranchName", weightsBranchName);
 
   auto eventReader = make_shared<EventReader>();
   auto cutFlowManager = make_shared<CutFlowManager>(eventReader);
   auto histogramsHandler = make_shared<HistogramsHandler>();
   auto histogramsFiller = make_unique<HistogramsFiller>(histogramsHandler);
   auto shiftHistogramsFiller = make_unique<ShiftHistogramsFiller>(histogramsHandler, eventReader->GetInputFile());
-  auto nanoEventProcessor = make_unique<NanoEventProcessor>();
 
   cutFlowManager->RegisterCut("initial");
 
@@ -42,9 +47,17 @@ int RunHistogrammer(int argc, char** argv) {
 
     cutFlowManager->UpdateCutFlow("initial");
 
-    map<string, float> weight = {
-        {"default", enableTruthDiagnostics ? nanoEventProcessor->GetGenWeight(asNanoEvent(event)) : 1.f}};
-    histogramsHandler->SetEventWeights(weight);
+    double eventWeight = 1.0;
+    if (!weightsBranchName.empty()) {
+      try {
+        eventWeight = event->GetAs<double>(weightsBranchName);
+      } catch (const std::exception& error) {
+        throw std::runtime_error("Cannot read configured event weight " + weightsBranchName + ": " + error.what());
+      }
+      if (!std::isfinite(eventWeight)) throw std::runtime_error("Configured event weight is not finite");
+    }
+    map<string, double> weights = {{"default", eventWeight}};
+    histogramsHandler->SetEventWeights(weights);
 
     histogramsFiller->FillDefaultVariables(event);
     shiftHistogramsFiller->Fill(event);
