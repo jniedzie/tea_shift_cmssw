@@ -189,15 +189,15 @@ class AvailableHistogramPlotConfigTest(unittest.TestCase):
         self.assertEqual(config.samples[1].file_path, str(self.signal))
         self.assertTrue(all(sample.initial_weight_sum == -1 for sample in config.samples))
 
-    def test_short_categories_reach_sm_and_bsm_legend_headers(self):
+    def test_short_category_is_visible_once_in_the_highest_legend(self):
         from HistogramPlotter import HistogramPlotter
 
         labels = {
-            'muon/ShiftMuon_pt_variable': 'All',
-            'muon/ShiftMuonBothEndcaps_pt_variable': 'Both',
-            'dimuon/ShiftDimuonVertex_mass': 'All',
+            'muon/ShiftMuon_pt_variable': 'All categories',
+            'muon/ShiftMuonBothEndcaps_pt_variable': 'Both Endcaps',
+            'dimuon/ShiftDimuonVertex_mass': 'All categories',
             'dimuon/ShiftDimuonVertexBoth-Both_mass': 'Both-Both',
-            'event/Event_nShiftMuonBothEndcaps': 'Both',
+            'event/Event_nShiftMuonBothEndcaps': 'Both Endcaps',
             'event/Event_nShiftDimuonVertexBoth-Both': 'Both-Both',
         }
         for campaign in (None, self.bsm_campaign):
@@ -216,9 +216,13 @@ class AvailableHistogramPlotConfigTest(unittest.TestCase):
                 self.assertEqual(len(plotter.legends), len(labels))
                 for histogram in config.histograms:
                     category = labels[histogram.name]
-                    for sample_type, legend in plotter.legends[histogram.name].items():
+                    legends = plotter.legends[histogram.name]
+                    highest = max(legends.values(), key=lambda legend: legend.GetY2NDC())
+                    for sample_type, legend in legends.items():
                         title = config.legends[sample_type].title
-                        expected = f'{title} ({category})' if title else category
+                        expected = title
+                        if legend is highest:
+                            expected = f'{title} ({category})' if title else category
                         self.assertEqual(legend.GetHeader(), expected)
 
     def test_epsilon_samples_use_epsilon_legends_without_production_records(self):

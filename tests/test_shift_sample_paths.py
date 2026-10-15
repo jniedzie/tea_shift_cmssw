@@ -119,6 +119,43 @@ class AvailableBsmHistogramsTest(unittest.TestCase):
         self.campaign = 'latest'
         self.assertEqual(Path(self.inputs([15], [None])[0]['histogram_path']).resolve(), ready)
 
+    def test_canonical_ctau_names_keep_lab_selectors_without_duplicate_legacy_links(self):
+        point = 'm15_ctau_62p1784451mm'
+        histogram = self.histogram(point)
+        directory = histogram.parent.parent.parent
+        (directory / 'sample.json').write_text(json.dumps(dict(
+            schema='shift-dark-photon-sample-v1', point=point, mass_gev=15.,
+            proper_ctau_mm=62.17844507957349, epsilon=1.0955803943963588e-7,
+            target_mean_lab_flight_m=5., selector_kind='mean_lab_flight')))
+        (self.base / 'darkphoton_m15_lab_5m').symlink_to(directory.name, target_is_directory=True)
+        rows = self.inputs([15], [5], [])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['name'], point)
+        self.assertEqual(rows[0]['mean_lab_flight_m'], 5.)
+        self.assertEqual(rows[0]['proper_ctau_mm'], 62.17844507957349)
+        self.assertEqual(rows[0]['histogram_path'], str(histogram))
+
+    def test_ctau_named_epsilon_population_keeps_its_physical_parameters(self):
+        point = 'm15_ctau_0p746325638mm'
+        histogram = self.histogram(point)
+        (histogram.parent.parent.parent / 'sample.json').write_text(json.dumps(dict(
+            schema='shift-dark-photon-sample-v1', point=point, mass_gev=15.,
+            proper_ctau_mm=.7463256382295375, epsilon=1.e-6,
+            target_mean_lab_flight_m=None, selector_kind='epsilon')))
+        rows = self.inputs([15], [], [1.e-6])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['epsilon'], 1.e-6)
+        self.assertEqual(rows[0]['proper_ctau_mm'], .7463256382295375)
+
+    def test_ctau_histogram_can_plot_without_optional_sample_metadata(self):
+        histogram = self.histogram('m15_ctau_7p46324902em7mm')
+        with patch('Logger.warn') as warn:
+            rows = self.inputs([15])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['histogram_path'], str(histogram))
+        self.assertAlmostEqual(rows[0]['proper_ctau_mm'], 7.46324902e-7)
+        self.assertTrue(warn.called)
+
 
 class MergedSampleTest(unittest.TestCase):
     def setUp(self):

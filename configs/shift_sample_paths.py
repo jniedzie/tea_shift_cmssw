@@ -511,38 +511,67 @@ def available_bsm_campaign_histograms(base_path, campaign, masses=None, mean_lab
     if masses == set() or (flights == set() and epsilons == set()):
         return []
     from Logger import warn
-    pattern = re.compile(r"darkphoton_(m([0-9]+(?:p[0-9]+)?)_(?:prompt|lab_([0-9]+(?:p[0-9]+)?)m|epsilon_([0-9]+(?:p[0-9]+)?(?:e[+-]?[0-9]+)?)))")
+    pattern = re.compile(r"darkphoton_(m([0-9]+(?:p[0-9]+)?)_(?:prompt|lab_([0-9]+(?:p[0-9]+)?)m|epsilon_([0-9]+(?:p[0-9]+)?(?:e[+-]?[0-9]+)?)|ctau_([0-9]+(?:p[0-9]+)?(?:e[mp][0-9]+)?)mm))")
     points = []
     try:
         for directory in Path(base_path).iterdir():
             match = pattern.fullmatch(directory.name)
             if not match or not directory.is_dir():
                 continue
+            # Old names remain links for immutable production receipts. Only
+            # discover their canonical physical directory, to avoid duplicates.
+            if directory.is_symlink() and '_ctau_' not in directory.name and '_ctau_' in directory.resolve().name:
+                continue
             name = match.group(1)
             mass = float(match.group(2).replace("p", "."))
             flight = float(match.group(3).replace("p", ".")) if match.group(3) else None
             epsilon = float(match.group(4).replace("p", ".")) if match.group(4) else None
+            ctau = None
+            if match.group(5):
+                ctau = float(match.group(5).replace('em', 'e-').replace('ep', 'e+').replace('p', '.'))
+                # This is sample parameter metadata, not a production-validation
+                # dependency. A ready histogram can still be plotted without it.
+                metadata_path = directory / 'sample.json'
+                try:
+                    metadata = json.loads(metadata_path.read_text())
+                    if (metadata.get('schema') != 'shift-dark-photon-sample-v1' or
+                            metadata.get('point') != name or metadata.get('mass_gev') != mass):
+                        raise ValueError('Sample parameters belong to another physical point')
+                    ctau = metadata['proper_ctau_mm']
+                    flight = metadata.get('target_mean_lab_flight_m')
+                    if metadata.get('selector_kind') == 'epsilon':
+                        epsilon = metadata['epsilon']
+                except (OSError, ValueError, KeyError, TypeError) as error:
+                    warn(f"Cannot read optional DP parameters from {metadata_path}: {error}. "
+                         "Plotting the available proper-lifetime point.")
             if masses is not None and mass not in masses:
                 continue
             if epsilon is None and flights is not None and flight not in flights:
                 continue
             if epsilon is not None and epsilons is not None and epsilon not in epsilons:
                 continue
-            points.append((mass, flight, epsilon, name, directory))
+            points.append((mass, flight, epsilon, name, directory, ctau))
     except OSError as error:
         warn(f"Cannot read BSM histogram directories in {base_path}: {error}. Continuing with available samples.")
         return []
     result = []
-    for mass, flight, epsilon, name, directory in sorted(points, key=lambda point:
+    seen_histograms = set()
+    for mass, flight, epsilon, name, directory, ctau in sorted(points, key=lambda point:
             (point[0], point[2] is not None, -1 if point[1] is None else point[1], point[2] or 0)):
         histogram_directory = directory / campaign / "histograms_merged"
         histogram = single_root_file(histogram_directory, allow_missing=True, cache_directory=cache_directory)
         if histogram is None:
             warn(f"Skipping BSM {name}: no histogram file is available in {histogram_directory}.")
             continue
+        resolved = str(Path(histogram).resolve())
+        if resolved in seen_histograms:
+            continue
+        seen_histograms.add(resolved)
         row = dict(name=name, histogram_path=histogram, mass_gev=mass, mean_lab_flight_m=flight)
         if epsilon is not None:
             row['epsilon'] = epsilon
+        if ctau is not None:
+            row['proper_ctau_mm'] = ctau
         result.append(row)
     if masses is not None and flights is not None:
         present = {(point[0], point[1]) for point in points if point[2] is None}
