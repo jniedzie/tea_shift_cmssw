@@ -88,7 +88,8 @@ ShiftHistogramsFiller::ShiftHistogramsFiller(shared_ptr<HistogramsHandler> histo
   try {
     string weightsBranchName;
     config.GetValue("weightsBranchName", weightsBranchName);
-    weightMcDiagnostics = weightsBranchName == "shiftSamplingGenWeight";
+    weightMcDiagnostics = weightsBranchName == "shiftSamplingGenWeight" ||
+                          weightsBranchName == "shiftRecoveryGenWeight";
   } catch (const Exception&) {}
   // Physical constrained values are zero placeholders when the fit failed.
   // These bookings are custom so the generic filler cannot include failures.
@@ -126,7 +127,7 @@ ShiftHistogramsFiller::ShiftHistogramsFiller(shared_ptr<HistogramsHandler> histo
 ShiftHistogramsFiller::~ShiftHistogramsFiller() {}
 
 void ShiftHistogramsFiller::FillDiagnostic(const string& name, double value) {
-  // Keep legacy raw diagnostics; representative MC uses its configured W/p.
+  // Keep legacy raw diagnostics; sampled MC uses its configured event weight.
   // Use the existing event weight once for efficiencies and diagnostic shapes.
   if (weightMcDiagnostics)
     histogramsHandler->Fill(name, value);
@@ -183,7 +184,7 @@ void ShiftHistogramsFiller::SetupBdtDiagnostics(TFile* inputFile) {
   for (string const field : {"muonIdx1", "muonIdx2", "mass", "vx", "vy", "vz",
                              "topologyMin", "topologyMax", "isOS", "dcaValid", "dca"})
     required.push_back("ShiftDimuonVertex_" + field);
-  if (enableTruthDiagnostics && !bdtWeightsBranch.empty()) required.push_back(bdtWeightsBranch);
+  if (!bdtWeightsBranch.empty()) required.push_back(bdtWeightsBranch);
   if (bdtTruthDiagnostics) {
     for (string const field : {"hitGenPartIdx", "hitTruthPurity", "hitTruthMatchedLayers", "hitSimTrackId"})
       required.push_back("ShiftMuon_" + field);
@@ -248,7 +249,7 @@ string ShiftHistogramsFiller::BdtTruthLabel(const shared_ptr<PhysicsObjects>& mu
 
 void ShiftHistogramsFiller::FillBdtDiagnostics(const shared_ptr<Event>& event) {
   if (!enableBdtDiagnostics || !bdtScoreAvailable) return;
-  double const weight = enableTruthDiagnostics && !bdtWeightsBranch.empty() ?
+  double const weight = !bdtWeightsBranch.empty() ?
       event->GetAs<double>(bdtWeightsBranch) : 1.;
   if (!isfinite(weight)) throw runtime_error("Nonfinite configured BDT event weight");
   ++bdtEvents;
@@ -302,8 +303,8 @@ void ShiftHistogramsFiller::SaveBdtMetadata() {
   metadata << setprecision(17) << "{\"schema\":\"shift-dimuon-bdt-histograms-v2\",\"complete\":true,\"scope\":\"input_file\",\"score_available\":"
       << (bdtScoreAvailable ? "true" : "false") << ",\"truth_diagnostics\":"
       << (bdtTruthDiagnostics ? "true" : "false") << ",\"score_selection_applied\":false,\"weights_branch\":"
-      << quoted(enableTruthDiagnostics ? bdtWeightsBranch : "")
-      << ",\"weight_application_count\":" << (enableTruthDiagnostics && !bdtWeightsBranch.empty() ? 1 : 0)
+      << quoted(bdtWeightsBranch)
+      << ",\"weight_application_count\":" << (!bdtWeightsBranch.empty() ? 1 : 0)
       << ",\"events\":" << bdtEvents << ",\"pairs\":" << bdtPairs
       << ",\"event_sumw\":" << bdtEventSumw << ",\"event_sumw2\":" << bdtEventSumw2
       << ",\"pair_sumw\":" << bdtPairSumw << ",\"pair_sumw2\":" << bdtPairSumw2

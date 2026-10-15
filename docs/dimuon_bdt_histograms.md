@@ -307,3 +307,18 @@ evaluation. Read the study README and `current_refinement/condor/submission.json
 before resuming. Wait for all archived fit receipts and inspect the six jobs
 before locking families and generating its development or signal figures.
 No new classifier or selection cut is deployed in the ntuples or histograms.
+
+The October14 overall recommendation is the two-member rich119-input DNN
+ensemble at mean score>=0.3016294240951538. It retains90.27% of genuine SM
+development pairs and rejects52.04% of fakes;30 new signal points retain
+701/760 known genuine pairs. The selected score retains reconstructed
+category information through its existing topology inputs. See the single
+recommended model and final PDFs in
+[`plots/Vertex_best_20261014/`](../plots/Vertex_best_20261014/README.md).
+Selection uses validation rejection, dependence and member-omission stability;
+the signal grid never changes the cut. Reconstructed proper length is a
+nominal-target proxy, with true mean proper lifetime shown separately from
+GEN audits. Finer bins still expose reconstructed tails and many signal
+points have insufficient support. This is a working choice, not a final
+physics cut or validated J/psi luminosity correction. Existing production
+scores and ordinary histogram selections are unchanged.
