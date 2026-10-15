@@ -11,6 +11,7 @@ import argparse
 import copy
 import hashlib
 import importlib
+import inspect
 import json
 import math
 from pathlib import Path
@@ -35,6 +36,9 @@ def settings(config):
     points = {name: report['signals'][name] for name in config.lifetime_points}
     if any(row['mass_gev'] != config.lifetime_mass_gev for row in points.values()):
         raise ValueError('Lifetime scan must have exactly one mass')
+    if any(not row['source'].get('unit_gen_weights') or
+           row['full_gen_sumw'] != row['counts']['events'] for row in points.values()):
+        raise ValueError('This diagnostic requires the audited unit-weight signal anchors')
     output = Path(config.lifetime_output_path).resolve()
     output.mkdir(parents=True, exist_ok=True)
     return report, points, output
@@ -175,7 +179,8 @@ def build_cache(config):
     for name, row in points.items():
         destination = output / 'data' / (name + '.npz')
         receipt = destination.with_suffix('.json')
-        binding = dict(yields_sha256=digest(config.yields_path), source_sha256=digest(__file__),
+        algorithm = inspect.getsource(build_cache) + inspect.getsource(truth_rows) + inspect.getsource(event_category)
+        binding = dict(yields_sha256=digest(config.yields_path), cache_algorithm_sha256=hashlib.sha256(algorithm.encode()).hexdigest(),
                        gen_audit=row['source']['gen_audit'], source_file_stats=row['source']['source_file_stats'])
         if receipt.exists():
             old = json.loads(receipt.read_text())
@@ -250,6 +255,42 @@ def load_cache(output, name):
         return {key:source[key] for key in source.files}
 
 
+def reweighting_support(config):
+    _,points,output=settings(config)
+    target=next(row for row in points.values() if row['mean_lab_flight_m']==100.)
+    plt=plotting()
+    figure,axes=plt.subplots(1,2,figsize=(12,5.2))
+    figure.suptitle('Lifetime reweighting: detector response is retained, statistical information changes')
+    records={}
+    x=np.linspace(0,5,200)
+    axes[0].plot(x,np.exp(-x),'k--',label='Target 100 m exponential')
+    for name,row in points.items():
+        if row['mean_lab_flight_m'] not in (30.,1000.):continue
+        lengths=np.array([event['proper_length_mm'] for event in truth_rows(row).values()])
+        weights=lifetime_weights({'proper_length_mm':lengths},row['proper_ctau_mm'],target['proper_ctau_mm'])
+        axes[0].hist(lengths/target['proper_ctau_mm'],bins=np.linspace(0,5,26),
+            weights=weights/len(weights)/.2,histtype='step',
+            label=f"{row['mean_lab_flight_m']:g} m source, estimated effective N = {weights.sum()**2/np.square(weights).sum():.0f}")
+        ratio=target['proper_ctau_mm']/row['proper_ctau_mm']
+        records[name]=dict(generated=len(weights),estimated_effective_events=float(weights.sum()**2/np.square(weights).sum()),
+            target_over_source_ctau=ratio,finite_theoretical_weight_variance=ratio<2,
+            weighted_total_over_original_gen=float(weights.mean()))
+    ratio=np.linspace(.01,1.999,400)
+    axes[1].plot(ratio,ratio*(2-ratio),label='Ideal effective N / generated N')
+    axes[1].axvspan(2,4,color='tab:red',alpha=.12,label='Infinite second moment of weights')
+    axes[1].axvline(1,color='0.4',ls='--')
+    axes[1].axvline(.1,color='tab:green',ls=':',label='1,000 m to 100 m: ratio 0.1')
+    axes[1].axvline(100/30,color='tab:orange',ls=':',label='30 m to 100 m: ratio 3.33')
+    axes[0].set(xlabel=r'Generated proper decay length / target $c\tau$',ylabel='Weighted probability density')
+    axes[1].set(xlabel=r'Target $c\tau$ / source $c\tau$',ylabel='Asymptotic effective fraction (unfiltered decays)',xlim=(0,4),ylim=(0,1.08))
+    for axis in axes:axis.legend(fontsize=8)
+    finish(figure,output,'03_reweighting_support',
+        'For exponential decays, E[w^2] = 1/[r(2-r)] only for r < 2. At r >= 2 the weight variance diverges.\n'
+        'A finite sample can still report an apparently reasonable effective count while missing rare long-flight events. No reco events are read here.')
+    save_json(output/'reweighting_support.json',dict(target_ctau_mm=target['proper_ctau_mm'],records=records,
+        derivation='Integral f_target(t)^2/f_source(t) dt; finite only when 2/lambda_target - 1/lambda_source > 0.'))
+
+
 def lifetime_weights(data, source_ctau, target_ctau):
     # Keep the original full-parent denominator; never renormalize to selected events.
     return (source_ctau / target_ctau) * np.exp(data['proper_length_mm'] * (1/source_ctau-1/target_ctau))
@@ -284,6 +325,7 @@ def diagnostics(config):
         summaries[name] = dict(selected=len(mass),mass_median_gev=float(np.median(mass)),
             mass_q16_q84_gev=np.quantile(mass,[.16,.84]).tolist(),
             delta_z_q16_q50_q84_m=np.quantile(residual,[.16,.5,.84]).tolist(),
+            generated_z_outside_plot=int(np.sum((data['truth_position_mm'][:,2]/1000 < -200) | (data['truth_position_mm'][:,2]/1000 > 180))),
             mass_outside_plot=int(np.sum((mass<0)|(mass>60))),
             delta_z_outside_plot=int(np.sum(np.abs(residual)>100)))
     axes[0].axvline(config.lifetime_mass_gev,color='k',ls='--',lw=1)
@@ -333,12 +375,19 @@ def diagnostics(config):
     finish(figure,output,'05_lifetime_reweighting_closure',
            'An event keeps its simulated detector response; only its decay-probability weight changes. The original 0_initial denominator stays fixed.\n'
            '30 m to 100 m illustrates the risky long-tail extrapolation; 1,000 m to 100 m has better tail coverage. Error bars include weight fluctuations.')
+    longer = next(record for name,record in rows.items() if points[name]['mean_lab_flight_m']==1000.)
+    weight_pull = (longer['all_parent_weight_mean']-1)/longer['all_parent_weight_mean_error']
+    closure_passed = abs(weight_pull)<3 and all(abs(value)<3 for value in longer['category_pulls'] if value is not None)
     save_json(output/'closure.json',dict(target=target_name,records=rows,
+        shrinking_lifetime_closure_passed=closure_passed,weight_normalization_pull=weight_pull,
         statement='Finite-MC closure diagnostic, not a detector-data calibration or proof of validity outside sampled support.'))
 
 
 def prepare_scan_yields(config):
     report, points, output = settings(config)
+    closure = json.loads((output/'closure.json').read_text())
+    if not closure['shrinking_lifetime_closure_passed']:
+        raise ValueError('Independent lifetime closure failed; do not fit interpolated templates')
     selected = copy.deepcopy(report)
     selected['signals'] = copy.deepcopy(points)
     anchors = [(name,row) for name,row in points.items() if row['mean_lab_flight_m'] is not None]
@@ -467,14 +516,14 @@ def write_receipt(config):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config',default='shift_limits_config')
-    parser.add_argument('--stage',choices=('overview','cache','diagnostics','prepare','limits'),required=True)
+    parser.add_argument('--stage',choices=('overview','support','cache','diagnostics','prepare','limits'),required=True)
     parser.add_argument('--point',help='One cache canary, before the complete one-mass cache')
     args=parser.parse_args()
     config=importlib.import_module(args.config.removesuffix('.py'))
     if args.point:
         if args.stage!='cache' or args.point not in config.lifetime_points:raise ValueError('Unsupported cache canary')
         config.lifetime_points=(args.point,)
-    {'overview':overview,'cache':build_cache,'diagnostics':diagnostics,
+    {'overview':overview,'support':reweighting_support,'cache':build_cache,'diagnostics':diagnostics,
      'prepare':prepare_scan_yields,'limits':draw_limits}[args.stage](config)
     write_receipt(config)
 
