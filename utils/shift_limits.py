@@ -56,6 +56,11 @@ def validate_yields(report, config):
             for category, value in record["yields"].items():
                 if not math.isfinite(value) or value < 0:
                     raise ValueError(f"Invalid expected yield for {name}/{category}: {value}")
+                if "binned_yields" in record:
+                    bins = record["binned_yields"][category]
+                    if (not bins or any(not math.isfinite(entry) or entry < 0 for entry in bins)
+                            or not math.isclose(math.fsum(bins), value, rel_tol=1.e-9, abs_tol=1.e-12)):
+                        raise ValueError("Mass bins do not preserve the expected yield: " + name + "/" + category)
             if sample_type == "signals":
                 sigma = float(record["reference_cross_section_pb"])
                 if not math.isfinite(sigma) or sigma <= 0:
@@ -65,9 +70,17 @@ def validate_yields(report, config):
 def reference_cross_section(signal, backgrounds, categories):
     """Condition the fit while preserving every physical signal rate ratio."""
     physical_sigma = float(signal["reference_cross_section_pb"])
-    rates = {category: float(signal["yields"][category]) / physical_sigma for category in categories}
-    background = {category: math.fsum(float(sample["yields"][category]) for sample in backgrounds.values())
-                  for category in categories}
+    if "binned_yields" in signal:
+        cells = [(category, index) for category in categories
+                 for index in range(len(signal["binned_yields"][category]))]
+        rates = {cell: signal["binned_yields"][cell[0]][cell[1]] / physical_sigma for cell in cells}
+        background = {cell: math.fsum(sample["binned_yields"][cell[0]][cell[1]]
+                                     for sample in backgrounds.values()) for cell in cells}
+        categories = cells
+    else:
+        rates = {category: float(signal["yields"][category]) / physical_sigma for category in categories}
+        background = {category: math.fsum(float(sample["yields"][category]) for sample in backgrounds.values())
+                      for category in categories}
     positive_background = [category for category in categories if background[category] > 0]
     background_total = math.fsum(background[category] for category in positive_background)
     signal_total = math.fsum(rates[category] for category in positive_background)
@@ -103,6 +116,28 @@ def write_count_histograms(path, rates):
     root_file.Close()
 
 
+def write_binned_histograms(path, rates):
+    """Write the already normalized, audited mass bins for native TEA cards."""
+    import ROOT
+    root_file = ROOT.TFile(str(path), "RECREATE")
+    if root_file.IsZombie():
+        raise RuntimeError("Cannot write prepared input " + str(path))
+    for category, values in rates.items():
+        hist = ROOT.TH1D("mass_" + category, "Reconstructed mass bins", len(values), 0., len(values))
+        for index, value in enumerate(values, 1):
+            hist.SetBinContent(index, value)
+            hist.SetBinError(index, 0.)
+        hist.SetEntries(1.)
+        hist.Write()
+        for index, value in enumerate(values):
+            single = ROOT.TH1D("mass_" + category + "_bin" + str(index), "One reconstructed mass bin", 1, 0., 1.)
+            single.SetBinContent(1, value)
+            single.SetBinError(1, 0.)
+            single.SetEntries(1.)
+            single.Write()
+    root_file.Close()
+
+
 def prepare_inputs(config):
     report = json.loads(Path(config.yields_path).read_text())
     validate_yields(report, config)
@@ -131,14 +166,22 @@ def prepare_inputs(config):
                     yields_sha256=input_hash, signals={}, backgrounds={})
     for name, sample in report["backgrounds"].items():
         path = output / ("background_" + name + ".root")
-        write_count_histograms(path, sample["yields"])
+        if "binned_yields" in sample:
+            write_binned_histograms(path, sample["binned_yields"])
+        else:
+            write_count_histograms(path, sample["yields"])
         manifest["backgrounds"][name] = dict(sample, file_path=str(path), file_sha256=digest(path))
     for name, sample in report["signals"].items():
         sigma = reference_cross_section(sample, report["backgrounds"], config.categories)
         physical_sigma = float(sample["reference_cross_section_pb"])
         rates = {category: value * sigma / physical_sigma for category, value in sample["yields"].items()}
         path = output / ("signal_" + name + ".root")
-        write_count_histograms(path, rates)
+        if "binned_yields" in sample:
+            bins = {category: [value * sigma / physical_sigma for value in values]
+                    for category, values in sample["binned_yields"].items()}
+            write_binned_histograms(path, bins)
+        else:
+            write_count_histograms(path, rates)
         manifest["signals"][name] = dict(sample, file_path=str(path), file_sha256=digest(path),
                                          combine_reference_cross_section_pb=sigma,
                                          combine_reference_yields=rates)
@@ -152,7 +195,8 @@ def category_config(config, manifest, category):
     current = SimpleNamespace(**{key: value for key, value in vars(config).items() if not key.startswith("__")})
     current.config_source_path = getattr(config, "__file__", getattr(config, "config_source_path", None))
     current.category = category
-    current.histogram = Histogram(name="count_" + category, norm_type=NormalizationType.none)
+    current.histogram = Histogram(name=getattr(config, "histogram_prefix", "count_") + category,
+                                  norm_type=NormalizationType.none)
     current.signal_samples, current.background_samples, _ = load_limit_samples(config.prepared_input_manifest)
     current.samples = current.signal_samples + current.background_samples
     current.nuisances = dict(signal_norm={"signal": 1.30},
@@ -161,6 +205,8 @@ def category_config(config, manifest, category):
 
 
 def create_cards(config, manifest, combine_setup):
+    if getattr(config, "split_mass_bins", False):
+        return create_mass_bin_cards(config, manifest, combine_setup)
     import ROOT
     from HistogramsManager import HistogramsManager
     from limits_producer import get_datacard_file_name
@@ -232,6 +278,88 @@ def create_cards(config, manifest, combine_setup):
             artifacts_sha256={str(path): digest(path) for path in artifacts}), indent=2) + "\n")
     finally:
         for file in root_files.values():
+            file.Close()
+    return cards
+
+
+def create_mass_bin_cards(config, manifest, combine_setup):
+    """An equivalent binned likelihood using stable one-bin Poisson channels.
+
+    TEA writes every component; combineCards.py groups bins into categories and
+    their combination. No change to rates, normalization nuisances or mass bins.
+    """
+    import ROOT
+    from Histogram import Histogram
+    from HistogramNormalizer import NormalizationType
+    from HistogramsManager import HistogramsManager
+    from limits_producer import get_datacard_file_name
+    directory = Path(config.datacards_output_path).resolve()
+    directory.mkdir(parents=True, exist_ok=True)
+    signature = dict(yields_sha256=manifest["yields_sha256"], adapter_sha256=digest(__file__),
+                     representation="One Poisson channel per mass bin",
+                     nuisance_model={"signal_norm": 1.30, "background_norm": 1.30})
+    receipt = directory / "manifest.json"
+    if receipt.exists():
+        old = json.loads(receipt.read_text())
+        if old["signature"] != signature:
+            raise ValueError("Saved Poisson-bin model changed; choose a new output directory")
+        for path, checksum in old["artifacts_sha256"].items():
+            if digest(path) != checksum:
+                raise ValueError("Saved Poisson-bin card changed: " + path)
+        return old["cards"]
+    files = {name: ROOT.TFile.Open(row["file_path"], "READ")
+             for kind in ("signals", "backgrounds") for name, row in manifest[kind].items()}
+    cards, commands = [], []
+
+    def combine(name, components):
+        arguments = [label.replace("-", "_") + "=" + str(directory / (card_name + ".txt"))
+                     for label, card_name in components]
+        commands.append("combineCards.py " + shlex.join(arguments) + " > " +
+                        shlex.quote(str(directory / (name + ".txt"))))
+
+    try:
+        for point, row in manifest["signals"].items():
+            combined_components = []
+            for category in config.categories:
+                current = category_config(config, manifest, category)
+                signal = next(sample for sample in current.signal_samples if sample.name == point)
+                category_reference = reference_cross_section(row, manifest["backgrounds"], (category,))
+                combined_reference = row["combine_reference_cross_section_pb"]
+                category_components = []
+                for index in range(len(row["binned_yields"][category])):
+                    current.histogram = Histogram(name="mass_" + category + "_bin" + str(index),
+                                                  norm_type=NormalizationType.none)
+                    base_name = get_datacard_file_name(current, signal)
+                    label = category + "_bin" + str(index)
+                    for suffix, factor, destination in (
+                            ("_component", 1., combined_components),
+                            ("_category_component", category_reference/combined_reference, category_components)):
+                        manager = HistogramsManager(current, files, base_name + suffix)
+                        manager.addHistosample(current.histogram, signal)
+                        manager.histosamples[-1][0].hist.Scale(factor)
+                        for background in current.background_samples:
+                            manager.addHistosample(current.histogram, background)
+                        manager.normalizeHistograms()
+                        manager.buildStacks()
+                        manager.saveDatacards()
+                        destination.append((label, base_name + suffix))
+                name = "datacard_mass_" + category + "_" + point
+                combine(name, category_components)
+                cards.append(dict(point=point, channel=category, name=name,
+                                  combine_reference_cross_section_pb=category_reference))
+            name = "datacard_combined_" + point
+            combine(name, combined_components)
+            cards.append(dict(point=point, channel="combined", name=name,
+                              combine_reference_cross_section_pb=row["combine_reference_cross_section_pb"]))
+        script = "set -e -o pipefail\n" + "\n".join(commands) + "\n"
+        (directory / "combine_cards.sh").write_text(script)
+        subprocess.run(["bash", "-lc", "set -e -o pipefail; " + combine_setup + "; bash -s"],
+                       input=script, text=True, capture_output=True, check=True)
+        artifacts = list(directory.glob("*.txt")) + list(directory.glob("*.root"))
+        receipt.write_text(json.dumps(dict(signature=signature, cards=cards,
+            artifacts_sha256={str(path): digest(path) for path in artifacts}), indent=2) + "\n")
+    finally:
+        for file in files.values():
             file.Close()
     return cards
 

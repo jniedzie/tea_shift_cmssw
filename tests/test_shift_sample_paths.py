@@ -16,6 +16,30 @@ from shift_sample_paths import latest_merged_sample, validated_nano_files, valid
 import shift_sample_paths
 
 
+class StreamingHistogramInputsTest(unittest.TestCase):
+    def test_missing_file_warns_without_hiding_ready_snapshot(self):
+        import ROOT
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            missing = directory / 'missing.root'
+            ready = directory / 'ready.root'
+            source = ROOT.TFile(str(ready), 'RECREATE')
+            ROOT.TObjString(json.dumps(dict(schema='shift-streaming-normalization-v1',
+                stratum='qcd_20toinf', closed_cohorts=True, full_source_trials=100,
+                sigma_nd_pb=7.e10))).Write('ShiftStreamingNormalization')
+            source.Close()
+            inventory = directory / 'inputs.json'
+            inventory.write_text(json.dumps(dict(schema='shift-streaming-plot-inputs-v1',
+                samples=[dict(stratum='qcd_0to1', path=str(missing)),
+                         dict(stratum='qcd_20toinf', path=str(ready))])))
+            with patch('Logger.warn') as warn:
+                rows = shift_sample_paths.streaming_histogram_inputs(inventory)
+            self.assertEqual([row['stratum'] for row in rows], ['qcd_20toinf'])
+            self.assertEqual(rows[0]['full_source_trials'], 100)
+            warn.assert_called_once()
+            self.assertIn(str(missing), warn.call_args.args[0])
+
+
 class AvailableBsmHistogramsTest(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -155,6 +179,59 @@ class AvailableBsmHistogramsTest(unittest.TestCase):
         self.assertEqual(rows[0]['histogram_path'], str(histogram))
         self.assertAlmostEqual(rows[0]['proper_ctau_mm'], 7.46324902e-7)
         self.assertTrue(warn.called)
+
+    def test_physical_lab_rename_keeps_partial_histograms_and_parameters(self):
+        old_point = 'm15_ctau_62p1784451mm'
+        old_histogram = self.histogram(old_point)
+        old_directory = old_histogram.parent.parent.parent
+        metadata = dict(schema='shift-dark-photon-sample-v1', point=old_point, mass_gev=15.,
+                        proper_ctau_mm=62.17844507957349, epsilon=1.0955803943963588e-7,
+                        target_mean_lab_flight_m=5., selector_kind='mean_lab_flight')
+        (old_directory / 'sample.json').write_text(json.dumps(metadata))
+        before = self.inputs([15], [5], [])
+
+        # The physical directory moves; no production receipt or alias is needed.
+        new_point = 'm15_lab_5m'
+        new_directory = old_directory.with_name('darkphoton_' + new_point)
+        old_directory.rename(new_directory)
+        metadata['point'] = new_point
+        (new_directory / 'sample.json').write_text(json.dumps(metadata))
+        (self.base / 'darkphoton_m15_lab_30m' / self.campaign).mkdir(parents=True)
+        with patch('Logger.warn') as warn:
+            after = self.inputs([15], [5, 30], [])
+        self.assertEqual(len(after), 1)
+        self.assertEqual(after[0]['name'], new_point)
+        for parameter in ('mass_gev', 'mean_lab_flight_m', 'proper_ctau_mm'):
+            self.assertEqual(after[0][parameter], before[0][parameter])
+        self.assertEqual(Path(after[0]['histogram_path']).read_bytes(), b'available partial histogram')
+        self.assertTrue(warn.called)
+
+    def test_lab_named_epsilon_sample_uses_recorded_mean_flight_and_physical_parameters(self):
+        point = 'm15_lab_0p06m'
+        histogram = self.histogram(point)
+        (histogram.parent.parent.parent / 'sample.json').write_text(json.dumps(dict(
+            schema='shift-dark-photon-sample-v1', point=point, mass_gev=15.,
+            proper_ctau_mm=.7463256382295375, epsilon=1.e-6,
+            target_mean_lab_flight_m=None, mean_lab_flight_m=.060014743,
+            selector_kind='epsilon')))
+        rows = self.inputs([15], [], [1.e-6])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['epsilon'], 1.e-6)
+        self.assertEqual(rows[0]['mean_lab_flight_m'], .060014743)
+        self.assertEqual(rows[0]['proper_ctau_mm'], .7463256382295375)
+
+    def test_scientific_lab_name_needs_no_sample_metadata(self):
+        histogram = self.histogram('m15_lab_4p2em7m')
+        rows = self.inputs([15], [4.2e-7], [])
+        self.assertEqual(rows[0]['histogram_path'], str(histogram))
+        self.assertEqual(rows[0]['mean_lab_flight_m'], 4.2e-7)
+
+    def test_old_ctau_alias_does_not_duplicate_physical_lab_sample(self):
+        histogram = self.histogram('m15_lab_5m')
+        (self.base / 'darkphoton_m15_ctau_62p1784451mm').symlink_to(
+            histogram.parent.parent.parent.name, target_is_directory=True)
+        rows = self.inputs([15], [5], [])
+        self.assertEqual([row['name'] for row in rows], ['m15_lab_5m'])
 
 
 class MergedSampleTest(unittest.TestCase):

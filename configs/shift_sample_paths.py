@@ -13,6 +13,60 @@ import re
 from shift_storage_paths import _canonical_path, resolve_storage_path, tier_directory
 
 
+def streaming_histogram_inputs(inventory_path, *, raw=False):
+    """Read the exposure stored in an available streaming histogram snapshot.
+
+    Plotting needs the ROOT files and this small list, not production sandboxes.
+    Full event and production checks belong to the worker that publishes them.
+    """
+    import ROOT
+    from Logger import warn
+    from teaHelpers import eos_xrootd_url
+
+    inventory = json.loads(Path(inventory_path).read_text())
+    if inventory.get("schema") != "shift-streaming-plot-inputs-v1":
+        raise ValueError("Unsupported streaming histogram list")
+    result = []
+    seen = set()
+    for row in inventory["samples"]:
+        stratum = row["stratum"]
+        if stratum in seen:
+            raise ValueError("Duplicate streaming histogram stratum: " + stratum)
+        seen.add(stratum)
+        path = row["raw_path"] if raw else row["path"]
+        path = eos_xrootd_url(path) or path
+        try:
+            source = ROOT.TFile.Open(path)
+        except OSError:
+            warn("Skipping unavailable streaming histogram: " + path)
+            continue
+        if not source or source.IsZombie():
+            warn("Skipping unavailable streaming histogram: " + path)
+            continue
+        try:
+            record = source.Get("ShiftStreamingNormalization")
+            if not record:
+                raise ValueError("Missing closed GEN exposure in " + path)
+            metadata = json.loads(record.GetString().Data())
+            diagnostic = metadata.get("diagnostic_only") is True
+            if (metadata.get("schema") != "shift-streaming-normalization-v1" or
+                    metadata.get("stratum") != stratum):
+                raise ValueError("Invalid closed GEN exposure in " + path)
+            if diagnostic:
+                if not raw or metadata.get("histogram_weight") != "one_per_reconstructed_entry":
+                    raise ValueError("Diagnostic histograms support raw counts only: " + path)
+            elif (metadata.get("closed_cohorts") is not True or
+                    metadata.get("full_source_trials", 0) <= 0 or
+                    metadata.get("sigma_nd_pb", 0) <= 0):
+                raise ValueError("Invalid closed GEN exposure in " + path)
+            result.append(dict(stratum=stratum, histogram_path=path,
+                               cross_section_pb=metadata.get("sigma_nd_pb", 0),
+                               full_source_trials=metadata.get("full_source_trials", 0)))
+        finally:
+            source.Close()
+    return result
+
+
 def single_root_file(directory, *, allow_missing=False, cache_directory=None):
     """Resolve one ROOT file; optionally return None for unavailable inputs."""
     directory = Path(directory)
@@ -511,39 +565,41 @@ def available_bsm_campaign_histograms(base_path, campaign, masses=None, mean_lab
     if masses == set() or (flights == set() and epsilons == set()):
         return []
     from Logger import warn
-    pattern = re.compile(r"darkphoton_(m([0-9]+(?:p[0-9]+)?)_(?:prompt|lab_([0-9]+(?:p[0-9]+)?)m|epsilon_([0-9]+(?:p[0-9]+)?(?:e[+-]?[0-9]+)?)|ctau_([0-9]+(?:p[0-9]+)?(?:e[mp][0-9]+)?)mm))")
+    pattern = re.compile(r"darkphoton_(m([0-9]+(?:p[0-9]+)?)_(?:prompt|lab_([0-9]+(?:p[0-9]+)?(?:e[mp+-]?[0-9]+)?)m|epsilon_([0-9]+(?:p[0-9]+)?(?:e[+-]?[0-9]+)?)|ctau_([0-9]+(?:p[0-9]+)?(?:e[mp][0-9]+)?)mm))")
     points = []
     try:
         for directory in Path(base_path).iterdir():
             match = pattern.fullmatch(directory.name)
             if not match or not directory.is_dir():
                 continue
-            # Old names remain links for immutable production receipts. Only
-            # discover their canonical physical directory, to avoid duplicates.
-            if directory.is_symlink() and '_ctau_' not in directory.name and '_ctau_' in directory.resolve().name:
+            # During a naming migration, discover the physical sample directory
+            # once instead of also following any old compatibility names.
+            if directory.is_symlink() and pattern.fullmatch(directory.resolve().name):
                 continue
             name = match.group(1)
             mass = float(match.group(2).replace("p", "."))
-            flight = float(match.group(3).replace("p", ".")) if match.group(3) else None
+            flight = (float(match.group(3).replace('em', 'e-').replace('ep', 'e+').replace('p', '.'))
+                      if match.group(3) else None)
             epsilon = float(match.group(4).replace("p", ".")) if match.group(4) else None
             ctau = None
             if match.group(5):
                 ctau = float(match.group(5).replace('em', 'e-').replace('ep', 'e+').replace('p', '.'))
-                # This is sample parameter metadata, not a production-validation
-                # dependency. A ready histogram can still be plotted without it.
-                metadata_path = directory / 'sample.json'
+            # This is optional sample parameter metadata, not a production-
+            # validation dependency. LAB directories remain directly plottable.
+            metadata_path = directory / 'sample.json'
+            if metadata_path.is_file() or match.group(5):
                 try:
                     metadata = json.loads(metadata_path.read_text())
                     if (metadata.get('schema') != 'shift-dark-photon-sample-v1' or
                             metadata.get('point') != name or metadata.get('mass_gev') != mass):
                         raise ValueError('Sample parameters belong to another physical point')
                     ctau = metadata['proper_ctau_mm']
-                    flight = metadata.get('target_mean_lab_flight_m')
+                    flight = metadata.get('mean_lab_flight_m', metadata.get('target_mean_lab_flight_m', flight))
                     if metadata.get('selector_kind') == 'epsilon':
                         epsilon = metadata['epsilon']
                 except (OSError, ValueError, KeyError, TypeError) as error:
                     warn(f"Cannot read optional DP parameters from {metadata_path}: {error}. "
-                         "Plotting the available proper-lifetime point.")
+                         "Plotting the parameters available in the sample name.")
             if masses is not None and mass not in masses:
                 continue
             if epsilon is None and flights is not None and flight not in flights:

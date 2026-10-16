@@ -450,6 +450,8 @@ def prepare_scan_yields(config):
 
 
 def draw_limits(config):
+    import ROOT
+    ROOT.gROOT.SetBatch(True)
     import limits_plotter
     _,points,output=settings(config)
     data=json.loads((output/'results'/'limits.json').read_text())
@@ -480,6 +482,8 @@ def draw_limits(config):
         current.plots_output_path=str(directory)
         current.experiment_label=f'#bf{{SHIFT}} #it{{Simulation}}, m={config.lifetime_mass_gev:g} GeV'
         current.luminosity_label=f'3 fb^{{-1}}, {level*100:g}% CL'
+        if not all(row.get('expected_bands_validated',False) for row in selected):
+            current.luminosity_label='#splitline{'+current.luminosity_label+'}{#scale[0.65]{Band edges provisional}}'
         limits_plotter.config=current
         limits_plotter.input_path=str(path)
         limits_plotter.draw_brazil_plots()
@@ -513,17 +517,50 @@ def write_receipt(config):
         first_counting_scan=True,full_denominator_preserved=True))
 
 
+def category_relation(config):
+    report,points,output=settings(config)
+    plt=plotting()
+    categories=report['categories']
+    background=np.array([report['background_totals'][name] for name in categories])
+    background_fraction=background/background.sum()
+    figure,axes=plt.subplots(1,2,figsize=(12.3,5.4))
+    figure.suptitle(f'SHIFT simulation: {config.lifetime_mass_gev:g} GeV — category fractions change the signal/background relation')
+    x=np.arange(len(categories))
+    axes[0].bar(x,background_fraction,color='.85',label='Background: fixed category fractions')
+    axes[1].axhline(1,color='k',ls='--',label='Inclusive signal/background ratio')
+    for index,(name,row) in enumerate(points.items()):
+        counts=np.array([row['counts']['categories'][category]['events'] for category in categories])
+        n=counts.sum()
+        fraction=counts/n
+        center=(fraction+.5/n)/(1+1/n)
+        half=np.sqrt(fraction*(1-fraction)/n+.25/n**2)/(1+1/n)
+        error=np.array([fraction-(center-half),center+half-fraction])
+        location=x+(index-2)*.12
+        axes[0].errorbar(location,fraction,yerr=error,fmt='o',capsize=2,label=label(row))
+        axes[1].errorbar(location,fraction/background_fraction,yerr=error/background_fraction,fmt='o',capsize=2,label=label(row))
+    for axis in axes:
+        axis.set_xticks(x)
+        axis.set_xticklabels(categories,rotation=20,ha='right')
+    axes[0].set_ylabel('Category fraction within the selected sample')
+    axes[1].set_ylabel('(Signal/background in category) / inclusive ratio')
+    axes[0].legend(fontsize=7,loc='upper left')
+    axes[1].legend(fontsize=8,loc='upper right')
+    finish(figure,output,'02_signal_background_relation',
+        'Error bars show finite signal-MC statistics, including upper intervals for empty MC categories. Production rate cancels in the right panel.\n'
+        'The counting likelihood fixes background category fractions: a shared 30% normalization uncertainty does not let those fractions vary.')
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config',default='shift_limits_config')
-    parser.add_argument('--stage',choices=('overview','support','cache','diagnostics','prepare','limits'),required=True)
+    parser.add_argument('--stage',choices=('overview','support','categories','cache','diagnostics','prepare','limits'),required=True)
     parser.add_argument('--point',help='One cache canary, before the complete one-mass cache')
     args=parser.parse_args()
     config=importlib.import_module(args.config.removesuffix('.py'))
     if args.point:
         if args.stage!='cache' or args.point not in config.lifetime_points:raise ValueError('Unsupported cache canary')
         config.lifetime_points=(args.point,)
-    {'overview':overview,'support':reweighting_support,'cache':build_cache,'diagnostics':diagnostics,
+    {'overview':overview,'support':reweighting_support,'categories':category_relation,'cache':build_cache,'diagnostics':diagnostics,
      'prepare':prepare_scan_yields,'limits':draw_limits}[args.stage](config)
     write_receipt(config)
 

@@ -69,7 +69,7 @@ def read_segments(path):
     content = json.loads(path.read_text())
     if not math.isclose(float(content["confidence_level"]), 0.9, abs_tol=1e-6):
         raise ValueError("The paper comparison requires a 90% CL contour")
-    segments = content["segments"]
+    segments = content.get("outline_segments", content["segments"])
     for segment in segments:
         if len(segment) < 2:
             raise ValueError("Each contour segment needs at least two points")
@@ -122,6 +122,8 @@ def make_comparison(args):
         raise ValueError("The source figure digest does not match its provenance")
     points, unknown, unsupported = read_expected_points(args.input, args.channel)
     segments = read_segments(args.contour)
+    contour_model = json.loads(args.contour.read_text()) if args.contour else {}
+    polygons = contour_model.get("excluded_polygons", [])
     width, height = provenance["figure_size_points"]
     source = fitz.open(args.source_figure)
     if len(source) != 1:
@@ -147,15 +149,23 @@ def make_comparison(args):
         page.insert_text((673, 67), "no finite MC signal estimate", fontsize=10)
 
     page.show_pdf_page(fitz.Rect(20, top, 20 + width, top + height), source, 0)
+    for polygon in polygons:
+        if len(polygon) < 3:
+            raise ValueError("An excluded polygon needs at least three vertices")
+        coordinates = [paper_coordinates(mass, epsilon, provenance, top) for mass, epsilon in polygon]
+        shape = page.new_shape()
+        shape.draw_polyline(coordinates)
+        shape.finish(color=None, fill=EXPECTED_COLOR, fill_opacity=0.16, closePath=True)
+        shape.commit()
     for segment in segments:
         coordinates = [paper_coordinates(mass, epsilon, provenance, top) for mass, epsilon in segment]
         shape = page.new_shape()
         shape.draw_polyline(coordinates)
-        shape.finish(color=(1, 1, 1), width=5.5)
+        shape.finish(color=(1, 1, 1), width=5.5, closePath=False)
         shape.commit()
         shape = page.new_shape()
         shape.draw_polyline(coordinates)
-        shape.finish(color=EXPECTED_COLOR, width=3.0, dashes="[6 3] 0")
+        shape.finish(color=EXPECTED_COLOR, width=3.0, dashes="[6 3] 0", closePath=False)
         shape.commit()
     for point in points:
         coordinates = paper_coordinates(point["mass_gev"], point["epsilon"], provenance, top)
@@ -165,21 +175,24 @@ def make_comparison(args):
         draw_unknown_marker(page, coordinates)
 
     strongest = min(points, key=lambda point: point["r90"]) if points else None
-    if strongest:
-        x, y = paper_coordinates(strongest["mass_gev"], strongest["epsilon"], provenance, top)
+    if strongest and not segments:
+        location = strongest["mass_gev"],strongest["epsilon"]
+        first_label = f"best sampled r90 = {strongest['r90']:.3g}"
+        second_label = f"m = {strongest['mass_gev']:g} GeV, eps = {strongest['epsilon']:.2g}"
+        x, y = paper_coordinates(*location, provenance, top)
         left, upper, right, lower = provenance["axis_rectangle_points_top_left_origin"]
         label_x = max(20 + left + 3, min(x + 12, 20 + right - 157))
         label_y = max(top + upper + 3, min(y - 38, top + lower - 37))
         label_rect = fitz.Rect(label_x, label_y, label_x + 154, label_y + 32)
         page.draw_line((x + 4, y), (label_x, label_y + 22), color=EXPECTED_COLOR, width=0.9)
         page.draw_rect(label_rect, color=EXPECTED_COLOR, fill=(1, 1, 1), width=0.7)
-        page.insert_text((label_x + 4, label_y + 12),
-                         f"best sampled r90 = {strongest['r90']:.3g}", fontsize=9)
-        page.insert_text((label_x + 4, label_y + 25),
-                         f"m = {strongest['mass_gev']:g} GeV, eps = {strongest['epsilon']:.2g}", fontsize=9)
+        page.insert_text((label_x + 4, label_y + 12), first_label, fontsize=9)
+        page.insert_text((label_x + 4, label_y + 25), second_label, fontsize=9)
 
     excluded_count = sum(point["r90"] < 1 for point in points)
-    if excluded_count == 0:
+    if segments:
+        status = "Expected exclusion: shaded area above the orange boundary, within the stated model coverage."
+    elif excluded_count == 0:
         status = ("Cross-section limits exist; no mass-epsilon exclusion contour within the tested grid."
                   if points else "No finite signal sensitivity estimate from available MC; no exclusion contour.")
     else:
@@ -195,6 +208,12 @@ def make_comparison(args):
         "Source: J. de Blas et al., arXiv:2511.03883v1, Fig. 8.15. CC BY 4.0; new overlay added.",
         "Source confidence levels: 90% except FCC-ee, FCC-hh and LCF (95%); LHeC uses ten expected signal events.",
     ]
+    if contour_model.get("interpretation"):
+        lines[2] = contour_model["interpretation"]
+    if segments:
+        best_mass, best_epsilon = min((point for segment in segments for point in segment),key=lambda point:point[1])
+        lines[2] = (f"Lowest median eps90 = {best_epsilon:.3g} at {best_mass:g} GeV; sigma ~ eps^2, ctau ~ eps^-2; "
+                    "eps > 0.1 is a formal extrapolation.")
     for index, line in enumerate(lines):
         page.insert_text((24, footer + 20 + 16 * index), line, fontsize=10)
     page.insert_link({"kind": fitz.LINK_URI, "from": fitz.Rect(24, footer + 74, width, footer + 86),
@@ -229,9 +248,11 @@ def make_comparison(args):
         "unknown_mc_points": unknown,
         "unsupported_points_omitted": unsupported,
         "contour_segments": segments,
+        "excluded_polygons": polygons,
         "contour_input": str(args.contour) if args.contour else None,
         "contour_input_sha256": hashlib.sha256(args.contour.read_bytes()).hexdigest() if args.contour else None,
-        "interpretation": "Expected physical signal strength; no unprovided epsilon extrapolation or digitization of source curves.",
+        "interpretation": contour_model.get("interpretation",
+            "Expected physical signal strength; no unprovided epsilon extrapolation or digitization of source curves."),
     }
     receipt_path = args.output.with_suffix(".json")
     receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")

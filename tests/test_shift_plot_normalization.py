@@ -154,7 +154,7 @@ class AvailableHistogramPlotConfigTest(unittest.TestCase):
         output.Close()
         return path
 
-    def config(self, *, bsm_campaign=None, flights=(100,), epsilons=None, histogram_rebins=None):
+    def config(self, *, bsm_campaign=None, masses=(15,), flights=(100,), epsilons=None, histogram_rebins=None):
         from Histogram import Histogram
 
         def histogram(*args, **kwargs):
@@ -165,7 +165,7 @@ class AvailableHistogramPlotConfigTest(unittest.TestCase):
 
         with patch.multiple('shift_paths', base_path=str(self.base), campaign=self.campaign,
                             cross_sections={'qcd': {'0to1': 2., '1to2': 3.}},
-                            bsm_campaign=bsm_campaign, bsm_masses_to_plot=[15],
+                            bsm_campaign=bsm_campaign, bsm_masses_to_plot=list(masses),
                             bsm_mean_lab_flights_to_plot=list(flights), bsm_epsilons_to_plot=epsilons,
                             histogram_cache_directory=None), \
                 patch('Histogram.Histogram', side_effect=histogram), \
@@ -225,16 +225,64 @@ class AvailableHistogramPlotConfigTest(unittest.TestCase):
                             expected = f'{title} ({category})' if title else category
                         self.assertEqual(legend.GetHeader(), expected)
 
-    def test_epsilon_samples_use_epsilon_legends_without_production_records(self):
+    def test_legacy_epsilon_sample_without_flight_is_not_mislabeled_prompt(self):
         signal = self.write_histograms(
             self.base / 'darkphoton_m15_epsilon_1e-06' / self.bsm_campaign / 'histograms_merged', 5.)
         with patch('Logger.warn'):
             config = self.config(bsm_campaign=self.bsm_campaign, flights=(), epsilons=[1.e-6])
         self.assertEqual([sample.name for sample in config.samples], ['qcd_0to1', 'm15_epsilon_1e-06'])
         self.assertEqual(config.samples[1].file_path, str(signal))
-        self.assertIn('#epsilon = 1e-06', config.samples[1].legend_description)
-        self.assertEqual(config.samples[1].line_style, 2)
+        self.assertIn('mean lab flight unavailable', config.samples[1].legend_description)
         self.assertEqual(config.samples[1].initial_weight_sum, -1)
+
+    def test_lab_legends_do_not_show_translated_ctau_and_prompt_stays_prompt(self):
+        prompt = self.write_histograms(
+            self.base / 'darkphoton_m15_prompt' / self.bsm_campaign / 'histograms_merged', 5.)
+        for path, flight in ((prompt, None), (self.signal, 100.)):
+            point = path.parent.parent.parent.name.removeprefix('darkphoton_')
+            (path.parent.parent.parent / 'sample.json').write_text(json.dumps(dict(
+                schema='shift-dark-photon-sample-v1', point=point, mass_gev=15.,
+                proper_ctau_mm=.001 if flight is None else 1243.56890159,
+                epsilon=.001 if flight is None else 2.449e-8,
+                target_mean_lab_flight_m=flight, selector_kind='mean_lab_flight')))
+        with patch('Logger.warn'):
+            config = self.config(bsm_campaign=self.bsm_campaign, flights=(None, 100), epsilons=[])
+        signals = config.samples[1:]
+        self.assertEqual(signals[0].legend_description, "A' 15 GeV, prompt")
+        self.assertEqual(signals[1].legend_description, "A' 15 GeV, #LT L_{lab} #GT = 100 m")
+        self.assertEqual([sample.line_style for sample in signals], [1, 1])
+        self.assertNotEqual(signals[0].line_color, signals[1].line_color)
+
+    def test_multiple_masses_keep_mass_colour_and_lab_flight_line_style(self):
+        for point in ('m15_lab_5m', 'm40_lab_5m', 'm40_lab_100m'):
+            self.write_histograms(self.base / ('darkphoton_' + point) / self.bsm_campaign / 'histograms_merged', 5.)
+        with patch('Logger.warn'):
+            config = self.config(bsm_campaign=self.bsm_campaign, masses=(15, 40), flights=(5, 100), epsilons=[])
+        signals = {sample.name: sample for sample in config.samples[1:]}
+        for mass in (15, 40):
+            self.assertEqual(signals[f'm{mass}_lab_5m'].line_color, signals[f'm{mass}_lab_100m'].line_color)
+            self.assertEqual(signals[f'm{mass}_lab_5m'].line_style, 2)
+            self.assertEqual(signals[f'm{mass}_lab_100m'].line_style, 4)
+        self.assertNotEqual(signals['m15_lab_5m'].line_color, signals['m40_lab_5m'].line_color)
+
+    def test_epsilon_origin_lab_legends_use_reference_flights_with_separate_colours(self):
+        for point, flight, epsilon in (('m15_lab_0p06m', .060014743, 1.e-6),
+                                      ('m15_lab_6em06m', .0000060014743, 1.e-4)):
+            path = self.write_histograms(
+                self.base / ('darkphoton_' + point) / self.bsm_campaign / 'histograms_merged', 5.)
+            (path.parent.parent.parent / 'sample.json').write_text(json.dumps(dict(
+                schema='shift-dark-photon-sample-v1', point=point, mass_gev=15.,
+                proper_ctau_mm=.7463256382295375, epsilon=epsilon,
+                target_mean_lab_flight_m=None, mean_lab_flight_m=flight,
+                selector_kind='epsilon')))
+        with patch('Logger.warn'):
+            config = self.config(bsm_campaign=self.bsm_campaign, flights=(), epsilons=[1.e-6, 1.e-4])
+        signals = config.samples[1:]
+        self.assertEqual({sample.legend_description for sample in signals}, {
+            "A' 15 GeV, #LT L_{lab} #GT #approx 0.06 m",
+            "A' 15 GeV, #LT L_{lab} #GT #approx 6e-06 m"})
+        self.assertEqual([sample.line_style for sample in signals], [1, 1])
+        self.assertNotEqual(signals[0].line_color, signals[1].line_color)
 
     def test_native_normalization_uses_available_cutflow_and_matches_signal_area(self):
         from HistogramNormalizer import HistogramNormalizer, NormalizationType
