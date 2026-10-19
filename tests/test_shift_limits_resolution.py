@@ -34,5 +34,16 @@ class ResolutionTest(unittest.TestCase):
         expected=np.array([poisson_deviance_half(float(x)) for x in deltas])
         np.testing.assert_allclose(poisson_deviance_array(deltas),expected,rtol=1.e-12,atol=0.)
 
+    def test_zero_background_matches_analytic_profile(self):
+        from scipy.special import lambertw
+        k=math.log(1.30)
+        signal=3.0
+        u=float(lambertw(signal*k*k).real)
+        self.assertAlmostEqual(profile_q(1.,[signal],[0.]),(u*u+2*u)/(k*k),places=9)
+        self.assertAlmostEqual(profile_q(1.,[1.,2.,0.],[0.,0.,0.]),(u*u+2*u)/(k*k),places=9)
+
+    def test_empty_no_signal_cell_does_not_change_profile(self):
+        self.assertAlmostEqual(profile_q(1.,[3.],[100.]),profile_q(1.,[3.,0.],[100.,0.]),places=10)
+
 
 if __name__=='__main__':unittest.main()

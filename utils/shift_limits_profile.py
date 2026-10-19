@@ -30,7 +30,16 @@ def poisson_deviance_array(delta):
 
 def profile_q(cross_section_pb, signal_per_pb, backgrounds):
     backgrounds = np.asarray(backgrounds,dtype=float)
-    signal_ratios = cross_section_pb*np.asarray(signal_per_pb,dtype=float)/backgrounds
+    signals = cross_section_pb*np.asarray(signal_per_pb,dtype=float)
+    if (signals.shape != backgrounds.shape or np.any(backgrounds < 0)
+            or np.any(signals < 0) or not np.all(np.isfinite(backgrounds + signals))):
+        raise ValueError('Expected finite nonnegative signal/background cells')
+    # A raw-MC zero is an explicit model assumption. Its Asimov observation is
+    # zero and its exact Poisson deviance is 2*s, without any background ratio.
+    positive = backgrounds > 0
+    empty_signal = float(np.sum(signals[~positive]))
+    backgrounds = backgrounds[positive]
+    signal_ratios = signals[positive]/backgrounds
 
     def q_given_signal_nuisance(theta_signal):
         signal_scale = math.exp(LOG_KAPPA * theta_signal)
@@ -50,6 +59,7 @@ def profile_q(cross_section_pb, signal_per_pb, backgrounds):
         background_shift = math.expm1(LOG_KAPPA * theta_background)
         deltas = background_shift + signal_ratios * signal_scale
         return (2. * float(np.sum(backgrounds * poisson_deviance_array(deltas)))
+                + 2. * empty_signal * signal_scale
                 + theta_signal ** 2 + theta_background ** 2)
 
     profile = minimize_scalar(q_given_signal_nuisance, bounds=(-20., 0.), method='bounded',

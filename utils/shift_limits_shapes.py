@@ -533,7 +533,7 @@ def draw_native_brazil(config, groups):
         current.y_min, current.y_max = min(values)*.5,max(values)*3.
         current.histogram = Histogram(name='mass_scan')
         current.experiment_label = '#splitline{#bf{SHIFT} #it{Simulation}}{#scale[0.65]{'+channel+'}}'
-        label = f'3 fb^{{-1}}, {round(100*level)}% CL'
+        label = f'{config.luminosity/1000:g} fb^{{-1}}, {round(100*level)}% CL'
         warning = None
         if any(not row['validation']['bands_valid'] for row in valid): warning = 'Band edges provisional'
         if len(valid)!=len(rows): warning = 'Unresolved points omitted'

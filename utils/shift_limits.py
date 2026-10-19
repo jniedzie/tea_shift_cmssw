@@ -429,7 +429,7 @@ def draw_brazil_plots(config, manifest, records):
         current.x_min = min(record["mass_gev"] for record in selected) * .8
         current.x_max = max(record["mass_gev"] for record in selected) * 1.2
         current.experiment_label = "#bf{SHIFT} #it{Simulation}"
-        current.luminosity_label = f"3 fb^{{-1}}, {round(level * 100)}% CL, {channel}"
+        current.luminosity_label = f"{config.luminosity/1000:g} fb^{{-1}}, {round(level * 100)}% CL, {channel}"
         values = [value for record in selected for value in record["expected_cross_section_quantiles_pb"].values()]
         current.y_min = min(values) * .5
         current.y_max = max(values) * 3.
