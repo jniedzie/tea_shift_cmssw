@@ -1,6 +1,83 @@
 <!-- Code style: human-code. -->
 # Running the SHIFT MC histogrammer
 
+## Histogram files while GEN and reconstruction continue
+
+The production controller can call `utils/shift_streaming_histograms.py` after
+all selected reconstruction jobs for one predetermined GEN source have returned.
+The `cohort` command checks every original event identity and the Double native
+weight, inclusion probability and corrected `W/p` branches. It uses the ordinary
+TEA merger to group those Nano files, then runs `shift_histogrammer` with the main
+configuration for weighted and raw counts. The merged Nano remains available
+for later analysis and training.
+
+```bash
+python utils/shift_streaming_histograms.py cohort \
+  --descriptor /absolute/path/cohort.json \
+  --output-directory /worker/scratch/new_cohort \
+  --histogrammer /frozen/tea/bin/shift_histogrammer \
+  --merge-script /frozen/tea/bin/merge.py \
+  --publish-directory /eos/user/j/jniedzie/shift_cmssw/.../cohort \
+  --plotter /frozen/tea/bin/plotter.py \
+  --plot-output /worker/scratch/new_cohort/plots \
+  --retire-consumed-nano
+```
+
+The descriptor uses `shift-streaming-nano-cohort-v1`. It supplies the complete
+expected reconstruction-job list, exact Nano paths/checksums/counts,
+`selected_events` from the frozen sampling plan, and the full source ND-trial
+normalization authority. Missing jobs cannot silently become a smaller rate
+sample. GEN files and their complete attempted-event denominators remain intact.
+
+With publication enabled, all three ROOT outputs receive a SHA-256 readback.
+Only then may `--retire-consumed-nano` remove the exact original per-event Nano
+files. Their replacements, accounting and per-file deletion receipts remain.
+Cleanup failure is recorded separately in `nano_cleanup.json`; it does not
+invalidate or repeat completed histogram processing. Publications default to
+32 MiB, including receipts and plots. A larger batch may explicitly request up
+to 512 MiB when the controller reserves the same storage before submission.
+
+The `snapshot` command takes an exact predetermined list of complete cohort
+receipts. It merges raw weighted sums within each pThat bin and embeds the sum
+of distinct source trial counts. The ordinary plotter reads that ROOT metadata
+and applies `sigma_ND / full_ND_trials` once. It never substitutes selected Nano
+counts or multiplies by the muon-filter efficiency again. Immediate per-source
+plots show raw counts; rate snapshots require the declared cohorts to close.
+All views remain unfinished-production diagnostics. Stored squared-weight
+errors and histogram effective counts do not establish independent dimuon
+statistics or the exact variance of sampling without replacement.
+
+To replace generic QCD in the ordinary SM stack, keep `campaign` unchanged and
+select `sm_streaming_histogram_inventory` in `configs/shift_paths.py`.
+`sm_streaming_plot_kind = "rate"` keeps DY, J/psi and the selected signals;
+`"raw"` gives a separate QCD-only count check. The inventory can carry
+`reference_samples`: existing DY/Jpsi events histogrammed with the same mass
+and pT ranges as the new QCD. Their ROOT metadata supplies the original full
+GEN weight sum and cross section. Selected-event cutflows are not used as the
+normalization denominator for these replacements.
+
+Completed snapshots publish `plot_inputs.json` with durable EOS paths. The
+controller copies the checked list beside its project PDFs and atomically
+advances `latest_ready.json` after publication. A ready snapshot from a previous
+production may seed that alias, with its real source count and an explicit
+`seed_from_previous_production` marker, until the first new snapshot is ready.
+
+For explicitly chosen reconstruction tests, use the same utility's
+`diagnostic` stage. Its `shift-streaming-nano-diagnostic-v1` descriptor declares
+`diagnostic_only: true`, `normalization_ready: false`, and up to twenty exact
+original event IDs and native weights. Each input may give a pinned Nano
+path/checksum or a future completed RECO receipt with the expected source and
+GEN checksums. The worker checks the completed receipt before reading Nano.
+It runs the standard raw histogrammer and plotter. Empty distributions can
+show their booked axes without inventing entries. These raw-only outputs have
+no production denominator; rate plotting and production snapshots reject them.
+
+The production wrapper uses `utils/activate_streaming_runtime.sh` with the
+checksum-pinned runtime and small analysis overlay. It must clean up
+`SHIFT_TEA_ALIAS_DIRECTORY` on exit and prepend the native XRootD wrappers after
+activation. Plot PDFs return to the controller for checksum-verified publication
+under this repository's `plots/`; workers do not write final figures into AFS.
+
 ## Standard and optional study configs
 
 Histogram definitions and study controls belong in
@@ -60,6 +137,26 @@ The superseded source/configs are byte-verified under workspace
 remain unchanged. The dated October 9 merged-BDT recovery tool reads its two
 historical dependencies from the supplied prior frozen plan; future studies
 use the standard configs or the optional study config as appropriate.
+
+## Mu-enriched QCD in the standard plots
+
+In `configs/shift_paths.py`, use:
+
+```python
+campaign = "20261016_mu_enriched_weekend_v1"
+```
+
+Run the normal `shift_plotter_config.py`. This campaign selects the latest
+ready mu-enriched QCD snapshot and the existing DY/Jpsi references. Their
+ROOT metadata supplies full GEN normalization and sampling weights. There
+are no extra streaming switches. Select
+`shift_detector_representative_20261007_v10` to return to the previous SM
+campaign. `qcd_campaign_base` and `jpsi_campaign_base` remain the optional
+single-sample production settings; the combined plotter uses `campaign`.
+
+Raw-count diagnostics remain in the production publication tool, separate
+from the ordinary luminosity-normalized plots. Frozen running deployments
+retain their original configs and helpers.
 
 ## BSM shapes in the standard reconstruction plots
 

@@ -255,11 +255,11 @@ for name in dimuonCategories:
     # fmt: off
     defaultHistParams += (
         ("Event"                   , f"nShiftDimuonVertex{name}",   10,      0,    10, "event" ),
-        (f"ShiftDimuonVertex{name}", "pt"                       ,  200,      0,    20, "dimuon"),
+        (f"ShiftDimuonVertex{name}", "pt"                       , 2000,      0,   200, "dimuon"),
         (f"ShiftDimuonVertex{name}", "pz"                       ,  200,  -1000,   100, "dimuon"),
         (f"ShiftDimuonVertex{name}", "eta"                      , 1000,    -10,    10, "dimuon"),
         (f"ShiftDimuonVertex{name}", "phi"                      ,  100,   -3.2,   3.2, "dimuon"),
-        (f"ShiftDimuonVertex{name}", "mass"                     , 1000,      0,   100, "dimuon"),
+        (f"ShiftDimuonVertex{name}", "mass"                     , 2000,      0,   200, "dimuon"),
         (f"ShiftDimuonVertex{name}", "vx"                       , 1000,   -300,   300, "dimuon"),
         (f"ShiftDimuonVertex{name}", "vy"                       , 1000,   -300,   300, "dimuon"),
         (f"ShiftDimuonVertex{name}", "vz"                       , 1000, -20000, 20000, "dimuon"),
@@ -390,6 +390,8 @@ dimuonPtVariableBinEdges = (
     + tuple(4.25 + 0.25 * index for index in range(8))
     + tuple(6.5 + 0.5 * index for index in range(8))
     + tuple(11.0 + index for index in range(10))
+    + tuple(22.0 + 2.0 * index for index in range(40))
+    + tuple(105.0 + 5.0 * index for index in range(20))
 )
 dimuonPzVariableBinEdges = linear_bin_edges(
     (-1000.0, -400.0, 50.0), (-400.0, -200.0, 20.0),
