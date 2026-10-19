@@ -89,7 +89,8 @@ ShiftHistogramsFiller::ShiftHistogramsFiller(shared_ptr<HistogramsHandler> histo
     string weightsBranchName;
     config.GetValue("weightsBranchName", weightsBranchName);
     weightMcDiagnostics = weightsBranchName == "shiftSamplingGenWeight" ||
-                          weightsBranchName == "shiftRecoveryGenWeight";
+                          weightsBranchName == "shiftRecoveryGenWeight" ||
+                          weightsBranchName == "shiftProposalGenWeight";
   } catch (const Exception&) {}
   // Physical constrained values are zero placeholders when the fit failed.
   // These bookings are custom so the generic filler cannot include failures.
