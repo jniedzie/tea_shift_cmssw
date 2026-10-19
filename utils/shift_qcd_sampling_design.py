@@ -180,6 +180,77 @@ def lifetime_mixture_log_weight(lengths, natural_mean, proposal_mean, ordinary_f
     return float(natural_log-mixture_log)
 
 
+def lifetime_components_log_weight(lifetimes, natural_means, components):
+    """Exact log(f/q) for frozen ordinary, single-parent and parent-pair mixtures.
+
+    ``lifetimes`` and ``natural_means`` map every latent parent ID to its
+    sampled lifetime and natural exponential mean, in the same units. Retain
+    lifetimes even if transport later absorbs the parent. Each whole-event
+    component has a ``probability`` and ``proposal_means`` mapping for its
+    biased subset; an empty mapping is the ordinary component. Unlisted
+    parents keep their natural exponential kernel. Branches, angles and any
+    sequential conditional kernels must also remain natural, or their density
+    ratios must be included separately.
+
+    Components and their parent subsets/means must be fixed from the original
+    event before these lifetimes are drawn. The denominator sums every
+    compatible component, not only the component chosen by the sampler.
+    Positive exponential means give full lifetime support; a positive ordinary
+    component additionally bounds f/q by its inverse probability. This density
+    calculation does not calibrate material survival or detector acceptance.
+    """
+    if (not isinstance(lifetimes, dict) or not isinstance(natural_means, dict)
+            or not natural_means or set(lifetimes) != set(natural_means)):
+        raise ValueError('Record exactly every latent parent lifetime and natural mean')
+    for parent, mean in natural_means.items():
+        if (isinstance(parent, bool) or not isinstance(parent, (int, str))
+                or isinstance(parent, str) and not parent):
+            raise ValueError('Each latent parent needs an explicit integer or string identity')
+        length = lifetimes[parent]
+        if (isinstance(length, bool) or not isinstance(length, (int, float))
+                or not math.isfinite(length) or length < 0
+                or isinstance(mean, bool) or not isinstance(mean, (int, float))
+                or not math.isfinite(mean) or mean <= 0):
+            raise ValueError('Need finite nonnegative lifetimes and positive natural means')
+    if not isinstance(components, (list, tuple)) or not components:
+        raise ValueError('Declare the frozen whole-event mixture components')
+    probabilities, relative_logs = [], []
+    for component in components:
+        probability = component['probability']
+        proposals = component['proposal_means']
+        if (isinstance(probability, bool) or not isinstance(probability, (int, float))
+                or not math.isfinite(probability) or not 0 <= probability <= 1
+                or not isinstance(proposals, dict) or set(proposals)-set(natural_means)):
+            raise ValueError('Need valid component probabilities and known frozen parent subsets')
+        ratios = []
+        for parent, mean in proposals.items():
+            if (isinstance(mean, bool) or not isinstance(mean, (int, float))
+                    or not math.isfinite(mean) or mean <= 0):
+                raise ValueError('Every proposed exponential needs a finite positive mean')
+            natural = natural_means[parent]
+            # Equal kernels cancel without subtracting two very large logs.
+            if mean == natural:
+                continue
+            length = lifetimes[parent]
+            ratio = math.log(natural)-math.log(mean)+length/natural-length/mean
+            if not math.isfinite(ratio):
+                raise ValueError('Lifetime density ratio exceeds finite logarithmic support')
+            ratios.append(ratio)
+        probabilities.append(float(probability))
+        relative_logs.append(math.fsum(ratios))
+    total = math.fsum(probabilities)
+    if not math.isclose(total, 1., rel_tol=0., abs_tol=1e-12):
+        raise ValueError('Whole-event mixture probabilities must sum to one')
+    # Normalize rounding at the declared probability sum, matching a sampler
+    # that draws its one component from these same normalized probabilities.
+    terms = [math.log(p)-math.log(total)+ratio
+             for p, ratio in zip(probabilities, relative_logs) if p > 0]
+    result = -float(np.logaddexp.reduce(terms))
+    if not math.isfinite(result):
+        raise ValueError('Whole-event density exceeds finite logarithmic support')
+    return result
+
+
 def competing_exponential_benchmark(decay_mean, interaction_mean, ordinary_fraction=.1, parents=2):
     """Analytic rare-decay benchmark, not a material calibration or QCD rate.
 

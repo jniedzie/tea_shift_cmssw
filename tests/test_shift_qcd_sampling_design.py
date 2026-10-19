@@ -7,6 +7,7 @@ import unittest
 
 import numpy as np
 from scipy.optimize import minimize
+from scipy.integrate import quad
 
 spec = importlib.util.spec_from_file_location(
     'design', Path(__file__).parents[1]/'utils'/'shift_qcd_sampling_design.py')
@@ -186,6 +187,104 @@ class MultiTargetDesignTests(unittest.TestCase):
         self.assertEqual(correction[2], 10.)
         self.assertAlmostEqual(sum(q*w for q, w in zip(probability, correction)), 1.)
         self.assertEqual(design.fixed_angle_mixture([0., 0.], .1), ([.5, .5], [1., 1.]))
+
+
+class LifetimeComponentTests(unittest.TestCase):
+    def test_unequal_single_and_pair_components_use_the_full_mixture(self):
+        lengths = {'a': .4, 'b': 1.7, 'unbiased': 8.}
+        means = {'a': 10., 'b': 20., 'unbiased': 30.}
+        components = [dict(probability=.1, proposal_means={}),
+                      dict(probability=.2, proposal_means={'a': 2.}),
+                      dict(probability=.3, proposal_means={'b': 3.}),
+                      dict(probability=.4, proposal_means={'a': 2., 'b': 3.})]
+        density = lambda length, mean: math.exp(-length/mean)/mean
+        natural = math.prod(density(lengths[p], means[p]) for p in means)
+        proposal = sum(c['probability']*math.prod(
+            density(lengths[p], c['proposal_means'].get(p, means[p])) for p in means)
+            for c in components)
+        actual = design.lifetime_components_log_weight(lengths, means, components)
+        self.assertAlmostEqual(math.exp(actual), natural/proposal, places=14)
+        # The ordinary latent third parent remains required, but cancels from
+        # the density ratio because every component keeps its natural kernel.
+        lengths['unbiased'] = 1000000.
+        self.assertEqual(actual, design.lifetime_components_log_weight(lengths, means, components))
+
+    def test_equal_mean_case_matches_the_existing_analytic_benchmark(self):
+        for ordinary in (0., .1, 1.):
+            for lengths in ([0., 0.], [1., 3.], [1000., 2000.]):
+                value = design.lifetime_components_log_weight(
+                    dict(enumerate(lengths)), {0: 100., 1: 100.},
+                    [dict(probability=ordinary, proposal_means={}),
+                     dict(probability=1.-ordinary, proposal_means={0: 2., 1: 2.})])
+                expected = design.lifetime_mixture_log_weight(lengths, 100., 2., ordinary)
+                self.assertAlmostEqual(value, expected, places=11)
+
+    def test_absorbed_parent_lifetime_is_required_and_ordinary_weights_can_exceed_one(self):
+        means = {'a': 100., 'absorbed': 100.}
+        components = [dict(probability=.1, proposal_means={}),
+                      dict(probability=.3, proposal_means={'a': 2.}),
+                      dict(probability=.6, proposal_means={'a': 2., 'absorbed': 4.})]
+        value = math.exp(design.lifetime_components_log_weight(
+            {'a': 1000., 'absorbed': 4000.}, means, components))
+        self.assertGreater(value, 1.)
+        self.assertLessEqual(value, 10.*(1.+1e-14))
+        with self.assertRaisesRegex(ValueError, 'every latent parent'):
+            design.lifetime_components_log_weight({'a': 1000.}, means, components)
+        with self.assertRaises(ValueError):
+            design.lifetime_components_log_weight({'a': 1000., 'absorbed': None}, means, components)
+
+    def test_frozen_components_normalize_with_physical_interactions_and_exact_second_moment(self):
+        # Generate the whole-event component first, then all latent lifetimes.
+        # Physical interactions are independent and may kill either parent.
+        means, proposed, interactions = [2., 5.], [.7, 1.1], [.8, 1.4]
+        components = [dict(probability=.2, proposal_means={}),
+                      dict(probability=.25, proposal_means={0: proposed[0]}),
+                      dict(probability=.15, proposal_means={1: proposed[1]}),
+                      dict(probability=.4, proposal_means=dict(enumerate(proposed)))]
+        rng = np.random.default_rng(20261019)
+        count = 25000
+        choices = rng.choice(len(components), count, p=[x['probability'] for x in components])
+        scales = np.array([[c['proposal_means'].get(i, means[i]) for i in range(2)]
+                           for c in components])
+        lengths = rng.exponential(size=(count, 2))*scales[choices]
+        weights = np.array([math.exp(design.lifetime_components_log_weight(
+            dict(enumerate(row)), dict(enumerate(means)), components)) for row in lengths])
+        def within_mc_error(values, expected):
+            error = math.sqrt(float(np.var(values, ddof=1))/count)
+            self.assertLess(abs(float(values.mean())-expected), 5.*error)
+        within_mc_error(weights, 1.)
+        survived = np.all(lengths < rng.exponential(interactions, size=(count, 2)), axis=1)
+        physical_target = math.prod(i/(i+d) for i, d in zip(interactions, means))
+        within_mc_error(weights*survived, physical_target)
+        self.assertTrue(np.any(~survived))
+        # Independent direct density integral, with no use of the helper under
+        # test. This is E_q[(f/q)^2 I(physical decays before interactions)].
+        def integrand(b, a):
+            values = [a, b]
+            natural = math.prod(math.exp(-x/m)/m for x, m in zip(values, means))
+            proposal = sum(c['probability']*math.prod(
+                math.exp(-values[i]/c['proposal_means'].get(i, means[i])) /
+                c['proposal_means'].get(i, means[i]) for i in range(2)) for c in components)
+            survival = math.exp(-sum(x/i for x, i in zip(values, interactions)))
+            return (natural/proposal)*natural*survival if proposal else 0.
+        second = quad(lambda a: quad(lambda b: integrand(b, a), 0., np.inf,
+                                     epsabs=1e-10, epsrel=1e-8)[0],
+                      0., np.inf, epsabs=1e-10, epsrel=1e-8)[0]
+        within_mc_error(weights*weights*survived, second)
+        self.assertLess(second, physical_target/.2)
+
+    def test_missing_extra_invalid_or_observed_only_lifetimes_fail(self):
+        good = [dict(probability=1., proposal_means={})]
+        for lifetimes, means, components in (
+                ({}, {}, good), ({'a': 1., 'extra': 1.}, {'a': 2.}, good),
+                ({'a': math.nan}, {'a': 2.}, good), ({'a': -1.}, {'a': 2.}, good),
+                ({'a': 1.}, {'a': 0.}, good), ({'a': True}, {'a': 2.}, good),
+                ({'a': 1.}, {'a': 2.}, [dict(probability=1., proposal_means={'missing': 1.})]),
+                ({'a': 1.}, {'a': 2.}, [dict(probability=1., proposal_means={'a': 0.})]),
+                ({'a': 1.}, {'a': 2.}, [dict(probability=.5, proposal_means={})]),
+                ({'a': 1.}, {'a': 2.}, [dict(probability=-1., proposal_means={})])):
+            with self.subTest(lifetimes=lifetimes, means=means, components=components), self.assertRaises(ValueError):
+                design.lifetime_components_log_weight(lifetimes, means, components)
 
 
 if __name__ == '__main__':
