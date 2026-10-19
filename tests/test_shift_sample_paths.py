@@ -17,6 +17,46 @@ import shift_sample_paths
 
 
 class StreamingHistogramInputsTest(unittest.TestCase):
+    def test_published_campaign_resolves_without_working_directory_dependence(self):
+        path = shift_sample_paths.campaign_histogram_inventory('20261016_mu_enriched_weekend_v1')
+        self.assertEqual(Path(path), CONFIGS.parent / 'plots' /
+                         'sm_mu_enriched_weekend_20261016_v1/latest_ready.json')
+        self.assertIsNone(shift_sample_paths.campaign_histogram_inventory('legacy_20260921'))
+        self.assertEqual(shift_sample_paths.campaign_histogram_inventory('/tmp/snapshot.json'),
+                         '/tmp/snapshot.json')
+
+    def test_reference_uses_full_gen_weight_sum_instead_of_selected_cutflow(self):
+        import ROOT
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            path = directory / 'reference.root'
+            source = ROOT.TFile(str(path), 'RECREATE')
+            cutflow = ROOT.TH1D('cutFlow', '', 1, 0, 1)
+            cutflow.SetBinContent(1, 17.)
+            cutflow.Write()
+            ROOT.TObjString(json.dumps(dict(schema='shift-preserved-full-GEN-histogram-v1',
+                stratum='jpsi_10to20', full_source_sumw=.0009177813540578304,
+                cross_section_pb=23.906403461436227, no_second_filter_efficiency=True,
+                histogram_weight='native_gen_weight/reco_inclusion_probability'))).Write('ShiftFullGenNormalization')
+            source.Close()
+            inventory = directory / 'inputs.json'
+            inventory.write_text(json.dumps(dict(schema='shift-streaming-plot-inputs-v1', samples=[],
+                reference_samples=[dict(stratum='jpsi_10to20', path=str(path))])))
+            rows = shift_sample_paths.streaming_reference_histogram_inputs(inventory)
+            self.assertEqual(rows['jpsi_10to20']['full_source_sumw'], .0009177813540578304)
+            self.assertEqual(rows['jpsi_10to20']['cross_section_pb'], 23.906403461436227)
+
+    def test_missing_declared_reference_does_not_select_a_legacy_replacement(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            inventory = directory / 'inputs.json'
+            inventory.write_text(json.dumps(dict(schema='shift-streaming-plot-inputs-v1', samples=[],
+                reference_samples=[dict(stratum='dy_20to-1', path=str(directory/'missing.root'))])))
+            with patch('Logger.warn') as warn:
+                rows = shift_sample_paths.streaming_reference_histogram_inputs(inventory)
+            self.assertEqual(rows, {'dy_20to-1': None})
+            warn.assert_called_once()
+
     def test_missing_file_warns_without_hiding_ready_snapshot(self):
         import ROOT
         with tempfile.TemporaryDirectory() as temporary:
@@ -26,7 +66,8 @@ class StreamingHistogramInputsTest(unittest.TestCase):
             source = ROOT.TFile(str(ready), 'RECREATE')
             ROOT.TObjString(json.dumps(dict(schema='shift-streaming-normalization-v1',
                 stratum='qcd_20toinf', closed_cohorts=True, full_source_trials=100,
-                sigma_nd_pb=7.e10))).Write('ShiftStreamingNormalization')
+                sigma_nd_pb=7.e10, no_second_filter_efficiency=True,
+                histogram_weight='native_gen_weight/reco_inclusion_probability'))).Write('ShiftStreamingNormalization')
             source.Close()
             inventory = directory / 'inputs.json'
             inventory.write_text(json.dumps(dict(schema='shift-streaming-plot-inputs-v1',
@@ -38,6 +79,24 @@ class StreamingHistogramInputsTest(unittest.TestCase):
             self.assertEqual(rows[0]['full_source_trials'], 100)
             warn.assert_called_once()
             self.assertIn(str(missing), warn.call_args.args[0])
+
+    def test_raw_counts_cannot_be_used_as_a_rate_histogram(self):
+        import ROOT
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            path = directory / 'raw.root'
+            source = ROOT.TFile(str(path), 'RECREATE')
+            ROOT.TObjString(json.dumps(dict(schema='shift-streaming-normalization-v1',
+                stratum='qcd_0to1', closed_cohorts=True, full_source_trials=100,
+                sigma_nd_pb=7.e10, no_second_filter_efficiency=True,
+                histogram_weight='one_per_reconstructed_entry'))).Write('ShiftStreamingNormalization')
+            source.Close()
+            inventory = directory / 'inputs.json'
+            inventory.write_text(json.dumps(dict(schema='shift-streaming-plot-inputs-v1',
+                samples=[dict(stratum='qcd_0to1', path=str(path), raw_path=str(path))])))
+            with self.assertRaisesRegex(ValueError, 'weight policy'):
+                shift_sample_paths.streaming_histogram_inputs(inventory)
+            self.assertEqual(len(shift_sample_paths.streaming_histogram_inputs(inventory, raw=True)), 1)
 
 
 class AvailableBsmHistogramsTest(unittest.TestCase):

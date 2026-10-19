@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location(
     "streaming", Path(__file__).resolve().parents[1] / "utils/shift_streaming_histograms.py")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "utils"))
 streaming = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(streaming)
 
@@ -43,6 +44,15 @@ class StreamingHistogramsTest(unittest.TestCase):
         record = cohort()
         self.assertEqual(len(streaming.validate_cohort(record)), 2)
         self.assertEqual(record["normalization"]["full_source_trials"], 12345)
+
+    def test_batched_nano_closes_original_events_instead_of_counting_jobs(self):
+        record = cohort()
+        record['verified_nano'][0]['events'] = 2
+        record['selected_events'].append(dict(event_id=[1, 1, 3], native_weight=3., sampling_probability=.25))
+        self.assertEqual(len(streaming.validate_cohort(record)), 3)
+        record['verified_nano'][0]['events'] = 1
+        with self.assertRaisesRegex(ValueError, 'selected event cohort'):
+            streaming.validate_cohort(record)
 
     def test_missing_slow_job_cannot_become_a_normalized_cohort(self):
         record = cohort()
@@ -98,10 +108,33 @@ class StreamingHistogramsTest(unittest.TestCase):
 
     def cleanup_record(self):
         base = "root://eoshome-j.cern.ch//eos/user/j/jniedzie/shift_cmssw/qcd_pThat0to1GeV/campaign/"
-        return dict(cohort_id="one", nano_inputs=[dict(path=base + "nanoAOD/nano_job1.root", sha256="a" * 64)],
-                    merged_nano=dict(path=base + "nanoAOD_merged/one.root"),
+        return dict(cohort_id="one", nano_inputs=[dict(path=base + "nanoAOD/nano_job1.root", sha256="a" * 64, events=1)],
+                    merged_nano=dict(path=base + "nanoAOD_merged/one.root", sha256="b" * 64),
                     histogram=dict(path=base + "histograms/one.root"),
-                    raw_histogram=dict(path=base + "histograms/one_raw.root"))
+                    raw_histogram=dict(path=base + "histograms/one_raw.root"),
+                    merged_nano_integrity=dict(schema="shift-nano-all-branch-equivalence-v1",
+                        complete=True, edm_metadata_baskets_preserved=True,
+                        edm_metadata_values_preserved=True, input_sha256=["a" * 64],
+                        merged_sha256="b" * 64, events=1, event_branches=1,
+                        all_branch_inventory_sha256="c" * 64,
+                        trees={name: dict(entries=1, branches=1) for name in
+                               ("Events", "Runs", "LuminosityBlocks", "MetaData", "ParameterSets")}))
+
+    def test_cleanup_requires_complete_branch_run_lumi_and_edm_proof_before_any_io(self):
+        for missing in ("merged_nano_integrity", "Runs", "LuminosityBlocks", "ParameterSets"):
+            record = self.cleanup_record()
+            if missing == "merged_nano_integrity":
+                del record[missing]
+            else:
+                del record["merged_nano_integrity"]["trees"][missing]
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as temporary, \
+                    patch.dict(sys.modules, teaHelpers=types.SimpleNamespace(eos_xrootd_url=lambda p: None)), \
+                    patch.object(streaming, "stage") as stage, \
+                    patch.object(streaming.subprocess, "run") as command:
+                result = streaming.retire_consumed_nano(record, Path(temporary) / "cleanup.json")
+                self.assertFalse(result["complete"])
+                stage.assert_not_called()
+                command.assert_not_called()
 
     def test_cleanup_only_removes_exact_consumed_nano_after_explicit_absence(self):
         record = self.cleanup_record()
@@ -154,6 +187,58 @@ class StreamingHistogramsTest(unittest.TestCase):
                 streaming.publication_budget([path], [], 65536)
             result = streaming.publication_budget([path], [dict(bytes=10)], 100000)
             self.assertEqual(result["planned_bytes"], 65550)
+
+    def test_batched_publication_requires_an_explicit_larger_reservation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "batched.root"
+            with path.open("wb") as stream:
+                stream.truncate(33 * 1024 * 1024)
+            with self.assertRaisesRegex(ValueError, "reservation"):
+                streaming.publication_budget([path], [])
+            result = streaming.publication_budget([path], [], 128 * 1024 * 1024)
+            self.assertEqual(result["maximum_bytes"], 128 * 1024 * 1024)
+            result = streaming.publication_budget([path], [], 512 * 1024 * 1024)
+            self.assertEqual(result["maximum_bytes"], 512 * 1024 * 1024)
+            with self.assertRaisesRegex(ValueError, "reservation"):
+                streaming.publication_budget([path], [], 513 * 1024 * 1024)
+
+    def test_snapshot_publishes_durable_plot_inputs_and_receipt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            hist = base / "input.root"
+            hist.write_bytes(b"histograms")
+            summary = {name: dict(sumw=0., sumw2=0.) for name in streaming.REQUIRED_HISTOGRAMS}
+            record = receipt()
+            for kind in ("histogram", "raw_histogram"):
+                record[kind] = dict(path=str(hist), sha256=streaming.sha256(hist), histograms=summary)
+            source = base / "cohort.json"
+            source.write_text(json.dumps(record))
+            inventory = base / "inventory.json"
+            inventory.write_text(json.dumps(dict(schema="shift-streaming-histogram-snapshot-inputs-v1",
+                snapshot_id="one", expected_cohort_ids=["cohort0"],
+                cohort_receipts=[dict(path=str(source), sha256=streaming.sha256(source))])))
+            reference = base / "references.json"
+            reference.write_text(json.dumps(dict(schema="shift-sm-reference-histograms-v1",
+                samples=[dict(stratum="dy_20to-1", path="/eos/reference.root")])) )
+            args = types.SimpleNamespace(inventory=inventory, output_directory=base / "output",
+                merge_script=base / "merge.py", plotter=None, plot_output=None,
+                publish_directory="/eos/snapshot", reference_inputs=reference)
+            uploaded = {}
+
+            def upload(path, destination):
+                uploaded[path.name] = path.read_bytes()
+                return destination + "/" + path.name
+
+            with patch.object(streaming, "stage", side_effect=lambda p, d, h: d.write_bytes(Path(p).read_bytes())), \
+                    patch.object(streaming, "merge", side_effect=lambda i, d, m, s: d.write_bytes(b"merged")), \
+                    patch.object(streaming, "histogram_summary", return_value=summary), \
+                    patch.object(streaming, "embed_metadata"), patch.object(streaming, "publish", upload):
+                streaming.snapshot(args)
+            complete = json.loads(uploaded["snapshot_complete.json"])
+            inputs = json.loads(uploaded["plot_inputs.json"])
+            self.assertEqual(complete["plot_inputs"]["path"], "/eos/snapshot/plot_inputs.json")
+            self.assertEqual(inputs["samples"][0]["path"], "/eos/snapshot/qcd_0to1_histogram.root")
+            self.assertEqual(inputs["reference_samples"][0]["stratum"], "dy_20to-1")
 
     def test_targeted_diagnostic_cannot_enter_a_normalized_snapshot(self):
         diagnostic = dict(schema="shift-streaming-histogram-diagnostic-v1", complete=True,

@@ -25,7 +25,8 @@ METADATA_KEY = "ShiftStreamingNormalization"
 WEIGHT_POLICY = "native_gen_weight/reco_inclusion_probability"
 WEIGHT_BRANCHES = ("shiftOriginalGenWeight", "shiftSamplingProbability",
                    "shiftSamplingWeight", "shiftSamplingGenWeight")
-MAXIMUM_PUBLICATION_BYTES = 32 * 1024 * 1024
+DEFAULT_PUBLICATION_BYTES = 32 * 1024 * 1024
+MAXIMUM_PUBLICATION_BYTES = 512 * 1024 * 1024
 REQUIRED_HISTOGRAMS = tuple(
     "dimuon/ShiftDimuonVertex" + category + "_" + variable
     for category in ("", "Both-Both") for variable in ("mass", "pt")
@@ -217,10 +218,13 @@ def file_record(path, published_path=None):
     return dict(path=published_path or str(path), sha256=sha256(path), bytes=path.stat().st_size)
 
 
-def publication_budget(files, plots, requested_limit=MAXIMUM_PUBLICATION_BYTES):
+def publication_budget(files, plots, requested_limit=DEFAULT_PUBLICATION_BYTES):
     # Reserve compact JSON receipts before the first upload as well. Workers
-    # may request a smaller budget, never silently a larger shared quota claim.
-    limit = min(requested_limit, MAXIMUM_PUBLICATION_BYTES)
+    # A larger cohort needs an explicit matching controller reservation. Old
+    # frozen descriptors retain their 32 MiB limit.
+    if type(requested_limit) is not int or not 0 < requested_limit <= MAXIMUM_PUBLICATION_BYTES:
+        raise ValueError("Invalid streaming publication reservation")
+    limit = requested_limit
     total = sum(Path(path).stat().st_size for path in files) + sum(row["bytes"] for row in plots) + 65536
     if total > limit:
         raise ValueError(f"Streaming publication exceeds its reservation: {total} > {limit} bytes")
@@ -253,14 +257,53 @@ def publish(path, directory):
 
 def render_plots(inventory, plotter, plot_output, scratch, kinds, caption=None):
     plots = []
+    has_references = bool(json.loads(Path(inventory).read_text()).get("reference_samples"))
     for kind in kinds:
         config = scratch / (kind + "_plot_config.py")
+        # An exact snapshot is an internal production input. Ordinary users
+        # select its published campaign name in shift_paths instead.
+        selected_campaign = str(inventory) if kind == "rate" else None
+        reference_settings = "" if has_references and kind == "rate" else "shift_paths.cross_sections = {}\n"
+        beam_label = "partial SM; mu-enhanced QCD" if has_references and kind == "rate" else "partial mu-enhanced QCD; diagnostic"
+        legend_bottom = 0.2 if has_references and kind == "rate" else 0.56
+        raw_settings = ""
+        if kind == "raw":
+            raw_settings = f"""
+samples = []
+for row in streaming_histogram_inputs({str(inventory)!r}, raw=True):
+    bin_name = row["stratum"].removeprefix("qcd_")
+    samples.append(Sample(name=row["stratum"], file_path=row["histogram_path"],
+        type=SampleType.background, cross_section=1, initial_weight_sum=1,
+        fill_color=qcd_colors[bin_name], fill_alpha=0.7, line_alpha=0,
+        marker_size=0, legend_description=f"QCD {{get_bin_label(bin_name, 'qcd')}}"))
+custom_stacks_order = [sample.name for sample in samples]
+for h in histograms:
+    h.norm_type = NormalizationType.none
+    h.y_label = "processed events" if h.name.startswith("event/") else "reconstructed pairs / GeV"
+del lumi_label_value
+"""
         config.write_text("import shift_paths\n"
-                          f"shift_paths.sm_streaming_histogram_inventory = {str(inventory)!r}\n"
-                          f"shift_paths.sm_streaming_plot_output = {str(plot_output / kind)!r}\n"
-                          f"shift_paths.sm_streaming_plot_kind = {kind!r}\n"
-                          f"shift_paths.sm_streaming_plot_caption = {caption!r}\n"
-                          "from shift_plotter_config import *\n")
+                          "shift_paths.bsm_campaign = None\n"
+                          + reference_settings +
+                          f"shift_paths.campaign = {selected_campaign!r}\n"
+                          "from shift_plotter_config import *\n"
+                          "preview_names = ['event/Event_nShiftMuonBothEndcaps', "
+                          "'event/Event_nShiftDimuonVertexBoth-Both'] + "
+                          "['dimuon/ShiftDimuonVertex' + c + '_' + v "
+                          "for c in ('', 'Both-Both') for v in ('mass', 'pt')]\n"
+                          "histograms = [h for h in histograms if h.name in preview_names]\n"
+                          + raw_settings +
+                          f"output_path = {str(plot_output / kind)!r}\n"
+                          "for h in histograms:\n"
+                          "    h.allow_empty = True\n"
+                          "    h.log_y = True\n"
+                          "    h.rebin = 1 if h.name.startswith('event/') else 5\n"
+                          f"    if {caption!r}:\n"
+                          f"        h.legend_label = {caption!r}\n"
+                          "cms_label = CmsLabel.private_sim\n"
+                          f"beam_label = {beam_label!r}\n"
+                          "canvas_size = (1100, 750)\n"
+                          f"legends = {{SampleType.background: Legend(0.59, {legend_bottom}, 0.93, 0.90, 'f', text_size=15)}}\n")
         environment = dict(os.environ)
         environment["PYTHONPATH"] = str(scratch) + os.pathsep + environment.get("PYTHONPATH", "")
         subprocess.run([sys.executable, str(plotter), "--config", config.name],
@@ -392,6 +435,7 @@ def retire_consumed_nano(receipt, receipt_path):
     """
     from urllib.parse import urlparse
     import teaHelpers
+    from shift_nano_integrity import validate_retirement_proof
 
     cleanup = dict(schema="shift-streaming-consumed-nano-cleanup-v1", complete=False,
                    cohort_id=receipt["cohort_id"], retained_merged_nano=receipt["merged_nano"],
@@ -404,6 +448,7 @@ def retire_consumed_nano(receipt, receipt_path):
 
     save()
     try:
+        validate_retirement_proof(receipt)
         originals, identities = [], set()
         retained = {row["path"] for row in (receipt["merged_nano"], receipt["histogram"], receipt["raw_histogram"])}
         with tempfile.TemporaryDirectory(prefix="stream_cleanup_", dir=os.environ.get("TMPDIR")) as temporary:
@@ -478,6 +523,8 @@ def cohort(args):
         merged_audit = audit_nano(nano, selected)
         if set(map(tuple, merged_audit["event_ids"])) != seen:
             raise ValueError("Nano merge changed original event identities")
+        from shift_nano_integrity import compare_in_runtime
+        integrity = compare_in_runtime(inputs, nano, getattr(args, "nano_integrity_runtime", None))
         results = {}
         for kind, branch in (("histogram", "shiftSamplingGenWeight"), ("raw_histogram", "")):
             config = scratch / (kind + "_config.py")
@@ -518,7 +565,7 @@ def cohort(args):
                 cohort_id=descriptor["cohort_id"], view="raw diagnostic only"))
             plots = render_plots(plot_inputs, args.plotter, args.plot_output, scratch, ("raw",))
         budget = publication_budget([row["path"] for row in results.values()], plots,
-                                    descriptor.get("maximum_publication_bytes", MAXIMUM_PUBLICATION_BYTES))
+                                    descriptor.get("maximum_publication_bytes", DEFAULT_PUBLICATION_BYTES))
         if args.publish_directory:
             for row in results.values():
                 row["path"] = publish(Path(row["path"]), args.publish_directory)
@@ -527,6 +574,7 @@ def cohort(args):
                        descriptor_sha256=sha256(args.descriptor), normalization=descriptor["normalization"],
                        expected_reco_job_ids=descriptor["expected_reco_job_ids"],
                        nano_inputs=input_records, nano_audit=merged_audit, plots=plots,
+                       merged_nano_integrity=integrity,
                        publication_budget=budget, **results)
         receipt_path = output / "cohort_complete.json"
         write_json(receipt_path, receipt)
@@ -607,27 +655,39 @@ def snapshot(args):
                 sample[key + "_sha256"] = sha256(path)
             samples.append(sample)
         plot_inputs = output / "plot_inputs.json"
-        write_json(plot_inputs, dict(schema="shift-streaming-plot-inputs-v1", samples=samples,
-                                    snapshot_id=inventory["snapshot_id"], partial_production=True))
+        plot_record = dict(schema="shift-streaming-plot-inputs-v1", samples=samples,
+                           snapshot_id=inventory["snapshot_id"], partial_production=True)
+        reference_inputs = getattr(args, "reference_inputs", None)
+        if reference_inputs:
+            references = json.loads(reference_inputs.read_text())
+            if references.get("schema") != "shift-sm-reference-histograms-v1":
+                raise ValueError("Unsupported SM reference histogram inventory")
+            plot_record["reference_samples"] = references["samples"]
+        write_json(plot_inputs, plot_record)
         plots = []
         if args.plotter:
             if not args.plot_output:
                 raise ValueError("--plot-output is required with --plotter")
             plots = render_plots(plot_inputs, args.plotter, args.plot_output, scratch, ("rate", "raw"))
         budget = publication_budget([row[key] for row in samples for key in ("path", "raw_path")], plots,
-                                    inventory.get("maximum_publication_bytes", MAXIMUM_PUBLICATION_BYTES))
+                                    inventory.get("maximum_publication_bytes", DEFAULT_PUBLICATION_BYTES))
         if args.publish_directory:
             for row in samples:
                 for key in ("path", "raw_path"):
                     row[key] = publish(Path(row[key]), args.publish_directory)
-            plot_inputs.write_text(json.dumps(dict(schema="shift-streaming-plot-inputs-v1", samples=samples,
-                snapshot_id=inventory["snapshot_id"], partial_production=True), indent=2) + "\n")
+            plot_inputs.write_text(json.dumps(plot_record, indent=2, allow_nan=False) + "\n")
+            published_plot_inputs = publish(plot_inputs, args.publish_directory)
+        else:
+            published_plot_inputs = str(plot_inputs)
         receipt = dict(schema="shift-streaming-histogram-snapshot-v1", complete=True,
                        inventory_sha256=sha256(args.inventory), snapshot_id=inventory["snapshot_id"],
                        closed_cohort_ids=inventory["expected_cohort_ids"], samples=samples,
-                       plot_inputs=file_record(plot_inputs), plots=plots, publication_budget=budget,
+                       plot_inputs_record=plot_record,
+                       plot_inputs=file_record(plot_inputs, published_plot_inputs), plots=plots, publication_budget=budget,
                        partial_production=True)
         write_json(output / "snapshot_complete.json", receipt)
+        if args.publish_directory:
+            publish(output / "snapshot_complete.json", args.publish_directory)
     print(json.dumps(dict(complete=True, completion=str(output / "snapshot_complete.json"))))
 
 
@@ -638,8 +698,11 @@ def main():
     first.add_argument("--descriptor", type=Path, required=True)
     first.add_argument("--histogrammer", type=Path, required=True)
     first.add_argument("--retire-consumed-nano", action="store_true")
+    first.add_argument("--nano-integrity-runtime", type=Path,
+                       help="Stock CMSSW CVMFS release providing complete Nano validation dependencies")
     last = stages.add_parser("snapshot")
     last.add_argument("--inventory", type=Path, required=True)
+    last.add_argument("--reference-inputs", type=Path)
     check = stages.add_parser("diagnostic")
     check.add_argument("--descriptor", type=Path, required=True)
     check.add_argument("--histogrammer", type=Path, required=True)

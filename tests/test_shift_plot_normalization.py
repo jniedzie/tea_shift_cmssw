@@ -154,7 +154,8 @@ class AvailableHistogramPlotConfigTest(unittest.TestCase):
         output.Close()
         return path
 
-    def config(self, *, bsm_campaign=None, masses=(15,), flights=(100,), epsilons=None, histogram_rebins=None):
+    def config(self, *, bsm_campaign=None, masses=(15,), flights=(100,), epsilons=None, histogram_rebins=None,
+               streaming_inventory=None, campaign=None, cross_sections=None):
         from Histogram import Histogram
 
         def histogram(*args, **kwargs):
@@ -163,8 +164,9 @@ class AvailableHistogramPlotConfigTest(unittest.TestCase):
                 definition.rebin = histogram_rebins[definition.name]
             return definition
 
-        with patch.multiple('shift_paths', base_path=str(self.base), campaign=self.campaign,
-                            cross_sections={'qcd': {'0to1': 2., '1to2': 3.}},
+        with patch.multiple('shift_paths', base_path=str(self.base), campaign=(streaming_inventory or campaign or self.campaign),
+                            cross_sections=(cross_sections if cross_sections is not None else
+                                            {'qcd': {'0to1': 2., '1to2': 3.}}),
                             bsm_campaign=bsm_campaign, bsm_masses_to_plot=list(masses),
                             bsm_mean_lab_flights_to_plot=list(flights), bsm_epsilons_to_plot=epsilons,
                             histogram_cache_directory=None), \
@@ -173,6 +175,126 @@ class AvailableHistogramPlotConfigTest(unittest.TestCase):
                 patch('shift_sample_paths._read_normalization_record', side_effect=AssertionError('Production records')), \
                 patch('shift_sample_paths._bsm_campaign_records', side_effect=AssertionError('BSM production validation')):
             return SimpleNamespace(**runpy.run_path(str(self.repository / 'configs/shift_plotter_config.py')))
+
+    def streaming_inventory(self):
+        rows = {}
+        for kind, policy in (('path', 'native_gen_weight/reco_inclusion_probability'),
+                             ('raw_path', 'one_per_reconstructed_entry')):
+            path = self.write_histograms(self.base / kind, 4.)
+            source = self.ROOT.TFile(str(path), 'UPDATE')
+            self.ROOT.TObjString(json.dumps(dict(schema='shift-streaming-normalization-v1',
+                stratum='qcd_0to1', closed_cohorts=True, full_source_trials=12345,
+                sigma_nd_pb=7.e10, histogram_weight=policy,
+                no_second_filter_efficiency=True))).Write('ShiftStreamingNormalization')
+            source.Close()
+            rows[kind] = str(path)
+        inventory = self.base / 'streaming.json'
+        inventory.write_text(json.dumps(dict(schema='shift-streaming-plot-inputs-v1',
+            samples=[dict(stratum='qcd_0to1', **rows)])))
+        return str(inventory)
+
+    def test_streaming_rate_replaces_qcd_and_preserves_other_sm_and_signals(self):
+        from HistogramNormalizer import HistogramNormalizer
+        from Sample import SampleType
+
+        dy = self.write_histograms(self.base / 'dy_mHat0p211317to0p5GeV' /
+                                   self.campaign / 'histograms_merged', 30.)
+        jpsi = self.write_histograms(self.base / 'jpsi_pThat0to1GeV' /
+                                     self.campaign / 'histograms_merged', 40.)
+        sections = {'dy': {'0.211317to0.5': 5.}, 'jpsi': {'0to1': 6.}, 'qcd': {'0to1': 999.}}
+        inventory = self.streaming_inventory()
+        record = json.loads(Path(inventory).read_text())
+        record['reference_samples'] = []
+        for stratum, path, exposure, cross_section in (
+                ('dy_0.211317to0.5', dy, 30., 5.), ('jpsi_0to1', jpsi, 40., 6.)):
+            source = self.ROOT.TFile(str(path), 'UPDATE')
+            self.ROOT.TObjString(json.dumps(dict(schema='shift-preserved-full-GEN-histogram-v1',
+                stratum=stratum, full_source_sumw=exposure, cross_section_pb=cross_section,
+                no_second_filter_efficiency=True,
+                histogram_weight='native_gen_weight/reco_inclusion_probability'))).Write('ShiftFullGenNormalization')
+            source.Close()
+            record['reference_samples'].append(dict(stratum=stratum, path=str(path)))
+        Path(inventory).write_text(json.dumps(record))
+        with patch('Logger.warn'):
+            config = self.config(streaming_inventory=inventory,
+                                 bsm_campaign=self.bsm_campaign, cross_sections=sections)
+        self.assertEqual([sample.name for sample in config.samples],
+                         ['dy_0.211317to0.5', 'jpsi_0to1', 'qcd_0to1', 'm15_lab_100m'])
+        self.assertEqual([sample.file_path for sample in config.samples[:2]], [str(dy), str(jpsi)])
+        qcd = next(sample for sample in config.samples if sample.name == 'qcd_0to1')
+        self.assertNotEqual(qcd.file_path, str(self.sm))
+        self.assertEqual(qcd.cross_section, 7.e10)
+        self.assertEqual(qcd.initial_weight_sum, 12345)
+        self.assertEqual(config.custom_stacks_order, [sample.name for sample in config.samples])
+        self.assertGreater(len(config.histograms), 6)
+        self.assertTrue(any(sample.type == SampleType.signal for sample in config.samples))
+        self.assertEqual(next(h for h in config.histograms
+                              if h.name == 'dimuon/ShiftDimuonVertexBoth-Both_mass').legend_label,
+                         'Both-Both')
+        normalizer = HistogramNormalizer(config)
+        self.addCleanup(lambda: [source.Close() for source in normalizer.input_files.values()])
+        self.assertEqual(normalizer.background_initial_sum_weights[('qcd_0to1', -1)], 12345)
+
+    def test_named_campaign_selects_published_qcd_and_full_exposure(self):
+        inventory = self.streaming_inventory()
+        campaign = '20261016_mu_enriched_weekend_v1'
+        with patch('shift_sample_paths.campaign_histogram_inventory', return_value=inventory) as resolver:
+            config = self.config(campaign=campaign)
+        resolver.assert_called_once_with(campaign)
+        self.assertEqual([sample.name for sample in config.samples], ['qcd_0to1'])
+        self.assertEqual(config.samples[0].initial_weight_sum, 12345)
+        self.assertEqual(config.samples[0].cross_section, 7.e10)
+
+    def test_production_raw_preview_uses_no_luminosity_or_rate_weights(self):
+        from HistogramNormalizer import NormalizationType
+        utils = str(self.repository / 'utils')
+        sys.path.insert(0, utils)
+        self.addCleanup(sys.path.remove, utils)
+        import shift_streaming_histograms as production
+        inventory = self.streaming_inventory()
+        configs = []
+
+        def run_plotter(command, **options):
+            with patch.dict(sys.modules):
+                sys.modules.pop('shift_plotter_config', None)
+                configs.append(SimpleNamespace(**runpy.run_path(str(Path(options['cwd'])/command[-1]))))
+
+        with patch.multiple('shift_paths', base_path=str(self.base), campaign=self.campaign,
+                            cross_sections={}, bsm_campaign=None), \
+                patch.object(production.subprocess, 'run', side_effect=run_plotter):
+            production.render_plots(Path(inventory), Path('plotter.py'), self.base/'plots',
+                                    self.base, ['raw'], caption='test counts')
+        config = configs[0]
+        self.assertEqual([sample.name for sample in config.samples], ['qcd_0to1'])
+        self.assertEqual(len(config.histograms), 6)
+        self.assertTrue(all(h.norm_type == NormalizationType.none for h in config.histograms))
+        self.assertTrue(all(h.legend_label == 'test counts' for h in config.histograms))
+        self.assertFalse(hasattr(config, 'lumi_label_value'))
+        self.assertEqual(config.output_path, str(self.base/'plots/raw'))
+
+    def test_streaming_reference_preserves_original_weighted_gen_denominator(self):
+        from HistogramNormalizer import HistogramNormalizer
+
+        inventory = self.streaming_inventory()
+        reference = self.write_histograms(self.base / 'reference', 17.)
+        source = self.ROOT.TFile(str(reference), 'UPDATE')
+        self.ROOT.TObjString(json.dumps(dict(schema='shift-preserved-full-GEN-histogram-v1',
+            stratum='jpsi_10to20', full_source_sumw=.0009177813540578304,
+            cross_section_pb=23.906403461436227, no_second_filter_efficiency=True,
+            histogram_weight='native_gen_weight/reco_inclusion_probability'))).Write('ShiftFullGenNormalization')
+        source.Close()
+        record = json.loads(Path(inventory).read_text())
+        record['reference_samples'] = [dict(stratum='jpsi_10to20', path=str(reference))]
+        Path(inventory).write_text(json.dumps(record))
+        config = self.config(streaming_inventory=inventory,
+                             cross_sections={'jpsi': {'10to20': 999.}, 'qcd': {'0to1': 999.}})
+        jpsi = next(sample for sample in config.samples if sample.name == 'jpsi_10to20')
+        self.assertEqual(jpsi.file_path, str(reference))
+        self.assertEqual(jpsi.initial_weight_sum, .0009177813540578304)
+        self.assertEqual(jpsi.cross_section, 23.906403461436227)
+        normalizer = HistogramNormalizer(config)
+        self.addCleanup(lambda: [source.Close() for source in normalizer.input_files.values()])
+        self.assertEqual(normalizer.background_initial_sum_weights[('jpsi_10to20', -1)], .0009177813540578304)
 
     def test_partial_sm_plots_without_any_production_validation(self):
         with patch('Logger.warn') as warn:

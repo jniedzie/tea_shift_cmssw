@@ -13,6 +13,30 @@ import re
 from shift_storage_paths import _canonical_path, resolve_storage_path, tier_directory
 
 
+def campaign_histogram_inventory(campaign):
+    """Resolve a published campaign to its latest ready histogram list.
+
+    Production publication can also pass an exact JSON list to render its
+    snapshot before advancing the campaign's latest-ready pointer.
+    """
+    if not campaign:
+        return None
+    if str(campaign).endswith(".json"):
+        return str(campaign)
+    published = {
+        "20261016_mu_enriched_weekend_v1":
+            "sm_mu_enriched_weekend_20261016_v1/latest_ready.json",
+    }
+    relative = published.get(campaign)
+    if relative is None:
+        return None
+    path = Path(__file__).resolve().parents[1] / "plots" / relative
+    if not path.is_file():
+        from Logger import warn
+        warn("No ready histograms published for campaign " + campaign)
+    return str(path)
+
+
 def streaming_histogram_inputs(inventory_path, *, raw=False):
     """Read the exposure stored in an available streaming histogram snapshot.
 
@@ -23,6 +47,9 @@ def streaming_histogram_inputs(inventory_path, *, raw=False):
     from Logger import warn
     from teaHelpers import eos_xrootd_url
 
+    if not Path(inventory_path).is_file():
+        warn("Skipping unavailable histogram list: " + str(inventory_path))
+        return []
     inventory = json.loads(Path(inventory_path).read_text())
     if inventory.get("schema") != "shift-streaming-plot-inputs-v1":
         raise ValueError("Unsupported streaming histogram list")
@@ -59,9 +86,67 @@ def streaming_histogram_inputs(inventory_path, *, raw=False):
                     metadata.get("full_source_trials", 0) <= 0 or
                     metadata.get("sigma_nd_pb", 0) <= 0):
                 raise ValueError("Invalid closed GEN exposure in " + path)
+            if not diagnostic:
+                expected_weight = ("one_per_reconstructed_entry" if raw else
+                                   "native_gen_weight/reco_inclusion_probability")
+                if (metadata.get("histogram_weight") != expected_weight or
+                        metadata.get("no_second_filter_efficiency") is not True):
+                    raise ValueError("Streaming histogram weight policy differs: " + path)
             result.append(dict(stratum=stratum, histogram_path=path,
                                cross_section_pb=metadata.get("sigma_nd_pb", 0),
                                full_source_trials=metadata.get("full_source_trials", 0)))
+        finally:
+            source.Close()
+    return result
+
+
+def streaming_reference_histogram_inputs(inventory_path):
+    """Find compatible DY/Jpsi histograms and read their original GEN exposure.
+
+    These are the existing reconstructed events histogrammed over the same
+    ranges as the new QCD. Their selected-event cutflows are never denominators.
+    A missing declared replacement is skipped rather than replaced by an old
+    histogram with different axes.
+    """
+    import ROOT
+    from Logger import warn
+    from teaHelpers import eos_xrootd_url
+
+    if not Path(inventory_path).is_file():
+        warn("Skipping unavailable histogram list: " + str(inventory_path))
+        return {}
+    inventory = json.loads(Path(inventory_path).read_text())
+    if inventory.get("schema") != "shift-streaming-plot-inputs-v1":
+        raise ValueError("Unsupported streaming histogram list")
+    result = {}
+    for row in inventory.get("reference_samples", []):
+        stratum = row["stratum"]
+        if not stratum.startswith(("dy_", "jpsi_")) or stratum in result:
+            raise ValueError("Invalid or duplicate SM reference stratum: " + stratum)
+        result[stratum] = None
+        path = eos_xrootd_url(row["path"]) or row["path"]
+        try:
+            source = ROOT.TFile.Open(path)
+        except OSError:
+            warn("Skipping unavailable SM reference histogram: " + path)
+            continue
+        if not source or source.IsZombie():
+            warn("Skipping unavailable SM reference histogram: " + path)
+            continue
+        try:
+            record = source.Get("ShiftFullGenNormalization")
+            metadata = json.loads(record.GetString().Data()) if record else {}
+            if (metadata.get("schema") != "shift-preserved-full-GEN-histogram-v1" or
+                    metadata.get("stratum") != stratum or
+                    metadata.get("histogram_weight") != "native_gen_weight/reco_inclusion_probability" or
+                    metadata.get("no_second_filter_efficiency") is not True or
+                    not math.isfinite(metadata.get("full_source_sumw", float("nan"))) or
+                    metadata.get("full_source_sumw", 0) <= 0 or
+                    not math.isfinite(metadata.get("cross_section_pb", float("nan"))) or
+                    metadata.get("cross_section_pb", 0) <= 0):
+                raise ValueError("Invalid original GEN exposure in " + path)
+            result[stratum] = dict(histogram_path=path, full_source_sumw=metadata["full_source_sumw"],
+                                   cross_section_pb=metadata["cross_section_pb"])
         finally:
             source.Close()
     return result
