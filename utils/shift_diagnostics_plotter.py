@@ -2,8 +2,10 @@
 # Code style: human-code.
 
 import argparse
+import ast
 from array import array
 import glob
+import functools
 import math
 import os
 import re
@@ -1361,14 +1363,433 @@ def parse_arguments():
       metavar="HIST=XFACTOR[,YFACTOR]",
       help="rebin one 2D histogram; one factor applies to both axes",
   )
+  parser.add_argument("--process-input", action="append", default=[], metavar="LABEL=ROOT",
+                      help="compare truth-binned process response maps; repeat for each process")
   return parser.parse_args()
 
+
+def response_summary(histogram, minimum_entries=20):
+  """Binned quantiles and conservative 68.27% order-statistic intervals.
+
+  Endpoint intervals for the width each have 84.135% coverage (Bonferroni).
+  Order statistics use the containing bin's outer edges, retaining binning
+  uncertainty. Counts are treated as independent entries, not independent events.
+  """
+  from bisect import bisect_left
+  counts = [histogram.GetBinContent(i) for i in range(histogram.GetNbinsX()+2)]
+  if any(value < 0. or abs(value-round(value)) > 1.e-5 for value in counts):
+    raise ValueError("Response intervals require nonnegative unweighted counts")
+  total = int(round(sum(counts)))
+  if total < minimum_entries:
+    return None
+  cumulative = []
+  running = 0.
+  for count in counts:
+    running += count
+    cumulative.append(running)
+  axis = histogram.GetXaxis()
+
+  def quantile(probability):
+    rank = probability*total
+    index = bisect_left(cumulative, rank)
+    if index == 0 or index > histogram.GetNbinsX():
+      return None
+    return axis.GetBinLowEdge(index) + (rank-cumulative[index-1])/counts[index]*axis.GetBinWidth(index)
+
+  def interval(probability, tail):
+    lower_rank = response_binomial_rank(total, probability, tail)
+    upper_rank = response_binomial_rank(total, probability, 1.-tail)+1
+    if lower_rank < 1 or upper_rank > total:
+      return None
+    lower_bin = bisect_left(cumulative, lower_rank)
+    upper_bin = bisect_left(cumulative, upper_rank)
+    if lower_bin == 0 or upper_bin > histogram.GetNbinsX():
+      return None
+    return axis.GetBinLowEdge(lower_bin), axis.GetBinUpEdge(upper_bin)
+
+  low, median, high = [quantile(p) for p in (.158655, .5, .841345)]
+  low_interval = interval(.158655, .0793275)
+  high_interval = interval(.841345, .0793275)
+  median_interval = interval(.5, .158655)
+  if any(value is None for value in (low, median, high, low_interval, high_interval, median_interval)):
+    return None
+  width = .5*(high-low)
+  lower_width = max(0., .5*(high_interval[0]-low_interval[1]))
+  upper_width = .5*(high_interval[1]-low_interval[0])
+  return {"width": (width, width-min(width, lower_width), max(width, upper_width)-width),
+          "bias": (median, median-min(median, median_interval[0]), max(median, median_interval[1])-median),
+          "entries": total}
+
+
+@functools.lru_cache(maxsize=32768)
+def response_binomial_rank(total, probability, cumulative_probability):
+  """Invert ROOT's binomial CDF without adding a scipy dependency."""
+  low, high = 0, total
+  while low < high:
+    middle = (low+high)//2
+    if ROOT.Math.binomial_cdf(middle, probability, total) < cumulative_probability:
+      low = middle+1
+    else:
+      high = middle
+  return low
+
+
+def reconstruction_plot_settings():
+  """Read literal study definitions without opening the ordinary campaign inputs."""
+  names = ("reconstructionResponseAxes", "reconstructionResponseVariables",
+           "reconstructionResponseMinimumEntries", "reconstructionDiagnosticVariables",
+           "reconstructionResponseDisplayRanges", "reconstructionResponseLogY", "reconstructionDiagnosticLabels",
+           "reconstructionReportCategories", "reconstructionResponseOverview", "reconstructionResponseTitles")
+  path = os.path.join(PROJECT_DIR, "configs", "shift_plotter_config.py")
+  with open(path) as source:
+    definitions = ast.parse(source.read(), filename=path)
+  settings = {}
+  for statement in definitions.body:
+    if isinstance(statement, ast.Assign) and len(statement.targets) == 1:
+      target = statement.targets[0]
+      if isinstance(target, ast.Name) and target.id in names:
+        settings[target.id] = ast.literal_eval(statement.value)
+  if set(settings) != set(names):
+    raise ValueError("Missing literal reconstruction plot settings in " + path)
+  return settings
+
+
+def response_report_page(canvas, title, section, page, sources):
+  """Six large panels, a shared legend, and a persistent section/page label."""
+  canvas.cd()
+  canvas.Clear()
+  text = ROOT.TLatex()
+  text.SetNDC(True)
+  text.SetTextFont(42)
+  text.SetTextSize(.028)
+  text.DrawLatex(.035, .963, title + "  |  " + section)
+  legend = ROOT.TLegend(.25, .906, .91, .946)
+  legend.SetNColumns(len(sources))
+  legend.SetTextSize(.024)
+  legend.SetBorderSize(0)
+  legend.SetFillStyle(0)
+  retained = [text, legend]
+  for index, (label, _, color) in enumerate(sources):
+    graph = ROOT.TGraphErrors()
+    graph.SetLineColor(color)
+    graph.SetMarkerColor(color)
+    graph.SetMarkerStyle(20+index)
+    graph.SetLineWidth(2)
+    legend.AddEntry(graph, label, "lep")
+    retained.append(graph)
+  legend.Draw()
+  text.SetTextSize(.017)
+  text.DrawLatex(.035, .018, "Unweighted shapes | response: 68% intervals + binning; shapes: Poisson errors | N#geq20 | lines guide the eye")
+  text.DrawLatex(.93, .018, str(page))
+  panels = ROOT.TPad("response_panels", "", 0., .047, 1., .902)
+  panels.Draw()
+  panels.Divide(2, 3, .008, .012)
+  retained.append(panels)
+  return panels, retained
+
+
+def response_panel_style(pad):
+  pad.SetLeftMargin(.20)
+  pad.SetRightMargin(.045)
+  pad.SetBottomMargin(.21)
+  pad.SetTopMargin(.12)
+  pad.SetTicks(1, 1)
+
+
+def response_axis_style(histogram):
+  for axis in (histogram.GetXaxis(), histogram.GetYaxis()):
+    axis.SetTitleSize(.057)
+    axis.SetLabelSize(.046)
+    axis.SetNdivisions(505)
+    axis.SetTitleOffset(1.05)
+  histogram.GetYaxis().SetTitleOffset(1.15)
+
+
+def draw_response_panel(pad, sources, kind, category, state, variable, axis, statistic, settings, cache):
+  """Connect adjacent resolved bins only; every point has a vertical interval."""
+  response_panel_style(pad)
+  retained = []
+  multigraph = ROOT.TMultiGraph()
+  xs, bottoms, tops = [], [], []
+  logarithmic = axis not in ("pz", "vz")
+  for source_index, (label, source, color) in enumerate(sources):
+    name = f"response/{kind}Response{category}{state}_{variable}Vs{axis}"
+    key = (label, name)
+    if key not in cache:
+      histogram = source.Get(name)
+      if not histogram:
+        raise RuntimeError("Missing response histogram: " + name)
+      summaries = []
+      for bin_index in range(1, histogram.GetNbinsX()+1):
+        projection = histogram.ProjectionY("response_slice", bin_index, bin_index)
+        projection.SetDirectory(0)
+        summary = response_summary(projection, settings["reconstructionResponseMinimumEntries"])
+        low = histogram.GetXaxis().GetBinLowEdge(bin_index)
+        high = histogram.GetXaxis().GetBinUpEdge(bin_index)
+        x = math.sqrt(low*high) if logarithmic and low > 0. else (low+high)/2.
+        summaries.append((x, summary))
+      cache[key] = summaries
+    graph = None
+    for x, summary in cache[key]:
+      if summary is None:
+        graph = None
+        continue
+      if graph is None:
+        graph = ROOT.TGraphAsymmErrors()
+        graph.SetLineColor(color)
+        graph.SetMarkerColor(color)
+        graph.SetMarkerStyle(20+source_index)
+        graph.SetMarkerSize(.8)
+        graph.SetLineWidth(2)
+        multigraph.Add(graph, "LP")
+        retained.append(graph)
+      value, down, up = summary[statistic]
+      point = graph.GetN()
+      graph.SetPoint(point, x, value)
+      graph.SetPointError(point, 0., 0., down, up)
+      xs.append(x)
+      bottoms.append(value-down)
+      tops.append(value+up)
+  variable_title = settings["reconstructionResponseTitles"][variable]
+  x_title = settings["reconstructionResponseAxes"][axis]
+  fit = "Constrained" if state else "Unconstrained"
+  y_title = ("#sigma_{68}" if statistic == "width" else "Median") + " (" + variable_title + ")"
+  multigraph.SetTitle(f"{fit}: {variable_title};{x_title};{y_title}")
+  if xs:
+    multigraph.Draw("A")
+    response_axis_style(multigraph)
+    lower, upper = min(bottoms), max(tops)
+    if statistic == "width" and settings["reconstructionResponseLogY"] and lower > 0.:
+      pad.SetLogy(True)
+      multigraph.SetMinimum(lower*.65)
+      multigraph.SetMaximum(upper*1.5)
+    else:
+      span = max(upper-lower, abs(upper)*.1, 1.e-6)
+      multigraph.SetMinimum(0. if statistic == "width" else min(0., lower-.12*span))
+      multigraph.SetMaximum(max(0., upper)+.16*span)
+    if logarithmic:
+      pad.SetLogx(True)
+      multigraph.GetXaxis().SetLimits(min(xs)*.7, max(xs)*1.4)
+    if statistic == "bias":
+      zero = ROOT.TLine(multigraph.GetXaxis().GetXmin(), 0., multigraph.GetXaxis().GetXmax(), 0.)
+      zero.SetLineStyle(2)
+      zero.SetLineColor(ROOT.kGray+2)
+      zero.Draw()
+      retained.append(zero)
+  else:
+    text = ROOT.TLatex()
+    text.SetNDC(True)
+    text.SetTextSize(.055)
+    text.DrawLatex(.12, .68, fit + ": " + variable_title)
+    text.DrawLatex(.12, .48, "No resolved bins vs " + x_title)
+    text.DrawLatex(.12, .29, "Too few entries or interval reaches flow")
+    retained.append(text)
+  retained.append(multigraph)
+  return retained
+
+
+
+def align_response_panels(panels, row):
+  pads = [panels.GetPad(row*2+column+1) for column in (0, 1)]
+  graphs = []
+  for pad in pads:
+    graphs.extend(item for item in pad.GetListOfPrimitives() if item.InheritsFrom("TMultiGraph") and item.GetListOfGraphs())
+  if len(graphs) != 2:
+    return
+  lower = min(graph.GetHistogram().GetMinimum() for graph in graphs)
+  upper = max(graph.GetHistogram().GetMaximum() for graph in graphs)
+  left = min(graph.GetXaxis().GetXmin() for graph in graphs)
+  right = max(graph.GetXaxis().GetXmax() for graph in graphs)
+  logarithmic = all(pad.GetLogy() for pad in pads)
+  for pad, graph in zip(pads, graphs):
+    pad.SetLogy(logarithmic)
+    graph.SetMinimum(lower)
+    graph.SetMaximum(upper)
+    graph.GetXaxis().SetLimits(left, right)
+    pad.Modified()
+
+def draw_response_shape(pad, sources, kind, category, variable, settings, state=None):
+  """Raw candidate or matched residual densities with Poisson error bars."""
+  response_panel_style(pad)
+  histograms, xs, ys = [], [], []
+  for source_index, (label, source, color) in enumerate(sources):
+    if state is None:
+      name = f"{kind.lower()}/Shift{kind}{'Vertex' if kind == 'Dimuon' else ''}{category}_{variable}"
+      original = source.Get(name)
+      histogram = original.Clone("candidate_shape") if original else None
+    else:
+      name = f"response/{kind}Response{category}{state}_{variable}Vspt"
+      original = source.Get(name)
+      histogram = original.ProjectionY("residual_shape", 0, original.GetNbinsX()+1) if original else None
+    if not histogram:
+      raise RuntimeError("Missing diagnostic histogram: " + name)
+    histogram.SetDirectory(0)
+    if state is not None:
+      histogram.GetXaxis().SetRangeUser(*settings["reconstructionResponseDisplayRanges"][variable])
+    visible_bins = histogram.GetXaxis().GetLast()-histogram.GetXaxis().GetFirst()+1
+    factor = max(factor for factor in (1, 2, 4, 5, 10, 20)
+                 if histogram.GetNbinsX() % factor == 0 and (factor == 1 or visible_bins/factor >= 40))
+    if factor > 1:
+      histogram.Rebin(factor)
+    total = histogram.Integral(0, histogram.GetNbinsX()+1)
+    if total <= 0.:
+      continue
+    # Counts are unweighted. Explicitly restore Poisson errors before scaling.
+    for bin_index in range(histogram.GetNbinsX()+2):
+      histogram.SetBinError(bin_index, math.sqrt(histogram.GetBinContent(bin_index)))
+    histogram.Scale(1./total, "width")
+    if state is not None:
+      histogram.GetXaxis().SetRangeUser(*settings["reconstructionResponseDisplayRanges"][variable])
+    histogram.SetLineColor(color)
+    histogram.SetMarkerColor(color)
+    histogram.SetMarkerStyle(20+source_index)
+    histogram.SetMarkerSize(.45)
+    histogram.SetLineWidth(1)
+    for bin_index in range(histogram.GetXaxis().GetFirst(), histogram.GetXaxis().GetLast()+1):
+      if histogram.GetBinContent(bin_index) > 0.:
+        xs.extend([histogram.GetXaxis().GetBinLowEdge(bin_index), histogram.GetXaxis().GetBinUpEdge(bin_index)])
+        ys.append(histogram.GetBinContent(bin_index)+histogram.GetBinError(bin_index))
+    visible = sum(histogram.GetBinContent(i)*histogram.GetBinWidth(i)
+                  for i in range(histogram.GetXaxis().GetFirst(), histogram.GetXaxis().GetLast()+1))
+    histograms.append((histogram, label, total, max(0., 1.-visible)))
+  text = ROOT.TLatex()
+  text.SetNDC(True)
+  text.SetTextSize(.036)
+  if histograms and ys:
+    pad.SetLogy(True)
+    for index, (histogram, label, total, outside) in enumerate(histograms):
+      x_title = settings["reconstructionDiagnosticLabels"].get(variable, variable) if state is None else settings["reconstructionResponseVariables"][variable]
+      title = "Reconstructed candidates" if state is None else ("Constrained" if state else "Unconstrained")
+      histogram.SetTitle(f"{title};{x_title};Fraction / variable unit")
+      histogram.SetMinimum(min(ys)*.03)
+      histogram.SetMaximum(max(ys)*8.)
+      if state is None and xs:
+        histogram.GetXaxis().SetRangeUser(min(xs), max(xs))
+      response_axis_style(histogram)
+      histogram.Draw("E1 LP" if index == 0 else "E1 LP SAME")
+      text.SetTextColor(histogram.GetLineColor())
+      text.DrawLatex(.2, .84-index*.065, f"{label}: N={int(round(total))}, outside={100.*outside:.1f}%")
+  else:
+    text.DrawLatex(.15, .55, "No entries: " + variable)
+  return [histogram for histogram, _, _, _ in histograms] + [text]
+
+
+def draw_process_responses(input_paths, output_dir):
+  """One category report with direct comparisons first and the full mixed grid."""
+  settings = reconstruction_plot_settings()
+  sources = []
+  colors = [ROOT.kGreen+2, ROOT.kBlue+1, ROOT.kOrange+7, ROOT.kRed+1]
+  for index, specification in enumerate(input_paths):
+    label, path = specification.split("=", 1)
+    source = ROOT.TFile.Open(path)
+    if not source or source.IsZombie():
+      raise RuntimeError("Cannot open process response: " + path)
+    sources.append((label, source, colors[index % len(colors)]))
+  os.makedirs(output_dir, exist_ok=True)
+  ROOT.gStyle.SetPaperSize(28., 19.5)
+  ROOT.gStyle.SetTitleFontSize(.06)
+  canvas = ROOT.TCanvas("process_response", "Process response", 1500, 1040)
+  reports = {}
+  for kind, categories in (("Muon", MUON_RESOLUTION_TYPES), ("Dimuon", DIMUON_RESOLUTION_TYPES)):
+    variables = [variable for variable in settings["reconstructionResponseVariables"]
+                 if kind == "Dimuon" or variable not in ("mass", "openingAngle")]
+    direct = [(variable, variable) for variable in settings["reconstructionResponseOverview"]
+              if variable in variables and variable in settings["reconstructionResponseAxes"]]
+    mixed = [(variable, axis) for axis in settings["reconstructionResponseAxes"]
+             for variable in variables if (variable, axis) not in direct]
+    for category, slug, _ in categories:
+      short = settings["reconstructionReportCategories"][kind].get(category, "Inclusive")
+      title = kind + " | " + short
+      output = os.path.join(output_dir, kind.lower()+"_"+slug+".pdf")
+      canvas.cd()
+      canvas.Print(output+"[")
+      canvas.Clear()
+      text = ROOT.TLatex()
+      text.SetNDC(True)
+      text.SetTextFont(42)
+      text.SetTextSize(.044)
+      text.DrawLatex(.07, .88, title + " | Reconstruction diagnostics")
+      text.SetTextSize(.027)
+      lines = [
+        "QCD, DY, J/#psi and dark photons | latest ready campaign inputs, 19 October 2026",
+        "Read first: direct resolution comparisons, then direct median bias.",
+        "Next: all mixed resolution comparisons; reconstructed and residual shapes.",
+        "Appendix: all mixed median-bias comparisons. PDF bookmarks identify sections.",
+        "Left column: unconstrained. Right column: constrained. Same process colors throughout.",
+        "Resolution = half the central 68.27% residual interval. Bias = median residual.",
+        "Momentum and mass residuals are relative; position residuals are in cm; angles in rad.",
+        "Bars: conservative 68.27% order-statistic intervals, including histogram-bin precision.",
+        "Entry-level statistics: correlations between candidates/events are not available here.",
+        "At least 20 entries per point. Intervals reaching overflow/underflow are omitted.",
+        "Missing bins break the lines. No points means insufficient information, not zero resolution.",
+        "Unweighted available-entry shapes; samples have different spectra and signal-point mixtures.",
+        "Muon positions are track PCA coordinates; dimuon vertices require a shared true origin.",
+        "Flight and proper decay length are realized parent quantities, not mean sample lifetimes.",
+      ]
+      for index, line in enumerate(lines):
+        text.DrawLatex(.07, .79-index*.045, line)
+      canvas.Print(output, "Title:Guide")
+      page = 1
+      cache = {}
+      for section, relationships, statistic in (("Direct resolution", direct, "width"),
+                                                ("Direct median bias", direct, "bias"),
+                                                ("Mixed resolution", mixed, "width")):
+        for start in range(0, len(relationships), 3):
+          page += 1
+          panels, retained = response_report_page(canvas, title, section, page, sources)
+          for row, (variable, axis) in enumerate(relationships[start:start+3]):
+            for column, state in enumerate(("", "Constrained")):
+              pad = panels.cd(row*2+column+1)
+              retained.extend(draw_response_panel(pad, sources, kind, category, state, variable, axis, statistic, settings, cache))
+            align_response_panels(panels, row)
+          canvas.cd()
+          canvas.Print(output, "Title:"+section+" "+str(start//3+1))
+      for shape_type in ("Candidates", "Residuals"):
+        shape_variables = settings["reconstructionDiagnosticVariables"][kind] if shape_type == "Candidates" else variables
+        per_page = 6 if shape_type == "Candidates" else 3
+        for start in range(0, len(shape_variables), per_page):
+          page += 1
+          panels, retained = response_report_page(canvas, title, shape_type, page, sources)
+          for row, variable in enumerate(shape_variables[start:start+per_page]):
+            states = (None,) if shape_type == "Candidates" else ("", "Constrained")
+            for column, state in enumerate(states):
+              pad = panels.cd(row+1 if state is None else row*2+column+1)
+              retained.extend(draw_response_shape(pad, sources, kind, category, variable, settings, state))
+          canvas.cd()
+          canvas.Print(output, "Title:"+shape_type+" "+str(start//per_page+1))
+      for start in range(0, len(mixed), 3):
+        page += 1
+        panels, retained = response_report_page(canvas, title, "Mixed median bias (appendix)", page, sources)
+        for row, (variable, axis) in enumerate(mixed[start:start+3]):
+          for column, state in enumerate(("", "Constrained")):
+            pad = panels.cd(row*2+column+1)
+            retained.extend(draw_response_panel(pad, sources, kind, category, state, variable, axis, "bias", settings, cache))
+          align_response_panels(panels, row)
+        canvas.cd()
+        canvas.Print(output, "Title:Mixed median bias "+str(start//3+1))
+      canvas.cd()
+      canvas.Print(output+"]")
+      reports[os.path.basename(output)] = {"pages": page, "category": short, "response_maps": len(cache),
+          "resolved_bins": sum(summary is not None for values in cache.values() for _, summary in values),
+          "omitted_bins": sum(summary is None for values in cache.values() for _, summary in values)}
+  canvas.Close()
+  for _, source, _ in sources:
+    source.Close()
+  return reports
 
 def main():
   # set batch mode
   ROOT.gROOT.SetBatch(True)
 
   args = parse_arguments()
+  if args.process_input:
+    if args.input or args.version is not None or args.compare_versions or args.rebin_2d:
+      raise SystemExit("error: process inputs cannot be combined with version or correlation options")
+    try:
+      draw_process_responses(args.process_input, args.output_dir)
+    except (RuntimeError, ValueError) as error:
+      raise SystemExit(f"error: {error}") from error
+    return
   if args.compare_versions:
     if args.rebin_2d:
       raise SystemExit("error: --rebin-2d does not apply to version comparisons")

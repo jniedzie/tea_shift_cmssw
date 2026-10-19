@@ -450,3 +450,54 @@ if bsm_inputs:
             text_size=17,
         ),
     }
+
+# Truth-binned reconstruction response; rendered by shift_diagnostics_plotter.
+# Keep these settings literal so diagnostics can read them without campaign I/O.
+reconstructionResponseAxes = {
+    "pt": "True p_{T} [GeV]", "pz": "True p_{z} [GeV]", "p": "True |p| [GeV]",
+    "mass": "True dimuon mass [GeV]", "vz": "True production z [cm]",
+    "decayR": "True production radius [cm]", "flight": "True parent flight [cm]",
+    "ctau": "True parent proper decay length [cm]", "openingAngle": "True dimuon opening angle [rad]",
+}
+reconstructionResponseVariables = {
+    "pt": "(p_{T}^{reco}-p_{T}^{true})/p_{T}^{true}",
+    "pz": "(p_{z}^{reco}-p_{z}^{true})/p_{z}^{true}",
+    "p": "(|p|^{reco}-|p|^{true})/|p|^{true}",
+    "mass": "(m^{reco}-m^{true})/m^{true}",
+    "eta": "#eta^{reco}-#eta^{true}", "phi": "#phi^{reco}-#phi^{true} [rad]",
+    "vx": "x^{reco}-x^{true} [cm]", "vy": "y^{reco}-y^{true} [cm]",
+    "vz": "z^{reco}-z^{true} [cm]", "openingAngle": "#alpha^{reco}-#alpha^{true} [rad]",
+}
+reconstructionResponseMinimumEntries = 20
+reconstructionDiagnosticVariables = {
+    "Muon": ("pt", "pz", "eta", "phi", "vx", "vy", "vz", "nCSCHits", "nDTHits", "nRPCHits", "dz", "linePcaZ", "trackVz"),
+    "Dimuon": ("pt", "pz", "eta", "phi", "mass", "vx", "vy", "vz", "normalizedChi2", "dca", "isOS"),
+}
+
+reconstructionResponseDisplayRanges = {
+    "pt": (-5., 5.), "pz": (-5., 5.), "p": (-5., 5.), "mass": (-5., 5.),
+    "eta": (-15., 15.), "phi": (-3.142, 3.142), "openingAngle": (-3.142, 3.142),
+    "vx": (-5000., 5000.), "vy": (-5000., 5000.), "vz": (-30000., 30000.),
+}
+reconstructionResponseLogY = True
+reconstructionDiagnosticLabels = {
+    "pt": "p_{T} [GeV]", "pz": "p_{z} [GeV]", "eta": "#eta", "phi": "#phi [rad]",
+    "mass": "Dimuon mass [GeV]", "vx": "x [cm]", "vy": "y [cm]", "vz": "z [cm]",
+    "dz": "Track d_{z} [cm]", "linePcaZ": "Track-axis PCA z [cm]", "trackVz": "Track reference z [cm]",
+    "nCSCHits": "CSC hits", "nDTHits": "DT hits", "nRPCHits": "RPC hits",
+    "normalizedChi2": "#chi^{2}/ndof", "dca": "Muon-pair DCA [cm]", "isOS": "Opposite-charge pair",
+}
+
+# Category reports keep fit states side by side and put diagonal comparisons first.
+reconstructionReportCategories = {
+    "Muon": {"BothEndcaps": "Both", "NearEndcapOnly": "Near", "FarEndcapOnly": "Far",
+             "NearEndcapAndBarrel": "Near+Barrel", "Unclassified": "Unclassified"},
+    "Dimuon": {"": "Inclusive", "Both-Both": "Both-Both", "Near-Both": "Near-Both",
+               "Both-Far": "Both-Far", "Near-Far": "Near-Far", "Other": "Other"},
+}
+reconstructionResponseOverview = ("mass", "pt", "pz", "p", "vz", "openingAngle")
+reconstructionResponseTitles = {
+    "pt": "relative p_{T}", "pz": "relative p_{z}", "p": "relative |p|", "mass": "relative mass",
+    "eta": "#Delta#eta", "phi": "#Delta#phi [rad]", "vx": "#Deltax [cm]",
+    "vy": "#Deltay [cm]", "vz": "#Deltaz [cm]", "openingAngle": "#Delta#alpha [rad]",
+}

@@ -21,7 +21,7 @@ class DimuonKinematicsRuntimeTest(unittest.TestCase):
         self.addCleanup(scratch.cleanup)
         self.scratch = Path(scratch.name)
 
-    def run_histograms(self, events, truth=False):
+    def run_histograms(self, events, truth=False, response_maps=False):
         root = self.ROOT.TFile(str(self.scratch / "input.root"), "RECREATE")
         tree = self.ROOT.TTree("Events", "Synthetic reconstructed muon pairs")
         source = (Path(__file__).resolve().parents[1] /
@@ -38,7 +38,7 @@ class DimuonKinematicsRuntimeTest(unittest.TestCase):
             count = buffers[f"n{collection}"] = array("i", [0])
             tree.Branch(f"n{collection}", count, f"n{collection}/I")
             for field in sorted(fields):
-                value = buffers[f"{collection}_{field}"] = array("f", [0.0] * 2)
+                value = buffers[f"{collection}_{field}"] = array("f", [0.0] * 4)
                 tree.Branch(f"{collection}_{field}", value,
                             f"{collection}_{field}[n{collection}]/F")
         weight = array("d", [1.0])
@@ -74,6 +74,8 @@ class DimuonKinematicsRuntimeTest(unittest.TestCase):
             "from shift_histogrammer_config import *\n"
             "defaultHistParams = ()\nirregularDefaultHistParams = ()\n"
             f"enableTruthDiagnostics = {truth}\n"
+            + ("enableResolutionMaps = True\nresolutionMapsOnly = True\n"
+               "irregularHistParams2D = book_resolution_maps()\n" if response_maps else "")
             + ("" if truth else
                "extraEventCollections = {name: value for name, value in extraEventCollections.items() "
                "if not name.startswith('Gen')}\n")
@@ -88,6 +90,32 @@ class DimuonKinematicsRuntimeTest(unittest.TestCase):
         histograms = self.ROOT.TFile.Open(str(output))
         self.addCleanup(histograms.Close)
         return histograms
+
+    def test_response_maps_close_for_non_jpsi_and_reject_invalid_pairs(self):
+        branches = {
+            "nGenPart": [3], "GenPart_pdgId": [13., -13., 32.],
+            "GenPart_status": [1., 1., 2.], "GenPart_genPartIdxMother": [2., 2., -1.],
+            "GenPart_pt": [3., 4., 5.], "GenPart_pz": [-10., -20., -30.],
+            "GenPart_phi": [0., math.pi / 2, 0.], "GenPart_mass": [.105658, .105658, 3.],
+            "ShiftMuon_hitGenPartIdx": [0., 1.], "ShiftMuon_pz": [-10., -20.],
+            "ShiftDimuonVertex_pz": [-30.],
+        }
+        displaced = dict(branches, GenPart_vz=[0., 10., 0.])
+        duplicate = dict(branches, ShiftMuon_hitGenPartIdx=[0., 0.])
+        root = self.run_histograms([{"branches": branches}, {"branches": displaced},
+                                    {"branches": duplicate}], truth=True, response_maps=True)
+        def entries(name):
+            hist = root.Get("response/" + name)
+            self.assertTrue(hist, name)
+            return hist.GetEntries()
+        self.assertEqual(entries("MuonResponseBothEndcaps_ptVspt"), 6)
+        self.assertEqual(entries("DimuonResponseBoth-Both_pVspt"), 2)
+        self.assertEqual(entries("DimuonResponseBoth-Both_vxVspt"), 1)
+        self.assertEqual(entries("DimuonResponseBoth-BothConstrained_pVspt"), 0)
+        hist = root.Get("response/MuonResponseBothEndcaps_ptVspt")
+        self.assertEqual(hist.GetBinContent(hist.FindBin(3., 0.)), 5)
+        # Prompt vertices and a real zero flight are finite entries, not divisions by zero.
+        self.assertEqual(entries("DimuonResponseBoth-Both_vzVsflight"), 1)
 
     def histogram(self, root, variable, category=""):
         histogram = root.Get(f"dimuon/ShiftDimuonVertex{category}_{variable}")

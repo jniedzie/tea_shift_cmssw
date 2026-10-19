@@ -114,11 +114,15 @@ ShiftHistogramsFiller::ShiftHistogramsFiller(shared_ptr<HistogramsHandler> histo
   map<string, IrregularHistogramParams> irregularCustomVariables;
   config.GetHistogramsParams(irregularCustomVariables, "irregularHistParams");
   registerConstrained(irregularCustomVariables);
-  if (enableTruthDiagnostics)
+  try { config.GetValue("enableResolutionMaps", enableResolutionMaps); } catch (const Exception&) {}
+  try { config.GetValue("resolutionMapsOnly", resolutionMapsOnly); } catch (const Exception&) {}
+  if (resolutionMapsOnly && (!enableTruthDiagnostics || !enableResolutionMaps))
+    throw runtime_error("Resolution-only mode requires enabled MC truth and response maps");
+  if (enableTruthDiagnostics && !resolutionMapsOnly)
     for (auto const& category : dimuonCategories)
       histogramsHandler->SetHistogramLabels(
           "ShiftDimuonVertex" + category + "_genPid", dimuonOriginLabels);
-  if (enableTruthDiagnostics)
+  if (enableTruthDiagnostics && !resolutionMapsOnly)
     for (auto const& category : dimuonCategories)
       histogramsHandler->SetHistogramLabels(
           "ShiftDimuonVertex" + category + "_genPidDifferentMothers", differentMotherLabels);
@@ -137,12 +141,17 @@ void ShiftHistogramsFiller::FillDiagnostic(const string& name, double value) {
 }
 
 void ShiftHistogramsFiller::Fill(const shared_ptr<Event> event) {
+  if (resolutionMapsOnly) {
+    FillResolutionMaps(event);
+    return;
+  }
   FillBdtDiagnostics(event);
   FillRecoLevel(event);
   FillConstrainedMuons(event);
   FillDimuonKinematics(event);
   FillDetectorDiagnostics(event);
   if (enableTruthDiagnostics) {
+    FillResolutionMaps(event);
     FillDimuonOrigins(event);
     FillGenLevel(event);
     FillRecoVsGen2D(event);
@@ -763,6 +772,145 @@ void ShiftHistogramsFiller::FillRecoVsGen2D(const shared_ptr<Event> event) {
     histogramsHandler->Fill("RecoVsGenDimuon_vx", recoDimuon->GetAs<float>("vx"), genJPsiVertex.X());
     histogramsHandler->Fill("RecoVsGenDimuon_vy", recoDimuon->GetAs<float>("vy"), genJPsiVertex.Y());
     histogramsHandler->Fill("RecoVsGenDimuon_vz", recoDimuon->GetAs<float>("vz"), genJPsiVertex.Z());
+  }
+}
+
+void ShiftHistogramsFiller::FillResolutionMaps(const shared_ptr<Event> event) {
+  if (!enableResolutionMaps) return;
+  auto const particles = event->GetCollection("GenPart");
+  auto const muons = event->GetCollection("ShiftMuon");
+  auto const fourVector = [](shared_ptr<PhysicsObject> const& object, string const& prefix) {
+    double const pt = object->GetAs<float>(prefix.empty() ? "pt" : prefix + "Pt");
+    double const phi = object->GetAs<float>(prefix.empty() ? "phi" : prefix + "Phi");
+    double const pz = object->GetAs<float>(prefix.empty() ? "pz" : prefix + "Pz");
+    TLorentzVector vector;
+    vector.SetXYZM(pt * cos(phi), pt * sin(phi), pz, 0.1056583745);
+    return vector;
+  };
+  auto const position = [](shared_ptr<PhysicsObject> const& object) {
+    return TVector3(object->GetAs<float>("vx"), object->GetAs<float>("vy"), object->GetAs<float>("vz"));
+  };
+  auto const firstMother = [&](int index) {
+    int const pdg = particles->at(index)->GetAs<int>("pdgId");
+    set<int> visited;
+    while (index >= 0 && size_t(index) < particles->size() && visited.insert(index).second) {
+      int const mother = particles->at(index)->GetAs<int>("genPartIdxMother");
+      if (mother < 0 || size_t(mother) >= particles->size()) return -1;
+      if (particles->at(mother)->GetAs<int>("pdgId") != pdg) return mother;
+      index = mother;
+    }
+    return -1;
+  };
+  auto const truthIndex = [&](shared_ptr<PhysicsObject> const& muon) {
+    int const index = HitTruthIndex(muon);
+    if (index < 0 || size_t(index) >= particles->size() ||
+        abs(particles->at(index)->GetAs<int>("pdgId")) != 13) return -1;
+    return index;
+  };
+  auto const opening = [](TLorentzVector const& a, TLorentzVector const& b) {
+    return atan2(a.Vect().Cross(b.Vect()).Mag(), a.Vect().Dot(b.Vect()));
+  };
+  auto const fill = [&](string const& prefix, map<string, double> const& axes,
+                        map<string, double> const& residuals) {
+    for (auto const& [axis, x] : axes)
+      for (auto const& [residual, y] : residuals)
+        if (isfinite(x) && isfinite(y))
+          histogramsHandler->Fill(prefix + "_" + residual + "Vs" + axis, x, y);
+  };
+  auto const addFlight = [&](map<string, double>& axes, int mother, TVector3 const& vertex) {
+    if (mother < 0) return;
+    auto const parent = particles->at(mother);
+    double const flight = (vertex - position(parent)).Mag();
+    axes["flight"] = flight;
+    double const momentum = fourVector(parent, "").P();
+    double const mass = parent->GetAs<float>("mass");
+    if (momentum > 0. && mass > 0.) axes["ctau"] = flight * mass / momentum;
+  };
+  vector<string> const categories = {"BothEndcaps", "NearEndcapOnly", "FarEndcapOnly", "NearEndcapAndBarrel", "Unclassified"};
+  for (auto const& category : categories) {
+    for (auto const& reco : *event->GetCollection("ShiftMuon" + category)) {
+      int const index = truthIndex(reco);
+      if (index < 0) continue;
+      auto const gen = particles->at(index);
+      auto const truth = fourVector(gen, "");
+      auto const vertex = position(gen);
+      map<string, double> axes = {{"pt", truth.Pt()}, {"pz", truth.Pz()}, {"p", truth.P()},
+                                  {"vz", vertex.Z()}, {"decayR", vertex.Perp()}};
+      addFlight(axes, firstMother(index), vertex);
+      // Pair coordinates are defined only with one unambiguous stable OS sibling.
+      int sibling = -1;
+      int const mother = firstMother(index);
+      for (size_t j = 0; mother >= 0 && j < particles->size(); ++j) {
+        auto const other = particles->at(j);
+        if (other->GetAs<int>("pdgId") != -gen->GetAs<int>("pdgId") || other->GetAs<int>("status") != 1 ||
+            firstMother(j) != mother) continue;
+        if (sibling >= 0) { sibling = -1; break; }
+        sibling = j;
+      }
+      if (sibling >= 0) {
+        auto const other = fourVector(particles->at(sibling), "");
+        axes["mass"] = (truth + other).M();
+        axes["openingAngle"] = opening(truth, other);
+      }
+      for (string const state : {"", "constrained"}) {
+        if (!state.empty() && reco->GetAs<int>("constrainedValid") != 1) continue;
+        auto const momentum = fourVector(reco, state);
+        map<string, double> residuals;
+        if (truth.Pt() > 0.) residuals["pt"] = (momentum.Pt() - truth.Pt()) / truth.Pt();
+        if (truth.Pz() != 0.) residuals["pz"] = (momentum.Pz() - truth.Pz()) / truth.Pz();
+        if (truth.P() > 0.) residuals["p"] = (momentum.P() - truth.P()) / truth.P();
+        residuals["eta"] = momentum.Eta() - truth.Eta();
+        residuals["phi"] = remainder(momentum.Phi() - truth.Phi(), 2. * acos(-1.));
+        for (auto const& coordinate : {"x", "y", "z"}) {
+          string const branch = state.empty() ? string("v") + coordinate : state + "V" + coordinate;
+          double const value = coordinate == string("x") ? vertex.X() : coordinate == string("y") ? vertex.Y() : vertex.Z();
+          residuals[string("v") + coordinate] = reco->GetAs<float>(branch) - value;
+        }
+        fill("MuonResponse" + category + (state.empty() ? "" : "Constrained"), axes, residuals);
+      }
+    }
+  }
+  for (auto const& category : dimuonCategories) {
+    for (auto const& reco : *event->GetCollection("ShiftDimuonVertex" + category)) {
+      int const i = reco->GetAs<int>("muonIdx1"), j = reco->GetAs<int>("muonIdx2");
+      if (i < 0 || j < 0 || i == j || size_t(i) >= muons->size() || size_t(j) >= muons->size()) continue;
+      int const a = truthIndex(muons->at(i)), b = truthIndex(muons->at(j));
+      if (a < 0 || b < 0 || a == b) continue;
+      auto const first = fourVector(particles->at(a), ""), second = fourVector(particles->at(b), "");
+      auto const truth = first + second;
+      auto const vertex = position(particles->at(a));
+      bool const commonVertex = (vertex - position(particles->at(b))).Mag() < 1.e-4;
+      int const mother = firstMother(a);
+      map<string, double> axes = {{"pt", truth.Pt()}, {"pz", truth.Pz()}, {"p", truth.P()},
+                                  {"mass", truth.M()}, {"openingAngle", opening(first, second)}};
+      if (commonVertex) {
+        axes["vz"] = vertex.Z();
+        axes["decayR"] = vertex.Perp();
+        if (mother == firstMother(b)) addFlight(axes, mother, vertex);
+      }
+      for (string const state : {"", "constrained"}) {
+        if (!state.empty() && reco->GetAs<int>("constrainedValid") != 1) continue;
+        auto const momentum = fourVector(reco, state);
+        map<string, double> residuals;
+        if (truth.Pt() > 0.) residuals["pt"] = (momentum.Pt() - truth.Pt()) / truth.Pt();
+        if (truth.Pz() != 0.) residuals["pz"] = (momentum.Pz() - truth.Pz()) / truth.Pz();
+        if (truth.P() > 0.) residuals["p"] = (momentum.P() - truth.P()) / truth.P();
+        double const mass = reco->GetAs<float>(state.empty() ? "mass" : "constrainedMass");
+        if (truth.M() > 0.) residuals["mass"] = (mass - truth.M()) / truth.M();
+        residuals["eta"] = momentum.Eta() - truth.Eta();
+        residuals["phi"] = remainder(momentum.Phi() - truth.Phi(), 2. * acos(-1.));
+        if (commonVertex) {
+          residuals["vx"] = reco->GetAs<float>(state.empty() ? "vx" : "constrainedVx") - vertex.X();
+          residuals["vy"] = reco->GetAs<float>(state.empty() ? "vy" : "constrainedVy") - vertex.Y();
+          residuals["vz"] = reco->GetAs<float>(state.empty() ? "vz" : "constrainedVz") - vertex.Z();
+        }
+        // The constrained pair direction is only defined when both daughter fits exist.
+        bool const daughterFits = state.empty() || (muons->at(i)->GetAs<int>("constrainedValid") == 1 &&
+                                                    muons->at(j)->GetAs<int>("constrainedValid") == 1);
+        if (daughterFits) residuals["openingAngle"] = opening(fourVector(muons->at(i), state), fourVector(muons->at(j), state)) - opening(first, second);
+        fill("DimuonResponse" + category + (state.empty() ? "" : "Constrained"), axes, residuals);
+      }
+    }
   }
 }
 

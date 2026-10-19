@@ -30,6 +30,8 @@ class ShiftHistogramsFiller {
   std::shared_ptr<HistogramsHandler> histogramsHandler;
   std::unique_ptr<EventProcessor> eventProcessor;
   bool enableTruthDiagnostics = true;
+  bool enableResolutionMaps = false;
+  bool resolutionMapsOnly = false;
   bool weightMcDiagnostics = false;
   bool enableBdtDiagnostics = false;
   bool bdtTruthDiagnostics = true;
@@ -59,6 +61,7 @@ class ShiftHistogramsFiller {
   void FillDimuonKinematics(const std::shared_ptr<Event> event);
   void FillRecoVsGen2D(const std::shared_ptr<Event> event);
   void FillResolutionPlots(const std::shared_ptr<Event> event);
+  void FillResolutionMaps(const std::shared_ptr<Event> event);
   void FillEfficiencies(const std::shared_ptr<Event> event);
   void FillDetectorDiagnostics(const std::shared_ptr<Event> event);
   void FillDimuonOrigins(const std::shared_ptr<Event> event);

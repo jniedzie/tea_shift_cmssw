@@ -21,6 +21,56 @@ import os
 # Truth is used only for MC performance evaluation, never reco selection.
 enableTruthDiagnostics = True
 
+# Optional truth-binned response maps for the reconstruction study.
+enableResolutionMaps = False
+resolutionMapsOnly = False
+resolutionMapAxes = {
+    "pt": [0., .5, 1., 2., 3., 5., 10., 20., 30., 50., 100., 200.],
+    "pz": [-5000., -2000., -1000., -500., -200., -100., -50., -20., -5., 0., 100., 1000.],
+    "p": [0., 5., 10., 20., 50., 100., 200., 500., 1000., 2000., 5000.],
+    "mass": [0., .211, .3, .5, 1., 2., 3., 4., 5., 10., 15., 20., 30., 50., 70., 100., 200.],
+    "vz": [-20000., -10000., -1000., 0., 1000., 5000., 10000., 13000., 14000., 14700., 14800., 14900., 15000., 20000., 40000.],
+    "decayR": [0., .01, .1, 1., 10., 50., 100., 300., 1000., 10000., 100000.],
+    "flight": [0., .01, .1, 1., 10., 100., 500., 1000., 3000., 10000., 30000., 100000., 1000000.],
+    "ctau": [0., 1.e-8, 1.e-6, 1.e-4, .01, .1, 1., 10., 100., 1000., 10000., 100000.],
+    "openingAngle": [0., .0001, .0003, .001, .003, .01, .03, .1, .3, 1., 2., 3.142],
+}
+resolutionMapResiduals = {
+    "pt": (-1.e9, 1.e9), "pz": (-1.e9, 1.e9), "p": (-1.e9, 1.e9), "mass": (-1.e9, 1.e9),
+    "eta": (-20., 20.), "phi": (-3.142, 3.142), "openingAngle": (-3.142, 3.142),
+    "vx": (-1.e6, 1.e6), "vy": (-1.e6, 1.e6), "vz": (-1.e6, 1.e6),
+}
+
+
+def book_resolution_maps():
+    maps = []
+    for kind, categories in (("Muon", muonCategories), ("Dimuon", dimuonCategories)):
+        for category in categories:
+            for state in ("", "Constrained"):
+                for variable, (low, high) in resolutionMapResiduals.items():
+                    if kind == "Muon" and variable in ("mass", "openingAngle"):
+                        continue
+                    # Fine core and wide tails. Flow counts remain explicit.
+                    core = 1.
+                    if variable in ("vx", "vy"):
+                        core = 500.
+                    if variable == "vz":
+                        core = 3000.
+                    if variable in ("eta", "phi"):
+                        core = .2
+                    if variable == "openingAngle":
+                        core = .01
+                    residual_edges = [core * i / 100. for i in range(-100, 101)]
+                    tail = core * 1.15
+                    while tail < high:
+                        residual_edges.extend((-tail, tail))
+                        tail *= 1.15
+                    residual_edges = sorted([low, high] + residual_edges)
+                    for axis, edges in resolutionMapAxes.items():
+                        name = f"{kind}Response{category}{state}_{variable}Vs{axis}"
+                        maps.append((name, edges, residual_edges, "response"))
+    return tuple(maps)
+
 # Saved scores are diagnostics only; unscored Nano inputs remain supported.
 enableBdtDiagnostics = True
 requireBdtScore = False
@@ -846,3 +896,6 @@ if enableBdtDiagnostics:
         for axis, (bins, low, high, title) in BDT_MAP_AXES.items():
             histParams2D += ((bdt_histogram_name(category) + "Vs" + axis,
                               bins, low, high, *BDT_SCORE_BINS, "dimuon_bdt"),)
+
+if enableResolutionMaps:
+    irregularHistParams2D = book_resolution_maps()
