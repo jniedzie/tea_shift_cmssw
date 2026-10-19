@@ -19,11 +19,22 @@ import shift_sample_paths
 class StreamingHistogramInputsTest(unittest.TestCase):
     def test_published_campaign_resolves_without_working_directory_dependence(self):
         path = shift_sample_paths.campaign_histogram_inventory('20261016_mu_enriched_weekend_v1')
-        self.assertEqual(Path(path), CONFIGS.parent / 'plots' /
-                         'sm_mu_enriched_weekend_20261016_v1/latest_ready.json')
+        self.assertIsNone(path)
         self.assertIsNone(shift_sample_paths.campaign_histogram_inventory('legacy_20260921'))
         self.assertEqual(shift_sample_paths.campaign_histogram_inventory('/tmp/snapshot.json'),
                          '/tmp/snapshot.json')
+
+    def test_periodic_versions_select_newest_complete_merge_and_reject_unknown_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            older = directory/'ntuple_ready_20261019T100000Z_abcdef123456.root'
+            newer = directory/'ntuple_ready_20261019T120000Z_abcdef123456.root'
+            for path in (older, newer, directory/'ntuple_0.root'):
+                path.write_bytes(b'fixture')
+            self.assertEqual(shift_sample_paths.single_root_file(directory), str(newer))
+            (directory/'other.root').write_bytes(b'unknown')
+            with self.assertRaisesRegex(RuntimeError, 'exactly one ROOT'):
+                shift_sample_paths.single_root_file(directory)
 
     def test_reference_uses_full_gen_weight_sum_instead_of_selected_cutflow(self):
         import ROOT
@@ -45,6 +56,10 @@ class StreamingHistogramInputsTest(unittest.TestCase):
             rows = shift_sample_paths.streaming_reference_histogram_inputs(inventory)
             self.assertEqual(rows['jpsi_10to20']['full_source_sumw'], .0009177813540578304)
             self.assertEqual(rows['jpsi_10to20']['cross_section_pb'], 23.906403461436227)
+            own = shift_sample_paths.histogram_gen_normalization(str(path), 'jpsi_10to20')
+            self.assertEqual(own['initial_weight_sum'], .0009177813540578304)
+            with self.assertRaisesRegex(ValueError, 'Invalid full GEN'):
+                shift_sample_paths.histogram_gen_normalization(str(path), 'jpsi_0to1')
 
     def test_missing_declared_reference_does_not_select_a_legacy_replacement(self):
         with tempfile.TemporaryDirectory() as temporary:

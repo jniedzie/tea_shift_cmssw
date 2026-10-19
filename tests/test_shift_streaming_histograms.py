@@ -40,6 +40,42 @@ def receipt(index=0, stratum="qcd_0to1"):
 
 
 class StreamingHistogramsTest(unittest.TestCase):
+    def test_campaign_publication_is_available_before_any_plot_and_checks_immutable_outputs(self):
+        repository = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as temporary:
+            scratch = Path(temporary)
+            source = scratch/'merged.root'
+            source.write_bytes(b'verified-merged-histogram')
+            rows = [dict(stratum='qcd_0to1', path=str(source))]
+            with patch.dict(sys.modules, {'teaHelpers': types.SimpleNamespace(eos_xrootd_url=lambda path: None)}):
+                result = streaming.publish_campaign_histograms(rows, [], str(scratch/'data'), '20261019_test',
+                    '20261019T120000Z_abcdef123456', scratch)
+                self.assertEqual(Path(result[0]['path']).read_bytes(), source.read_bytes())
+                # A resumed publish accepts only a byte-identical existing version.
+                streaming.publish_campaign_histograms(rows, [], str(scratch/'data'), '20261019_test',
+                    '20261019T120000Z_abcdef123456', scratch)
+                source.write_bytes(b'different-merged-histogram')
+                with self.assertRaises(FileExistsError):
+                    streaming.publish_campaign_histograms(rows, [], str(scratch/'data'), '20261019_test',
+                        '20261019T120000Z_abcdef123456', scratch)
+
+    def test_resume_summary_does_not_rewrite_published_histograms(self):
+        import ROOT
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary)/'histograms.root'
+            output = ROOT.TFile(str(path), 'RECREATE')
+            directory = output.mkdir('dimuon')
+            directory.cd()
+            for name in streaming.REQUIRED_HISTOGRAMS:
+                histogram = ROOT.TH1D(Path(name).name, '', 20, 0., 200.)
+                histogram.Fill(25.)
+                histogram.Write()
+            output.Close()
+            before = streaming.sha256(path)
+            result = streaming.histogram_summary(path, materialize_errors=False)
+            self.assertEqual(streaming.sha256(path), before)
+            self.assertEqual(result[streaming.REQUIRED_HISTOGRAMS[0]]['sumw2'], 1.)
+
     def test_valid_cohort_retains_double_weight_and_full_trial_exposure(self):
         record = cohort()
         self.assertEqual(len(streaming.validate_cohort(record)), 2)

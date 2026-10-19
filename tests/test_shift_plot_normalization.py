@@ -238,9 +238,12 @@ class AvailableHistogramPlotConfigTest(unittest.TestCase):
     def test_named_campaign_selects_published_qcd_and_full_exposure(self):
         inventory = self.streaming_inventory()
         campaign = '20261016_mu_enriched_weekend_v1'
-        with patch('shift_sample_paths.campaign_histogram_inventory', return_value=inventory) as resolver:
-            config = self.config(campaign=campaign)
-        resolver.assert_called_once_with(campaign)
+        import shutil
+        source = json.loads(Path(inventory).read_text())["samples"][0]["path"]
+        target = self.base/'qcd_pThat0to1GeV'/campaign/'histograms_merged'
+        target.mkdir(parents=True)
+        shutil.copyfile(source, target/'ntuple_ready_20261019T120000Z_abcdef123456.root')
+        config = self.config(campaign=campaign)
         self.assertEqual([sample.name for sample in config.samples], ['qcd_0to1'])
         self.assertEqual(config.samples[0].initial_weight_sum, 12345)
         self.assertEqual(config.samples[0].cross_section, 7.e10)
