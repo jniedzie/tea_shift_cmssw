@@ -19,6 +19,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 
 
 METADATA_KEY = "ShiftStreamingNormalization"
@@ -152,9 +153,9 @@ def merge(inputs, destination, merge_script, scratch):
                    check=True, timeout=1800)
 
 
-def histogram_summary(path):
+def histogram_summary(path, *, materialize_errors=True):
     import ROOT
-    source = root_file(path, "UPDATE")
+    source = root_file(path, "UPDATE" if materialize_errors else "READ")
     result = {}
     try:
         for name in REQUIRED_HISTOGRAMS:
@@ -166,8 +167,9 @@ def histogram_summary(path):
             # materialized before it is merged with weighted chunks.
             if histogram.GetSumw2N() == 0:
                 histogram.Sumw2()
-                source.cd(str(Path(name).parent))
-                histogram.Write(Path(name).name, ROOT.TObject.kOverwrite)
+                if materialize_errors:
+                    source.cd(str(Path(name).parent))
+                    histogram.Write(Path(name).name, ROOT.TObject.kOverwrite)
             values = [float(histogram.GetBinContent(i)) for i in range(histogram.GetNcells())]
             variances = [float(histogram.GetBinError(i)) ** 2 for i in range(histogram.GetNcells())]
             if not all(math.isfinite(v) for v in values + variances):
@@ -241,18 +243,63 @@ def publish(path, directory):
         parsed = urlparse(url)
         subprocess.run(["xrdfs", "root://" + parsed.netloc, "mkdir", "-p",
                         str(Path(parsed.path).parent)], check=True, timeout=120)
-        subprocess.run(["xrdcp", "--silent", "--posc", "--cksum", "adler32", str(path), url],
-                       check=True, timeout=600)
+        try:
+            subprocess.run(["xrdcp", "--silent", "--posc", "--cksum", "adler32", str(path), url],
+                           check=True, timeout=600, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except subprocess.CalledProcessError as upload_error:
+            # A reviewed restart may find an immutable output already present.
+            # Reuse it only after full byte readback; never overwrite it.
+            with tempfile.TemporaryDirectory(prefix="stream_existing_", dir=os.environ.get("TMPDIR")) as temporary:
+                try:
+                    stage(url, Path(temporary)/path.name, sha256(path))
+                except Exception:
+                    raise upload_error
+            return destination
         with tempfile.TemporaryDirectory(prefix="stream_publish_", dir=os.environ.get("TMPDIR")) as temporary:
             stage(url, Path(temporary) / path.name, sha256(path))
     else:
         Path(destination).parent.mkdir(parents=True, exist_ok=True)
         if Path(destination).exists():
+            if sha256(destination) == sha256(path):
+                return destination
             raise FileExistsError("Refusing to replace immutable published output: " + destination)
         shutil.copyfile(path, destination)
         if sha256(destination) != sha256(path):
             raise ValueError("Published readback checksum differs")
     return destination
+
+
+def publish_campaign_histograms(samples, references, base_path, campaign, merge_tag, scratch,
+                                maximum_bytes=MAXIMUM_PUBLICATION_BYTES):
+    """Put merged rates in the ordinary campaign histogram directories.
+
+    New unique filenames are published with successful-close and checksum
+    checks. The plotter picks the latest completed version in each bin; no
+    common-bin barrier, mutable ROOT file, or PDF completion is required.
+    """
+    from shift_storage_paths import tier_directory
+    import re
+    if not re.fullmatch(r'\d{8}T\d{6}Z_[a-f0-9]{12}', merge_tag):
+        raise ValueError('Campaign merge needs its frozen time and input signature')
+    published = []
+    total = 0
+    for row in samples + references:
+        process, bin_name = row['stratum'].split('_', 1)
+        directory = tier_directory(base_path, process, bin_name, campaign, 'histograms_merged')
+        with tempfile.TemporaryDirectory(prefix='campaign_publish_', dir=scratch) as temporary:
+            if process == 'qcd':
+                path = Path(temporary)/('ntuple_ready_'+merge_tag+'.root')
+                # Both paths are worker-local; a hard link avoids another payload copy.
+                os.link(row['path'], path)
+            else:
+                path = Path(temporary)/'ntuple_0.root'
+                stage(row['path'], path, row.get('sha256'))
+            total += path.stat().st_size
+            if total > maximum_bytes:
+                raise ValueError('Campaign histograms exceed their publication reservation')
+            destination = publish(path, directory)
+            published.append(file_record(path, destination) | {'stratum': row['stratum']})
+    return published
 
 
 def render_plots(inventory, plotter, plot_output, scratch, kinds, caption=None):
@@ -305,7 +352,9 @@ del lumi_label_value
                           "canvas_size = (1100, 750)\n"
                           f"legends = {{SampleType.background: Legend(0.59, {legend_bottom}, 0.93, 0.90, 'f', text_size=15)}}\n")
         environment = dict(os.environ)
-        environment["PYTHONPATH"] = str(scratch) + os.pathsep + environment.get("PYTHONPATH", "")
+        python_paths = [str(Path(path).resolve()) for path in environment.get("PYTHONPATH", "").split(os.pathsep)
+                        if path]
+        environment["PYTHONPATH"] = os.pathsep.join([str(scratch)] + python_paths)
         subprocess.run([sys.executable, str(plotter), "--config", config.name],
                        cwd=scratch, env=environment, check=True, timeout=1800)
         plots.extend(file_record(path) for path in sorted((plot_output / kind).rglob("*.pdf")))
@@ -617,7 +666,8 @@ def snapshot(args):
     if inventory.get("schema") != "shift-streaming-histogram-snapshot-inputs-v1":
         raise ValueError("Unsupported streaming snapshot inventory")
     output = args.output_directory.resolve()
-    output.mkdir(parents=True, exist_ok=False)
+    resume = getattr(args, "resume", False)
+    output.mkdir(parents=True, exist_ok=resume)
     with tempfile.TemporaryDirectory(prefix="stream_snapshot_", dir=os.environ.get("TMPDIR")) as temporary:
         scratch = Path(temporary)
         receipts = []
@@ -637,20 +687,31 @@ def snapshot(args):
             sample = dict(stratum=stratum)
             for kind, key in (("histogram", "path"), ("raw_histogram", "raw_path")):
                 inputs = []
-                for index, row in enumerate(rows):
-                    path = scratch / f"{stratum}_{kind}_{index}.root"
-                    stage(row[kind]["path"], path, row[kind]["sha256"])
-                    inputs.append(path)
                 path = output / f"{stratum}_{kind}.root"
-                merge(inputs, path, args.merge_script, scratch)
-                summary = histogram_summary(path)
+                if not resume:
+                    for index, row in enumerate(rows):
+                        staged = scratch / f"{stratum}_{kind}_{index}.root"
+                        stage(row[kind]["path"], staged, row[kind]["sha256"])
+                        inputs.append(staged)
+                    merge(inputs, path, args.merge_script, scratch)
+                summary = histogram_summary(path, materialize_errors=False) if resume else histogram_summary(path)
                 for name in REQUIRED_HISTOGRAMS:
                     for field in ("sumw", "sumw2"):
                         check_close(summary[name][field],
                                     sum(row[kind]["histograms"][name][field] for row in rows),
                                     name + " merged " + field)
-                embed_metadata(path, dict(metadata, histogram_weight=(WEIGHT_POLICY if key == "path"
-                                                                      else "one_per_reconstructed_entry")))
+                expected_metadata = dict(metadata, histogram_weight=(WEIGHT_POLICY if key == "path"
+                                                                     else "one_per_reconstructed_entry"))
+                if resume:
+                    source = root_file(path)
+                    try:
+                        record = source.Get(METADATA_KEY)
+                        if not record or json.loads(record.GetString().Data()) != expected_metadata:
+                            raise ValueError("Resumed snapshot normalization differs: " + str(path))
+                    finally:
+                        source.Close()
+                else:
+                    embed_metadata(path, expected_metadata)
                 sample[key] = str(path)
                 sample[key + "_sha256"] = sha256(path)
             samples.append(sample)
@@ -663,7 +724,24 @@ def snapshot(args):
             if references.get("schema") != "shift-sm-reference-histograms-v1":
                 raise ValueError("Unsupported SM reference histogram inventory")
             plot_record["reference_samples"] = references["samples"]
-        write_json(plot_inputs, plot_record)
+        campaign_outputs = []
+        if getattr(args, 'campaign_base_path', None) or getattr(args, 'campaign', None):
+            if not getattr(args, 'campaign_base_path', None) or not getattr(args, 'campaign', None):
+                raise ValueError('Campaign publication needs both the data base and campaign name')
+            merge_tag = inventory.get('merge_tag') or (
+                time.strftime('%Y%m%dT%H%M%SZ', time.gmtime(inventory['frozen_at_epoch']))
+                + '_' + sha256(args.inventory)[:12])
+            initial_budget = publication_budget(
+                [row[key] for row in samples for key in ('path', 'raw_path')], [],
+                inventory.get('maximum_publication_bytes', DEFAULT_PUBLICATION_BYTES))
+            campaign_outputs = publish_campaign_histograms(samples, plot_record.get('reference_samples', []),
+                args.campaign_base_path, args.campaign, merge_tag, scratch,
+                initial_budget['maximum_bytes'] - initial_budget['planned_bytes'])
+        if resume and plot_inputs.exists():
+            if json.loads(plot_inputs.read_text()) != plot_record:
+                raise ValueError("Resumed snapshot histogram list differs")
+        else:
+            write_json(plot_inputs, plot_record)
         plots = []
         if args.plotter:
             if not args.plot_output:
@@ -671,6 +749,10 @@ def snapshot(args):
             plots = render_plots(plot_inputs, args.plotter, args.plot_output, scratch, ("rate", "raw"))
         budget = publication_budget([row[key] for row in samples for key in ("path", "raw_path")], plots,
                                     inventory.get("maximum_publication_bytes", DEFAULT_PUBLICATION_BYTES))
+        budget['campaign_histogram_bytes'] = sum(row['bytes'] for row in campaign_outputs)
+        budget['planned_bytes'] += budget['campaign_histogram_bytes']
+        if budget['planned_bytes'] > budget['maximum_bytes']:
+            raise ValueError('Campaign histograms and plots exceed their publication reservation')
         if args.publish_directory:
             for row in samples:
                 for key in ("path", "raw_path"):
@@ -682,6 +764,8 @@ def snapshot(args):
         receipt = dict(schema="shift-streaming-histogram-snapshot-v1", complete=True,
                        inventory_sha256=sha256(args.inventory), snapshot_id=inventory["snapshot_id"],
                        closed_cohort_ids=inventory["expected_cohort_ids"], samples=samples,
+                       events_by_stratum=inventory.get('events_by_stratum', {}),
+                       merged_at_epoch=time.time(), campaign_histograms=campaign_outputs,
                        plot_inputs_record=plot_record,
                        plot_inputs=file_record(plot_inputs, published_plot_inputs), plots=plots, publication_budget=budget,
                        partial_production=True)
@@ -703,6 +787,9 @@ def main():
     last = stages.add_parser("snapshot")
     last.add_argument("--inventory", type=Path, required=True)
     last.add_argument("--reference-inputs", type=Path)
+    last.add_argument("--resume", action="store_true", help="Verify and publish an already merged snapshot without repeating the merge")
+    last.add_argument("--campaign-base-path")
+    last.add_argument("--campaign")
     check = stages.add_parser("diagnostic")
     check.add_argument("--descriptor", type=Path, required=True)
     check.add_argument("--histogrammer", type=Path, required=True)

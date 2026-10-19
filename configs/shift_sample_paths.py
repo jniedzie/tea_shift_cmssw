@@ -14,27 +14,15 @@ from shift_storage_paths import _canonical_path, resolve_storage_path, tier_dire
 
 
 def campaign_histogram_inventory(campaign):
-    """Resolve a published campaign to its latest ready histogram list.
+    """Allow an exact input list for internal preview rendering.
 
-    Production publication can also pass an exact JSON list to render its
-    snapshot before advancing the campaign's latest-ready pointer.
+    Ordinary named campaigns always use their histogram directories.
     """
     if not campaign:
         return None
     if str(campaign).endswith(".json"):
         return str(campaign)
-    published = {
-        "20261016_mu_enriched_weekend_v1":
-            "sm_mu_enriched_weekend_20261016_v1/latest_ready.json",
-    }
-    relative = published.get(campaign)
-    if relative is None:
-        return None
-    path = Path(__file__).resolve().parents[1] / "plots" / relative
-    if not path.is_file():
-        from Logger import warn
-        warn("No ready histograms published for campaign " + campaign)
-    return str(path)
+    return None
 
 
 def streaming_histogram_inputs(inventory_path, *, raw=False):
@@ -167,6 +155,13 @@ def single_root_file(directory, *, allow_missing=False, cache_directory=None):
         raise RuntimeError(f"ROOT input directory is not accessible: '{directory}': {exc}") from exc
     if not files and allow_missing:
         return None
+    if len(files) > 1:
+        # Periodic campaign merges are immutable and published on successful
+        # close. Keep an older usable version until its replacement is ready.
+        version = re.compile(r'ntuple_ready_\d{8}T\d{6}Z_[a-f0-9]{12}\.root')
+        merged = [path for path in files if version.fullmatch(path.name)]
+        if merged and all(path in merged or path.name == 'ntuple_0.root' for path in files):
+            files = [max(merged, key=lambda path: path.name)]
     if len(files) != 1:
         names = ", ".join(path.name for path in files) or "none"
         raise RuntimeError(
@@ -191,6 +186,43 @@ def single_root_file(directory, *, allow_missing=False, cache_directory=None):
     if hashlib.sha256(target.read_bytes()).hexdigest() != checksum:
         raise RuntimeError(f"Cached ROOT input checksum differs: {target}")
     return str(target)
+
+
+def histogram_gen_normalization(path, stratum):
+    """Read a merged histogram's own exposure, without production-side files."""
+    import ROOT
+    from teaHelpers import eos_xrootd_url
+    source = ROOT.TFile.Open(eos_xrootd_url(path) or path)
+    if not source or source.IsZombie():
+        raise OSError('Cannot read histogram normalization: ' + path)
+    try:
+        record = source.Get('ShiftStreamingNormalization')
+        if record:
+            metadata = json.loads(record.GetString().Data())
+            denominator = metadata.get('full_source_trials', 0)
+            cross_section = metadata.get('sigma_nd_pb', 0)
+            if (metadata.get('schema') != 'shift-streaming-normalization-v1'
+                    or metadata.get('closed_cohorts') is not True
+                    or metadata.get('diagnostic_only') is True):
+                raise ValueError('Invalid or diagnostic-only campaign histogram: ' + path)
+        else:
+            record = source.Get('ShiftFullGenNormalization')
+            if not record:
+                return None  # Ordinary legacy histograms retain their cutFlow convention.
+            metadata = json.loads(record.GetString().Data())
+            denominator = metadata.get('full_source_sumw', 0)
+            cross_section = metadata.get('cross_section_pb', 0)
+            if metadata.get('schema') != 'shift-preserved-full-GEN-histogram-v1':
+                raise ValueError('Invalid preserved GEN exposure: ' + path)
+        if (metadata.get('stratum') != stratum
+                or metadata.get('histogram_weight') != 'native_gen_weight/reco_inclusion_probability'
+                or metadata.get('no_second_filter_efficiency') is not True
+                or not math.isfinite(denominator) or denominator <= 0
+                or not math.isfinite(cross_section) or cross_section <= 0):
+            raise ValueError('Invalid full GEN histogram normalization: ' + path)
+        return dict(cross_section_pb=cross_section, initial_weight_sum=denominator)
+    finally:
+        source.Close()
 
 
 def latest_merged_sample(samples_dir):
