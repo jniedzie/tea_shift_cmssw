@@ -7,9 +7,12 @@ another reconstruction. All reco rows contribute to reco/coverage diagnostics.
 Truth resolution requires a stored hit association, never a nearest direction.
 """
 import argparse
+import gzip
 import hashlib
+import io
 import json
 import math
+import tarfile
 from collections import Counter, defaultdict
 from pathlib import Path
 import numpy as np
@@ -41,6 +44,554 @@ def stable_pair_mass(first, second, mass=MUON_MASS):
 
 def momentum_vector(pt, phi, pz):
     return np.column_stack((pt*np.cos(phi), pt*np.sin(phi), pz))
+
+
+ACTUAL_BIRTH_POSITION_TOLERANCE_CM = 1.e-9
+ACTUAL_BIRTH_TIME_TOLERANCE_NS = 1.e-9
+
+
+def read_actual_birth_reference(record, source_context):
+    """Index every saved SimTrack birth, independently of GEN/CSC support.
+
+    SimTrack IDs reset per event. The source context must identify the exact
+    source/case; a GEN barcode is ancestry information, never a Nano index.
+    """
+    if not source_context or record.get('schema') != 'shift-material-scout-SIM-audit-v1':
+        raise ValueError('Actual birth reference needs a source and supported audit schema')
+    if record.get('passed') is not True or not record.get('checks') or not all(record['checks'].values()):
+        raise ValueError('Actual birth SIM audit did not pass its source/identity checks')
+    events = {}
+    for event in record['events']:
+        identity = tuple(event['event_id'])
+        if len(identity) != 3 or any(type(n) is not int or n < 1 for n in identity):
+            raise ValueError('Invalid actual birth event identity')
+        if identity in events:
+            raise ValueError('Duplicate actual birth event identity')
+        weight = float(event['native_weight'])
+        if not math.isfinite(weight):
+            raise ValueError('Nonfinite actual birth native weight')
+        if event['actual_saved_muons'] != len(event['muons']):
+            raise ValueError('Actual birth saved-muon count mismatch')
+        tracks = {}
+        for track in event['muons']:
+            number = track['track_id']
+            if type(number) is not int or number < 1 or number in tracks:
+                raise ValueError('Duplicate or invalid actual SimTrack ID')
+            pdg = int(track['pdg'])
+            momentum = np.asarray(track['momentum_GeV'], dtype=float)
+            energy = float(track['energy_GeV'])
+            valid = momentum.shape == (3,) and np.all(np.isfinite(momentum))
+            p = float(np.linalg.norm(momentum)) if valid else 0.
+            # This is a serialization/mass-shell check, not a fitted-quality cut.
+            energy_valid = (math.isfinite(energy) and energy > 0.
+                            and math.isclose(energy, math.hypot(p, MUON_MASS), rel_tol=1.e-8, abs_tol=1.e-6))
+            vertex = track.get('vertex')
+            vertex_status = 'missing'
+            if vertex is not None:
+                position = np.asarray(vertex['position_cm'], dtype=float)
+                vertex_status = ('available' if position.shape == (3,) and np.all(np.isfinite(position))
+                                 and math.isfinite(float(vertex['time_ns'])) else 'invalid')
+                if vertex_status == 'invalid':
+                    vertex = None
+            tracks[number] = dict(context=source_context, event_id=identity, track_id=number,
+                pdg=pdg, charge=-1 if pdg > 0 else 1, momentum=momentum,
+                energy_gev=energy, valid=bool(valid and energy_valid and abs(pdg) == 13),
+                vertex=vertex, vertex_status=vertex_status, GEN_barcode=track.get('GEN_barcode'),
+                saved_parent_chain=track.get('saved_parent_chain', []),
+                missing_saved_parent_track_id=track.get('missing_saved_parent_track_id'))
+        events[identity] = dict(context=source_context, native_weight=weight, tracks=tracks)
+    return events
+
+
+def actual_birth_muon_reference(selected, event_reference):
+    """Exact stored hit identity only; wrong measured charge remains matched."""
+    number = int(selected['hitSimTrackId'])
+    if number < 1:
+        return dict(status='missing_hit_identity', reference=None, wrong_charge=None)
+    reference = event_reference['tracks'].get(number)
+    if reference is None:
+        return dict(status='no_saved_actual_muon', reference=None, wrong_charge=None)
+    if abs(reference['pdg']) != 13:
+        return dict(status='non_muon_reference', reference=None, wrong_charge=None)
+    if not reference['valid']:
+        return dict(status='invalid_actual_birth_state', reference=None, wrong_charge=None)
+    return dict(status='matched', reference=reference,
+                wrong_charge=int(selected['charge']) != reference['charge'])
+
+
+def actual_birth_pair_reference(first, second):
+    """Keep two-leg birth kinematics separate from a common production vertex."""
+    if first is None or second is None:
+        return dict(status='unmatched_leg', shared_vertex=False)
+    if (first['context'], first['event_id']) != (second['context'], second['event_id']):
+        raise ValueError('Actual birth pair crosses source/event context')
+    if first['track_id'] == second['track_id']:
+        return dict(status='same_simtrack_split', shared_vertex=False)
+    if not first['valid'] or not second['valid']:
+        return dict(status='invalid_actual_birth_state', shared_vertex=False)
+    a, b = first['momentum'], second['momentum']
+    total = a+b
+    result = dict(status='distinct_actual_muons',
+        actual_is_os=first['pdg']*second['pdg'] < 0,
+        kinematic_birth_mass_gev=float(stable_pair_mass(a, b)),
+        pt_gev=float(np.hypot(*total[:2])), pz_gev=float(total[2]), p_gev=float(np.linalg.norm(total)),
+        opening_angle=(float(np.arctan2(np.linalg.norm(np.cross(a, b)), np.dot(a, b)))
+                       if np.linalg.norm(a) > 0. and np.linalg.norm(b) > 0. else None),
+        shared_vertex=False, common_vertex_reason='no_established_common_birth_vertex')
+    av, bv = first['vertex'], second['vertex']
+    if av is None or bv is None:
+        return result
+    positions = [np.asarray(v['position_cm'], dtype=float) for v in (av, bv)]
+    times = [float(v['time_ns']) for v in (av, bv)]
+    valid = all(v.shape == (3,) and np.all(np.isfinite(v)) for v in positions)
+    valid = valid and all(math.isfinite(t) for t in times)
+    same_position_time = (valid and np.allclose(*positions, rtol=0., atol=ACTUAL_BIRTH_POSITION_TOLERANCE_CM)
+                          and abs(times[0]-times[1]) <= ACTUAL_BIRTH_TIME_TOLERANCE_NS)
+    same_index = av['index'] >= 0 and av['index'] == bv['index']
+    same_parent = av['parent_G4_track_id'] > 0 and av['parent_G4_track_id'] == bv['parent_G4_track_id']
+    if same_position_time and (same_index or same_parent):
+        result.update(shared_vertex=True, vertex_cm=positions[0].tolist(), time_ns=times[0],
+                      common_vertex_reason='same_actual_vertex' if same_index else 'same_actual_parent_and_birth')
+    return result
+
+
+def actual_birth_case_inputs(case):
+    """Require terminal joint publication before opening the paired evidence."""
+    terminal_path = Path(case['terminal_result_path'])
+    request_path = Path(case['request_path'])
+    for path, expected in ((terminal_path, case['terminal_result_sha256']),
+                           (request_path, case['request_sha256'])):
+        if native_file_checksum(path) != expected:
+            raise RuntimeError('Actual birth terminal/request hash mismatch')
+    terminal = json.loads(terminal_path.read_text())
+    request = json.loads(request_path.read_text())
+    if (terminal.get('complete') is not True or terminal.get('exit_code') != 0
+            or terminal.get('source_id') != case['source_id']
+            or terminal.get('original_source_sha256') != case['source']['gen_sha256']
+            or terminal.get('request_sha256') != case['request_sha256']):
+        raise RuntimeError('Actual birth case is not a qualified terminal publication')
+    sample = request['sample']
+    if (request['source']['source_id'] != case['source_id']
+            or request['source']['gen_sha256'] != case['source']['gen_sha256']
+            or sample['id'] != case['case_id'] or sample['event_ids'] != case['expected_event_ids']
+            or sample['native_weights'] != case['expected_native_EDM_double_weights']
+            or sample['probability'] != case['sample']['probability']):
+        raise RuntimeError('Actual birth case/request source, membership or weight binding mismatch')
+    published = {row['url']: row for row in terminal['published']}
+    for name, path in (('nano.root', case['nano_path']), ('evidence.tar.gz', case['material_evidence_path'])):
+        expected = case['publications'][name]
+        if published.get(expected['url']) != expected:
+            raise RuntimeError('Actual birth Nano/evidence do not share the terminal publication')
+        if Path(path).stat().st_size != expected['bytes'] or native_file_checksum(path) != expected['sha256']:
+            raise RuntimeError('Actual birth published payload hash/size mismatch')
+    with tarfile.open(case['material_evidence_path'], 'r:gz') as archive:
+        member = archive.getmember('material_audit.json.gz')
+        if member.size > 64*1024*1024:
+            raise RuntimeError('Actual birth audit exceeds bounded payload size')
+        with gzip.GzipFile(fileobj=io.BytesIO(archive.extractfile(member).read())) as stream:
+            raw = stream.read(64*1024*1024+1)
+    if len(raw) > 64*1024*1024:
+        raise RuntimeError('Actual birth audit exceeds bounded decoded size')
+    record = json.loads(raw)
+    # The scout audits the timed/sliced GEN sent to SIM, not the full raw source.
+    # Its two file hashes must bind to the same final worker receipt as Nano.
+    scratch = {Path(row['path']).name: row['sha256'] for row in terminal.get('removed_scratch_inputs', [])}
+    if (record['complete_GEN']['sha256'] != scratch.get('timed_gen.root')
+            or record['SIM']['sha256'] != scratch.get('step1.root')):
+        raise RuntimeError('Actual birth timed GEN/SIM hash binding mismatch')
+    context = case['source']['gen_sha256']+':'+case['case_id']
+    references = read_actual_birth_reference(record, context)
+    expected = [tuple(event) for event in case['expected_event_ids']]
+    if list(references) != expected or len(set(expected)) != len(expected):
+        raise RuntimeError('Actual birth source event membership/order mismatch')
+    weights = case['expected_native_EDM_double_weights']
+    if len(weights) != len(expected) or any(references[event]['native_weight'] != weight
+                                         for event, weight in zip(expected, weights)):
+        raise RuntimeError('Actual birth source native double weights mismatch')
+    return references
+
+
+def actual_birth_check_weights(persisted, native, probability, native_type='Float_t'):
+    """Use the declared scalar type, retaining the original EDM double separately."""
+    if native_type not in ('Float_t', 'Double_t') or not math.isfinite(native):
+        raise RuntimeError('Actual birth native weight has invalid type/value')
+    if not math.isfinite(probability) or not 0. < probability <= 1.:
+        raise RuntimeError('Actual birth invalid benchmark inclusion probability')
+    expected = float(np.float32(native)) if native_type == 'Float_t' else native
+    if not all(math.isfinite(w) for w in persisted.values()) or persisted['genWeight'] != expected:
+        raise RuntimeError('Actual birth Nano native serialized weight mismatch')
+    checked = dict(shiftOriginalGenWeight=native, shiftSamplingProbability=probability,
+                   shiftSamplingWeight=1./probability, shiftSamplingGenWeight=native/probability,
+                   shiftDecayProposalDensity=1., shiftDecayProposalWeight=1.,
+                   shiftProposalGenWeight=native/probability)
+    for name, value in checked.items():
+        if name not in persisted or persisted[name] != value:
+            raise RuntimeError('Actual birth Nano exact accounting weight mismatch: '+name)
+
+
+def actual_birth_muon_metrics(measured, reference):
+    """Target-side reconstructed momentum versus this actual muon's birth."""
+    if not all(math.isfinite(measured[n]) for n in ('pt', 'phi', 'pz')) or measured['pt'] < 0.:
+        return {}
+    fitted = momentum_vector(np.array([measured['pt']]), np.array([measured['phi']]),
+                             np.array([measured['pz']]))[0]
+    truth = reference['momentum']
+    metrics = {}
+    for name, value, target in (('p_relative', np.linalg.norm(fitted), np.linalg.norm(truth)),
+                                 ('pt_relative', measured['pt'], np.hypot(*truth[:2])),
+                                 ('pz_relative', measured['pz'], truth[2])):
+        if target != 0.:
+            metrics[name] = float((value-target)/target)
+    if np.linalg.norm(fitted) > 0. and np.linalg.norm(truth) > 0.:
+        metrics['angle_error_rad'] = float(np.arctan2(np.linalg.norm(np.cross(fitted, truth)),
+                                                    np.dot(fitted, truth)))
+    return metrics
+
+
+def read_actual_birth_nano(case, references):
+    """Read all selected rows; the hit-ID join never changes their membership."""
+    source = ROOT.TFile.Open(str(case['nano_path']))
+    if not source or source.IsZombie() or source.TestBit(ROOT.TFile.kRecovered):
+        raise RuntimeError('Unreadable actual birth Nano input')
+    muon_fields = ('recoAlgorithm', 'sourceIndex', 'charge', 'topology', 'hitSimTrackId', 'pt', 'phi', 'pz')
+    pair_fields = ('muonIdx1', 'muonIdx2', 'topologyMin', 'topologyMax', 'isOS', 'mass', 'pt', 'pz', 'vx', 'vy', 'vz')
+    from shift_event_weights import DETECTOR_BRANCHES, PROPOSAL_BRANCHES
+    weights = ('genWeight',)+DETECTOR_BRANCHES+PROPOSAL_BRANCHES
+    try:
+        tree = source.Get('Events')
+        if not tree:
+            raise RuntimeError('Missing actual birth Events')
+        branches = {b.GetName() for b in tree.GetListOfBranches()}
+        required = {'run', 'luminosityBlock', 'event', 'genWeight', 'nShiftMuon', 'nShiftDimuonVertex'}
+        required.update('ShiftMuon_'+n for n in muon_fields)
+        required.update('ShiftDimuonVertex_'+n for n in pair_fields)
+        required.update(DETECTOR_BRANCHES+PROPOSAL_BRANCHES)
+        if required-branches:
+            raise RuntimeError('Actual birth Nano missing branches: '+str(sorted(required-branches)))
+        weight_types = {name: tree.GetLeaf(name).GetTypeName() for name in weights if name in branches}
+        if any(kind != 'Double_t' for name, kind in weight_types.items() if name != 'genWeight'):
+            raise RuntimeError('Actual birth annotated accounting weights must be Double_t')
+        tree.SetBranchStatus('*', False)
+        for name in required | (set(weights)&branches):
+            tree.SetBranchStatus(name, True)
+        events, muons, pairs = [], [], []
+        seen = set()
+        for entry in range(int(tree.GetEntries())):
+            if tree.GetEntry(entry) <= 0:
+                raise RuntimeError('Actual birth Nano entry read failed')
+            identity = tuple(int(getattr(tree, n)) for n in ('run', 'luminosityBlock', 'event'))
+            if identity in seen or identity not in references:
+                raise RuntimeError('Actual birth Nano duplicate/unrecognized event')
+            seen.add(identity)
+            reference = references[identity]
+            expected_weight = reference['native_weight']
+            saved_weights = {n: float(getattr(tree, n)) for n in weights if n in branches}
+            probability = case['sample']['probability']
+            actual_birth_check_weights(saved_weights, expected_weight, probability, weight_types['genWeight'])
+            parent = reference['context']+':'+':'.join(map(str, identity))
+            events.append(dict(identity=list(identity), parent=parent, native_EDM_double_weight=expected_weight,
+                               persisted_weights=saved_weights, weight_types=weight_types, selected_muons=int(tree.nShiftMuon),
+                               selected_pairs=int(tree.nShiftDimuonVertex),
+                               actual_saved_muon_rows=len(reference['tracks']),
+                               valid_actual_muon_births=sum(r['valid'] for r in reference['tracks'].values())))
+            local, matches = [], []
+            for index in range(int(tree.nShiftMuon)):
+                measured = {n: float(getattr(tree, 'ShiftMuon_'+n)[index]) for n in muon_fields}
+                matched = actual_birth_muon_reference(measured, reference)
+                truth = matched['reference']
+                row = dict(parent=parent, index=index, algorithm=int(measured['recoAlgorithm']),
+                    source_index=int(measured['sourceIndex']), topology=int(measured['topology']),
+                    hit_simtrack_id=int(measured['hitSimTrackId']), match_status=matched['status'],
+                    wrong_charge=matched['wrong_charge'], metrics=actual_birth_muon_metrics(measured, truth) if truth else {})
+                if truth:
+                    row.update(actual_simtrack_id=truth['track_id'], actual_pdg=truth['pdg'],
+                               actual_birth_momentum_gev=truth['momentum'].tolist(), actual_birth_vertex=truth['vertex'],
+                               actual_birth_vertex_status=truth['vertex_status'])
+                local.append(row);matches.append(truth);muons.append(row)
+            for index in range(int(tree.nShiftDimuonVertex)):
+                measured = {n: float(getattr(tree, 'ShiftDimuonVertex_'+n)[index]) for n in pair_fields}
+                a, b = (int(measured[n]) for n in ('muonIdx1', 'muonIdx2'))
+                if a == b or not all(0 <= i < len(local) for i in (a, b)):
+                    raise RuntimeError('Actual birth pair has invalid selected leg indices')
+                truth = actual_birth_pair_reference(matches[a], matches[b])
+                row = dict(parent=parent, index=index, legs=[a, b],
+                    category=str(int(measured['topologyMin']))+':'+str(int(measured['topologyMax'])),
+                    is_os=bool(measured['isOS']), reference=truth, metrics={})
+                if truth['status'] == 'distinct_actual_muons':
+                    for name, field, target in (
+                            ('two_birth_mass_relative', 'mass', truth['kinematic_birth_mass_gev']),
+                            ('two_birth_pair_pt_relative', 'pt', truth['pt_gev']),
+                            ('two_birth_pair_pz_relative', 'pz', truth['pz_gev'])):
+                        value = measured[field]
+                        if math.isfinite(value) and target != 0.:
+                            row['metrics'][name] = float((value-target)/target)
+                    if truth['shared_vertex']:
+                        for axis, target in zip('xyz', truth['vertex_cm']):
+                            if math.isfinite(measured['v'+axis]):
+                                row['metrics']['shared_vertex_'+axis+'_cm'] = measured['v'+axis]-target
+                pairs.append(row)
+        if seen != set(references) or [tuple(e['identity']) for e in events] != list(references):
+            raise RuntimeError('Actual birth Nano/audit event membership/order mismatch')
+        return dict(events=events, muons=muons, pairs=pairs)
+    finally:
+        source.Close()
+
+
+def actual_birth_group_statistics(rows, bootstrap=200, seed=190019):
+    """Do not turn a few selected muons into a population resolution result."""
+    result = {}
+    metrics = sorted({name for row in rows for name in row['metrics']})
+    for name in metrics:
+        selected = [row for row in rows if name in row['metrics'] and math.isfinite(row['metrics'][name])]
+        parents = [row['parent'] for row in selected]
+        count = len(set(parents))
+        item = dict(observations=len(selected), independent_originals=count,
+                    population_summary_available=count >= 20, statistics=None)
+        if count >= 20:
+            item['statistics'] = paired_parent_statistics({'canonical': [r['metrics'][name] for r in selected]},
+                                                         parents, bootstrap, seed)
+        else:
+            item['reason'] = 'Fewer than20 independent originals; ledger/coverage only.'
+        result[name] = item
+    return result
+
+
+def run_actual_birth_audit(manifest_path, release_path, bootstrap=200, seed=190019):
+    """Bounded closure from a fixed, jointly published material-response cohort."""
+    manifest_path = Path(manifest_path)
+    manifest = json.loads(manifest_path.read_text())
+    release = json.loads(Path(release_path).read_text())
+    if (release.get('outcome_analysis_released') is not True
+            or release.get('cohort_sha256') != native_file_checksum(manifest_path)
+            or release.get('analysis_source_sha256') != native_file_checksum(__file__)):
+        raise ValueError('Actual birth analysis requires release of this exact frozen cohort')
+    if manifest.get('schema') != 'shift-corrected-QCD-offline-birth-join-frozen-cohort-v1':
+        raise ValueError('Unsupported actual birth frozen cohort schema')
+    if manifest['kernel']['pileup'] != 'off':
+        raise ValueError('Actual birth hit-ID join needs no pileup until EncodedEventId is saved')
+    cases = manifest['cases']
+    if not cases or len(cases) > 9 or sum(len(c['expected_event_ids']) for c in cases) > 450:
+        raise ValueError('Actual birth cohort exceeds the bounded source/event plan')
+    for key in ('plan', 'deployment'):
+        record = manifest[key]
+        if native_file_checksum(record['path']) != record['sha256']:
+            raise RuntimeError('Actual birth frozen plan/deployment hash mismatch')
+    deployment = json.loads(Path(manifest['deployment']['path']).read_text())
+    tools = Path(manifest['deployment']['path']).with_name('frozen_tools.tar.gz')
+    if (deployment['frozen_tools_sha256'] != manifest['frozen_tools_sha256']
+            or native_file_checksum(tools) != manifest['frozen_tools_sha256']):
+        raise RuntimeError('Actual birth frozen runtime-tools binding mismatch')
+    with tarfile.open(tools, 'r:gz') as archive:
+        overlay = archive.extractfile('plugin/libShiftCompleteIncomingBaseline.so').read()
+    if hashlib.sha256(overlay).hexdigest() != manifest['kernel']['incoming_overlay_sha256']:
+        raise RuntimeError('Actual birth incoming-parent transport overlay mismatch')
+    events, muons, pairs, exposure, seen = [], [], [], {}, set()
+    for case in cases:
+        references = actual_birth_case_inputs(case)
+        for identity in references:
+            key = (case['source']['gen_sha256'], identity)
+            if key in seen:
+                raise RuntimeError('Actual birth original appears in multiple cases')
+            seen.add(key)
+        rows = read_actual_birth_nano(case, references)
+        for row in rows['events']:
+            row.update(case_id=case['case_id'], source_id=case['source_id'])
+        events.extend(rows['events']);muons.extend(rows['muons']);pairs.extend(rows['pairs'])
+        source = case['source']
+        key = source['gen_sha256']
+        if key in exposure and exposure[key] != source:
+            raise RuntimeError('Actual birth source exposure changed between cases')
+        exposure[key] = source
+    groups = {}
+    categories = sorted({row['category'] for row in pairs})
+    for category in ['all']+categories:
+        selected = pairs if category == 'all' else [p for p in pairs if p['category'] == category]
+        groups[category] = dict(selected_pairs=len(selected),
+            reference_status=dict(Counter(r['reference']['status'] for r in selected)),
+            shared_birth_vertex=sum(r['reference'].get('shared_vertex', False) for r in selected),
+            statistics=actual_birth_group_statistics(selected, bootstrap, seed))
+    muon_groups = {}
+    for topology in sorted({r['topology'] for r in muons}):
+        selected = [r for r in muons if r['topology'] == topology]
+        muon_groups[str(topology)] = dict(selected_muons=len(selected),
+            reference_status=dict(Counter(r['match_status'] for r in selected)),
+            wrong_charge=sum(r['wrong_charge'] is True for r in selected),
+            statistics=actual_birth_group_statistics(selected, bootstrap, seed))
+    return dict(schema='shift-actual-SimTrack-birth-closure-v1', complete=True,
+        analysis_source_sha256=native_file_checksum(__file__),
+        manifest_sha256=native_file_checksum(manifest_path), release_sha256=native_file_checksum(release_path),
+        kernel=manifest['kernel'], counts=dict(cases=len(cases), original_events=len(events),
+            actual_saved_muon_rows=sum(e['actual_saved_muon_rows'] for e in events),
+            valid_actual_muon_births=sum(e['valid_actual_muon_births'] for e in events),
+            selected_muons=len(muons), selected_pairs=len(pairs),
+            muon_reference_status=dict(Counter(r['match_status'] for r in muons)),
+            matched_birth_vertex_status=dict(Counter(r['actual_birth_vertex_status'] for r in muons
+                                                      if r['match_status'] == 'matched')),
+            matched_muon_undefined_metrics=dict(Counter(n for r in muons if r['match_status'] == 'matched'
+                for n in ('p_relative', 'pt_relative', 'pz_relative', 'angle_error_rad') if n not in r['metrics'])),
+            wrong_reconstructed_charge=sum(r['wrong_charge'] is True for r in muons)),
+        groups=groups, muon_groups=muon_groups, muon_statistics=actual_birth_group_statistics(muons, bootstrap, seed),
+        events=events, selected_muon_ledger=muons, selected_pair_ledger=pairs,
+        full_source_exposure=list(exposure.values()), missing_sources=manifest['missing_sources'],
+        reference='All saved actual PDG13 SimTracks at birth; exact source/case/event/trackID, no GEN or angular fallback.',
+        interpretation='Momentum closure includes detector reconstruction and material return to the target. Two-individual-birth-vector mass is kinematic, not a common-parent resonance or common-vertex claim.',
+        mass_definition=dict(muon_mass_gev=MUON_MASS, stable_momentum_arithmetic=True,
+            actual_energy_consistency_absolute_tolerance_gev=1.e-6, actual_energy_consistency_relative_tolerance=1.e-8),
+        shared_vertex_definition=dict(position_tolerance_cm=ACTUAL_BIRTH_POSITION_TOLERANCE_CM,
+            time_tolerance_ns=ACTUAL_BIRTH_TIME_TOLERANCE_NS,
+            links='Same actual vertex index, or same explicit positive actual parent; both also need equal physical position/time.'),
+        native_weight_definition='Original EDM double versus the declared Nano scalar serialization; all7 annotated Double accounting fields required and checked, source fraction r only, proposal density/correction1 and final W/r. Candidate probability p never enters these benchmark weights. No rate or inclusive efficiency.',
+        population_summary_minimum_independent_originals=20, physics_normalization_ready=False)
+
+
+def detector_pair_identity(first, second):
+    """Raw source identities include the physical event, algorithm and source index."""
+    first, second = tuple(first), tuple(second)
+    if first == second or first[:-2] != second[:-2]:
+        raise ValueError('Detector pair needs two distinct sources in the same event')
+    return tuple(sorted((first, second)))
+
+
+def validate_detector_audit_inputs(modes):
+    """Protect input events while allowing fitted states and selections to migrate."""
+    if not modes:
+        raise ValueError('Detector audit requires at least one mode')
+    baseline = next(iter(modes.values()))['events']
+    protected = ('gen_sha256', 'weights', 'raw_input_sha256')
+    for name, data in modes.items():
+        if data['events'].keys() != baseline.keys():
+            raise RuntimeError('Detector audit event membership differs: '+name)
+        for identity, event in data['events'].items():
+            if any(k not in event or k not in baseline[identity] for k in protected):
+                raise RuntimeError('Detector audit input fingerprint missing: '+name)
+            if any(event[k] != baseline[identity][k] for k in protected):
+                raise RuntimeError('Detector audit raw inputs, GEN or native weights differ: '+name)
+        if any(identity[:-2] not in data['events'] for identity in data['muons']):
+            raise RuntimeError('Detector audit muon references an absent event: '+name)
+        for pair in data['pairs']:
+            if pair != detector_pair_identity(*pair) or any(leg not in data['muons'] for leg in pair):
+                raise RuntimeError('Detector audit pair references absent/invalid source identity: '+name)
+
+
+def detector_population_union(modes):
+    """Account for selection changes; never force a new mode onto old pair membership."""
+    validate_detector_audit_inputs(modes)
+    reference = next(iter(modes.values()))
+    muon_sets = [set(data['muons']) for data in modes.values()]
+    pair_sets = [set(data['pairs']) for data in modes.values()]
+    result = dict(muon_union=sorted(set.union(*muon_sets)),
+                  muon_common_all=sorted(set.intersection(*muon_sets)),
+                  pair_union=sorted(set.union(*pair_sets)),
+                  pair_common_all=sorted(set.intersection(*pair_sets)), modes={})
+    for name, data in modes.items():
+        counts = {}
+        for kind in ('muons', 'pairs'):
+            old, new = set(reference[kind]), set(data[kind])
+            transitions = defaultdict(Counter)
+            fields = ('charge', 'topology') if kind == 'muons' else ('is_os', 'category')
+            for identity in old & new:
+                for field in fields:
+                    before, after = reference[kind][identity][field], data[kind][identity][field]
+                    transitions[field][str(before)+' -> '+str(after)] += 1
+            counts[kind] = dict(retained=len(new), common_with_reference=len(old & new),
+                                appeared=sorted(new-old), disappeared=sorted(old-new),
+                                transitions={k: dict(v) for k, v in transitions.items()})
+        result['modes'][name] = counts
+    return result
+
+
+def detector_momentum_decomposition(fitted, surface_truth, target, production_truth):
+    """Separate fit error and material return only with a matched detector reference."""
+    names = ('detector_error_gev', 'material_return_error_gev', 'total_error_gev',
+             'detector_relative', 'detector_contribution_relative', 'material_return_relative',
+             'total_relative', 'detector_log_ratio', 'material_return_log_ratio', 'total_log_ratio')
+    values = (fitted, surface_truth, target, production_truth)
+    if not all(math.isfinite(x) and x > 0. for x in values):
+        return dict(valid=False, **{name: math.nan for name in names})
+    detector = fitted-surface_truth
+    returned = (target-fitted)-(production_truth-surface_truth)
+    return dict(valid=True, detector_error_gev=detector, material_return_error_gev=returned,
+                total_error_gev=target-production_truth, detector_relative=detector/surface_truth,
+                detector_contribution_relative=detector/production_truth,
+                material_return_relative=returned/production_truth,
+                total_relative=(target-production_truth)/production_truth,
+                detector_log_ratio=math.log(fitted/surface_truth),
+                material_return_log_ratio=math.log(target/fitted)-math.log(production_truth/surface_truth),
+                total_log_ratio=math.log(target/production_truth))
+
+
+def detector_baseline_statistics(values, parents, bootstrap=200, seed=190019):
+    """Pair each mode with the reference separately; a failed control shrinks only itself."""
+    if not values:
+        raise ValueError('Detector statistics require a reference mode')
+    reference = next(iter(values.values()))
+    return dict(all_retained={name: paired_parent_statistics({name: value}, parents, bootstrap, seed)
+                              for name, value in values.items()},
+                paired_vs_reference={name: paired_parent_statistics(
+                    {'canonical': reference, name: value}, parents, bootstrap, seed)
+                    for name, value in list(values.items())[1:]})
+
+
+def detector_surface_residuals(fitted, truth):
+    """Evaluation in one native detector chart; original-track errors are not used."""
+    same_surface = fitted.get('surface') is not None and fitted.get('surface') == truth.get('surface')
+    result = dict(measured_valid=False, truth_valid=False, same_surface=same_surface,
+                  covariance_valid=False, pull_reference_valid=False, metrics={})
+    result['orientation_agrees'] = (fitted.get('local_pz_sign') in (-1, 1)
+        and fitted.get('local_pz_sign') == truth.get('local_pz_sign'))
+    momentum = np.asarray(fitted.get('momentum', ()), dtype=float)
+    parameters = np.asarray(fitted.get('parameters', ()), dtype=float)
+    result['measured_valid'] = bool(fitted.get('valid', False) and momentum.shape == (3,)
+        and parameters.shape == (5,) and np.isfinite(momentum).all() and np.isfinite(parameters).all()
+        and np.linalg.norm(momentum) > 0. and parameters[0] != 0.)
+    reference = np.asarray(truth.get('momentum', ()), dtype=float)
+    local_truth = np.asarray(truth.get('parameters', ()), dtype=float)
+    result['truth_valid'] = bool(same_surface and truth.get('valid', False) and reference.shape == (3,)
+        and local_truth.shape == (5,) and np.isfinite(reference).all() and np.isfinite(local_truth).all()
+        and np.linalg.norm(reference) > 0. and local_truth[0] != 0.)
+    covariance = np.asarray(fitted.get('covariance', ()), dtype=float)
+    if covariance.shape == (5, 5) and np.isfinite(covariance).all() and np.allclose(
+            covariance, covariance.T, rtol=1.e-10, atol=1.e-12):
+        try:
+            np.linalg.cholesky(covariance)
+            result['covariance_valid'] = True
+        except np.linalg.LinAlgError:
+            pass
+    if not (result['measured_valid'] and result['truth_valid']):
+        return result
+    result['pull_reference_valid'] = result['covariance_valid'] and result['orientation_agrees']
+    p, true_p = np.linalg.norm(momentum), np.linalg.norm(reference)
+    difference = parameters-local_truth
+    metrics = dict(p_relative=float(p/true_p-1.), qoverp_error=float(difference[0]),
+                   qoverp_relative=float(difference[0]/abs(local_truth[0])),
+                   angle_error=float(np.arctan2(np.linalg.norm(np.cross(momentum, reference)),
+                                               np.dot(momentum, reference))))
+    if np.hypot(*momentum[:2]) > 0. and np.hypot(*reference[:2]) > 0.:
+        metrics['phi_error'] = math.remainder(math.atan2(momentum[1], momentum[0])-
+                                             math.atan2(reference[1], reference[0]), 2.*math.pi)
+    for index, label in enumerate(('qoverp', 'slope_x', 'slope_y', 'x', 'y')):
+        metrics[label+'_error'] = float(difference[index])
+        if result['pull_reference_valid']:
+            metrics[label+'_pull'] = float(difference[index]/math.sqrt(covariance[index, index]))
+    if result['pull_reference_valid']:
+        metrics['mahalanobis2'] = float(difference @ np.linalg.solve(covariance, difference))
+    result['metrics'] = metrics
+    return result
+
+
+def detector_pair_surface_closure(first, second, first_truth, second_truth):
+    """Pair closure against corresponding detector surfaces, never a nominal mass."""
+    checked = [detector_surface_residuals(a, b)
+               for a, b in ((first, first_truth), (second, second_truth))]
+    if not all(x['measured_valid'] and x['truth_valid'] for x in checked):
+        return dict(valid=False)
+    momenta = [np.asarray(x['momentum'], dtype=float) for x in (first, second)]
+    truth = [np.asarray(x['momentum'], dtype=float) for x in (first_truth, second_truth)]
+    def angle(vectors):
+        return float(np.arctan2(np.linalg.norm(np.cross(*vectors)), np.dot(*vectors)))
+    mass, true_mass = float(stable_pair_mass(*momenta)), float(stable_pair_mass(*truth))
+    return dict(valid=True, mass_error_gev=mass-true_mass, mass_relative=mass/true_mass-1.,
+                opening_error=angle(momenta)-angle(truth))
 
 
 def paired_policy_states(measured, policies=PAIRED_POLICIES):
@@ -268,6 +819,169 @@ def native_file_checksum(path):
     return digest.hexdigest()
 
 
+def read_detector_audit(path, context, raw_input_sha256, event_sources=None):
+    """Selected-row detector snapshots plus all-candidate counters, without fallback."""
+    source = ROOT.TFile.Open(str(path))
+    if not source or source.IsZombie() or source.TestBit(ROOT.TFile.kRecovered):
+        raise RuntimeError('Unreadable detector audit: '+str(path))
+    counters = ('inputCandidates', 'attempted', 'stateAvailable', 'fitAccepted', 'targetAttempted',
+                'targetValid', 'canonicalAccepted', 'erased', 'retained')
+    audit_fields = ('Available', 'FitAccepted', 'TargetAttempted', 'TargetStatus', 'CanonicalAccepted',
+                    'Variant', 'Iteration', 'SnapshotKind', 'NativeStatus', 'FirstStatus', 'SecondStatus',
+                    'SurfaceId', 'LocalPzSign', 'Charge', 'X', 'Y', 'Z', 'Px', 'Py', 'Pz', 'Chi2', 'Ndof',
+                    'UsedHits', 'InputHashLo', 'InputHashHi', 'UsedHashLo', 'UsedHashHi')
+    truth_fields = ('Status', 'SimTrackId', 'Charge', 'LocalPzSign', 'X', 'Y', 'Z', 'Px', 'Py', 'Pz',
+                    'LowerX', 'LowerY', 'LowerZ', 'LowerPx', 'LowerPy', 'LowerPz',
+                    'UpperX', 'UpperY', 'UpperZ', 'UpperPx', 'UpperPy', 'UpperPz',
+                    'LowerLocalZ', 'UpperLocalZ', 'Span', 'Weight', 'LowerKind', 'UpperKind')
+    raw_fields = ('trackPt', 'preRefitPt', 'preRefitPz', 'nValidHits', 'nValidMuonHits',
+                  'nCSCHits', 'nDTHits', 'nRPCHits', 'nGEMHits', 'nME0Hits')
+    muon_fields = ('recoAlgorithm', 'sourceIndex', 'charge', 'topology', 'px', 'py', 'pz',
+                   'hitGenPartIdx', 'hitSimTrackId', 'genPartIdx')+raw_fields
+    pair_fields = ('mass', 'pt', 'pz', 'vx', 'vy', 'vz', 'muonIdx1', 'muonIdx2', 'isOS',
+                   'topologyMin', 'topologyMax')
+    lower_cov = [(i, j) for i in range(5) for j in range(i+1)]
+    audit_names = list(audit_fields)+['Par'+str(i) for i in range(5)]
+    audit_names += ['Cov'+str(i)+str(j) for i, j in lower_cov]
+    truth_names = list(truth_fields)+['Par'+str(i) for i in range(5)]
+    try:
+        tree = source.Get('Events')
+        if not tree:
+            raise RuntimeError('Missing Events in detector audit: '+str(path))
+        branches = {b.GetName() for b in tree.GetListOfBranches()}
+        required = {'run', 'luminosityBlock', 'event', 'genWeight', 'nShiftMuon', 'nShiftDimuonVertex', 'nGenPart'}
+        required.update('ShiftDetectorFitAudit'+name for name in counters)
+        required.update('ShiftMuon_'+name for name in muon_fields)
+        required.update('ShiftMuon_detectorAudit'+name for name in audit_names)
+        required.update('ShiftMuon_detectorAuditTruth'+name for name in truth_names)
+        required.update('ShiftDimuonVertex_'+name for name in pair_fields)
+        gen_fields = ('pdgId', 'genPartIdxMother', 'pt', 'phi', 'pz', 'vx', 'vy', 'vz')
+        required.update('GenPart_'+name for name in gen_fields)
+        if required-branches:
+            raise RuntimeError('Detector audit branches missing: '+str(sorted(required-branches)))
+        audit_ints = set(audit_fields)-{'SurfaceId', 'X', 'Y', 'Z', 'Px', 'Py', 'Pz', 'Chi2', 'Ndof',
+                                      'InputHashLo', 'InputHashHi', 'UsedHashLo', 'UsedHashHi'}
+        truth_ints = {'Status', 'SimTrackId', 'Charge', 'LocalPzSign', 'LowerKind', 'UpperKind'}
+        types = {'ShiftDetectorFitAudit'+name: 'Int_t' for name in counters}
+        for name in audit_names:
+            types['ShiftMuon_detectorAudit'+name] = ('Int_t' if name in audit_ints else
+                'UInt_t' if name == 'SurfaceId' or 'Hash' in name else 'Double_t')
+        for name in truth_names:
+            types['ShiftMuon_detectorAuditTruth'+name] = 'Int_t' if name in truth_ints else 'Double_t'
+        for name, expected in types.items():
+            leaf = tree.GetBranch(name).GetLeaf(name)
+            if not leaf or leaf.GetTypeName() != expected:
+                raise RuntimeError('Detector audit branch type differs: '+name+' expected '+expected)
+        weight_fields = sorted(n for n in branches if n == 'genWeight' or
+                               (n.startswith('shift') and ('Weight' in n or 'Probability' in n)))
+        tree.SetBranchStatus('*', False)
+        for name in required | set(weight_fields) | {n for n in branches if n.startswith('GenPart_')}:
+            tree.SetBranchStatus(name, True)
+        events, muons, pairs = {}, {}, {}
+        labels = {0: 'Near', 1: 'Near-Barrel', 2: 'Both', 3: 'Far', 4: 'Other'}
+        for entry in range(int(tree.GetEntries())):
+            tree.GetEntry(entry)
+            native_id = tuple(int(getattr(tree, n)) for n in ('run', 'luminosityBlock', 'event'))
+            event_token = ':'.join(map(str, native_id))
+            if event_sources is not None and event_token not in event_sources:
+                raise RuntimeError('Detector event lacks physical-source metadata: '+event_token)
+            event_info = (event_sources or {}).get(event_token, {})
+            if event_sources is not None and any(not event_info.get(k) for k in
+                    ('physical_parent_context', 'raw_input_sha256', 'sample', 'process')):
+                raise RuntimeError('Detector physical-source metadata incomplete: '+event_token)
+            physical_context = event_info.get('physical_parent_context', context)
+            identity = (physical_context,)+native_id
+            if identity in events:
+                raise RuntimeError('Duplicate detector audit event: '+str(identity))
+            full_gen = {n: list(getattr(tree, n)) for n in sorted(branches) if n.startswith('GenPart_')}
+            gen = {n: list(getattr(tree, 'GenPart_'+n)) for n in gen_fields}
+            weights = {n: float(getattr(tree, n)) for n in weight_fields}
+            if not all(math.isfinite(x) for x in weights.values()):
+                raise RuntimeError('Nonfinite native weight in detector audit: '+str(identity))
+            event_counts = {n: int(getattr(tree, 'ShiftDetectorFitAudit'+n)) for n in counters}
+            if event_counts['retained'] != int(tree.nShiftMuon):
+                raise RuntimeError('Detector audit retained counter disagrees with ShiftMuon')
+            events[identity] = dict(gen_sha256=hashlib.sha256(repr(full_gen).encode()).hexdigest(),
+                weights=weights, raw_input_sha256=event_info.get('raw_input_sha256', raw_input_sha256),
+                counters=event_counts, sample=event_info.get('sample'), process=event_info.get('process'))
+            row_keys = []
+            for index in range(int(tree.nShiftMuon)):
+                row = {n: float(getattr(tree, 'ShiftMuon_'+n)[index]) for n in muon_fields}
+                key = identity+(int(row['recoAlgorithm']), int(row['sourceIndex']))
+                if key in muons:
+                    raise RuntimeError('Duplicate selected detector raw source: '+str(key))
+                row_keys.append(key)
+                measured = {n: float(getattr(tree, 'ShiftMuon_detectorAudit'+n)[index]) for n in audit_names}
+                reference = {n: float(getattr(tree, 'ShiftMuon_detectorAuditTruth'+n)[index]) for n in truth_names}
+                covariance = np.zeros((5, 5))
+                for i, j in lower_cov:
+                    covariance[i, j] = covariance[j, i] = measured['Cov'+str(i)+str(j)]
+                surface = (int(measured['SurfaceId']), 'native')
+                fitted = dict(valid=measured['Available'] == 1 and surface[0] != 0, surface=surface,
+                    local_pz_sign=int(measured['LocalPzSign']),
+                    momentum=[measured[n] for n in ('Px', 'Py', 'Pz')],
+                    parameters=[measured['Par'+str(i)] for i in range(5)], covariance=covariance)
+                bracket = all(math.isfinite(reference[n]) for n in ('LowerLocalZ', 'UpperLocalZ', 'Weight', 'Span'))
+                bracket = bracket and reference['LowerLocalZ'] <= 0. <= reference['UpperLocalZ']
+                bracket = bracket and 0. <= reference['Weight'] <= 1. and reference['Span'] >= 0.
+                matched = int(row['hitGenPartIdx'])
+                gen_valid = 0 <= matched < len(gen['pdgId']) and abs(gen['pdgId'][matched]) == 13
+                truth_valid = reference['Status'] == 1 and bracket and reference['SimTrackId'] >= 0
+                truth_valid = truth_valid and reference['SimTrackId'] == row['hitSimTrackId']
+                truth = dict(valid=truth_valid, surface=surface,
+                    local_pz_sign=int(reference['LocalPzSign']),
+                    momentum=[reference[n] for n in ('Px', 'Py', 'Pz')],
+                    parameters=[reference['Par'+str(i)] for i in range(5)])
+                evaluated = detector_surface_residuals(fitted, truth)
+                production = {}
+                if gen_valid:
+                    production = {n: gen[n][matched] for n in gen_fields}
+                    production['momentum'] = momentum_vector(np.array([production['pt']]),
+                        np.array([production['phi']]), np.array([production['pz']]))[0]
+                metrics = dict(evaluated['metrics'])
+                returns_from_fit = (measured['SnapshotKind'] == 1 and measured['FitAccepted'] == 1 and measured['CanonicalAccepted'] == 1
+                                    and measured['TargetAttempted'] == 1 and measured['TargetStatus'] == 1)
+                if evaluated['measured_valid'] and evaluated['truth_valid'] and returns_from_fit and production:
+                    decomposition = detector_momentum_decomposition(np.linalg.norm(fitted['momentum']),
+                        np.linalg.norm(truth['momentum']), np.linalg.norm([row[n] for n in ('px', 'py', 'pz')]),
+                        np.linalg.norm(production['momentum']))
+                    metrics.update({k: v for k, v in decomposition.items() if k != 'valid'})
+                muons[key] = dict(charge=int(row['charge']), topology=int(row['topology']),
+                    raw_signature=tuple(row[n] for n in raw_fields), fitted=fitted, truth=truth, audit=measured,
+                    truth_audit=reference, evaluation=evaluated, metrics=metrics, production=production,
+                    hit_gen_index=matched, canonical_momentum=[row[n] for n in ('px', 'py', 'pz')],
+                    original_fallback=not returns_from_fit,
+                    legacy_hit_association_agrees=int(row['genPartIdx']) == matched if gen_valid else None)
+            for index in range(int(tree.nShiftDimuonVertex)):
+                row = {n: float(getattr(tree, 'ShiftDimuonVertex_'+n)[index]) for n in pair_fields}
+                a, b = int(row['muonIdx1']), int(row['muonIdx2'])
+                if not (0 <= a < len(row_keys) and 0 <= b < len(row_keys)):
+                    raise RuntimeError('Detector pair references invalid selected muon index')
+                key = detector_pair_identity(row_keys[a], row_keys[b])
+                if key in pairs:
+                    raise RuntimeError('Duplicate detector source-pair identity: '+str(key))
+                first, second = (muons[row_keys[i]] for i in (a, b))
+                metrics = {}
+                closure = detector_pair_surface_closure(first['fitted'], second['fitted'], first['truth'], second['truth'])
+                if closure['valid']:
+                    metrics.update({'detector_pair_'+k: v for k, v in closure.items() if k != 'valid'})
+                distinct_truth = first['hit_gen_index'] != second['hit_gen_index']
+                if first['production'] and second['production'] and distinct_truth:
+                    vectors = [m['production']['momentum'] for m in (first, second)]
+                    true_mass = float(stable_pair_mass(*vectors))
+                    metrics['production_mass_relative'] = row['mass']/true_mass-1.
+                    vertices = [np.array([m['production']['v'+axis] for axis in 'xyz']) for m in (first, second)]
+                    if np.max(np.abs(vertices[0]-vertices[1])) < 1.e-4:
+                        for i, axis in enumerate('xyz'):
+                            metrics['production_vertex_'+axis] = row['v'+axis]-.5*(vertices[0][i]+vertices[1][i])
+                category = '-'.join(labels.get(int(row[n]), str(int(row[n]))) for n in ('topologyMin', 'topologyMax'))
+                pairs[key] = dict(is_os=bool(row['isOS']), category=category, metrics=metrics, canonical=row)
+        return dict(events=events, muons=muons, pairs=pairs), dict(path=str(path), entries=int(tree.GetEntries()),
+            bytes=int(source.GetSize()), root_uuid=source.GetUUID().AsString(), branches=sorted(required))
+    finally:
+        source.Close()
+
+
 def read_native_reconstruction(path):
     """Read every event/pair. Stored hit associations are used only for closure."""
     source = ROOT.TFile.Open(str(path))
@@ -366,6 +1080,233 @@ def read_native_reconstruction(path):
                  events=len(events), pairs=len(pairs), pair_branches=pair_fields)
     source.Close()
     return events, pairs, stamp
+
+
+def detector_pull_coverage(values, parents, bootstrap=200, seed=190019):
+    """Marginal local-pull coverage; resample physical parents, never individual legs."""
+    values, parents = np.asarray(values, dtype=float), np.asarray(parents)
+    finite = np.isfinite(values)
+    values, parents = values[finite], parents[finite]
+    unique = np.unique(parents)
+    result = dict(entries=len(values), physical_parents=len(unique), missing=int((~finite).sum()))
+    for limit, label in ((1., 'one_sigma'), (1.96, 'one_point_96_sigma')):
+        covered = np.abs(values) < limit
+        item = dict(covered=int(covered.sum()), fraction=float(covered.mean()) if len(values) else None)
+        if len(unique) >= 2:
+            generator = np.random.default_rng(seed)
+            indices = [np.flatnonzero(parents == parent) for parent in unique]
+            draws = []
+            for _ in range(bootstrap):
+                sample = np.concatenate([indices[i] for i in generator.integers(0, len(unique), len(unique))])
+                draws.append(float(covered[sample].mean()))
+            item['interval68'] = dict(zip(('low', 'high'), map(float, np.quantile(draws, [.158655, .841345]))))
+        result[label] = item
+    return result
+
+
+def detector_category_statistics(modes, bootstrap=200, seed=190019):
+    """Pair fixed reference-category identities; native category populations stay separate."""
+    reference = next(iter(modes.values()))
+    categories = sorted({row['category'] for data in modes.values() for row in data['pairs'].values()})
+    result = {}
+    for category in categories:
+        native_pairs = {name: {key for key, row in data['pairs'].items() if row['category'] == category}
+                        for name, data in modes.items()}
+        reference_pairs = native_pairs[next(iter(modes))]
+        reference_legs = {leg for key in reference_pairs for leg in key}
+        native_legs = {name: {leg for key in keys for leg in key} for name, keys in native_pairs.items()}
+        output = dict(reference_pairs=len(reference_pairs), reference_legs=len(reference_legs),
+                      native_counts={name: dict(pairs=len(native_pairs[name]), legs=len(native_legs[name]))
+                                     for name in modes},
+                      membership={name: dict(common_reference_pairs=len(reference_pairs & data['pairs'].keys()),
+                          lost_reference_pairs=len(reference_pairs-data['pairs'].keys()),
+                          new_category_pairs=len(native_pairs[name]-reference['pairs'].keys()),
+                          recategorized_reference_pairs=sum(data['pairs'][key]['category'] != category
+                              for key in reference_pairs & data['pairs'].keys())) for name, data in modes.items()},
+                      pair_metrics={}, muon_metrics={})
+        for kind, primary, native, key_name in (
+                ('pairs', reference_pairs, native_pairs, 'pair_metrics'),
+                ('muons', reference_legs, native_legs, 'muon_metrics')):
+            identities = sorted(primary | set().union(*native.values()))
+            parents = [repr(key[0][:-2] if kind == 'pairs' else key[:-2]) for key in identities]
+            metrics = sorted({metric for name, data in modes.items() for key in native[name]
+                              for metric in data[kind][key]['metrics']})
+            # Also retain errors of a reference pair that migrates out of this category.
+            metrics = sorted(set(metrics) | {metric for key in primary for data in modes.values()
+                             if key in data[kind] for metric in data[kind][key]['metrics']})
+            for metric in metrics:
+                paired_values = {name: [data[kind].get(key, {}).get('metrics', {}).get(metric, math.nan)
+                                         if key in primary else math.nan for key in identities]
+                                 for name, data in modes.items()}
+                paired = detector_baseline_statistics(paired_values, parents, bootstrap, seed)['paired_vs_reference']
+                descriptive = {}
+                for name, data in modes.items():
+                    values = [data[kind][key]['metrics'].get(metric, math.nan) if key in native[name]
+                              else math.nan for key in identities]
+                    descriptive[name] = paired_parent_statistics({name: values}, parents, bootstrap, seed)
+                output[key_name][metric] = dict(paired_vs_reference=paired, all_retained=descriptive)
+        result[category] = output
+    return result
+
+
+def detector_selected_case_ledger(modes):
+    """Export already evaluated selected rows; this never changes a cohort or metric."""
+    def plain(value):
+        if isinstance(value, dict):
+            return {key: plain(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple, np.ndarray)):
+            return [plain(item) for item in value]
+        if isinstance(value, np.generic):
+            value = value.item()
+        return None if isinstance(value, float) and not math.isfinite(value) else value
+    result = {}
+    for name, data in modes.items():
+        muons, pairs = [], []
+        categories = defaultdict(set)
+        for identity, row in data['pairs'].items():
+            for leg in identity:
+                categories[leg].add(row['category'])
+            relation = 'unknown'
+            if 'detector_pair_mass_relative' in row['metrics']:
+                tracks = [data['muons'][leg]['truth_audit']['SimTrackId'] for leg in identity]
+                relation = 'same' if tracks[0] == tracks[1] else 'distinct'
+            pairs.append(dict(identity=identity, category=row['category'], is_os=row['is_os'],
+                              canonical=row.get('canonical', {}), metrics=row['metrics'],
+                              surface_proxy_simtrack_relation=relation))
+        for identity, row in data['muons'].items():
+            fitted, truth = row.get('fitted', {}), row.get('truth', {})
+            muons.append(dict(identity=identity, categories=sorted(categories[identity]),
+                charge=row['charge'], topology=row['topology'],
+                original_fallback=row['original_fallback'], audit=row['audit'],
+                truth_audit=row['truth_audit'], evaluation=row['evaluation'],
+                detector_momentum=fitted.get('momentum'), surface_truth_momentum=truth.get('momentum'),
+                detector_p=float(np.linalg.norm(fitted['momentum'])) if 'momentum' in fitted else None,
+                surface_truth_p=float(np.linalg.norm(truth['momentum'])) if 'momentum' in truth else None,
+                canonical_momentum=row.get('canonical_momentum'), hit_gen_index=row.get('hit_gen_index'),
+                legacy_hit_association_agrees=row['legacy_hit_association_agrees'], metrics=row['metrics']))
+        result[name] = plain(dict(muons=muons, pairs=pairs))
+    return result
+
+
+def run_detector_audit(manifest_path, bootstrap=200, seed=190019):
+    """Read only a released fixed milestone, allowing measured population changes."""
+    payload = Path(manifest_path).read_bytes()
+    manifest = json.loads(payload)
+    if manifest.get('released_for_analysis') is not True:
+        raise RuntimeError('Detector audit outcomes have not been released for analysis')
+    protocol_ref = manifest['protocol']
+    protocol_bytes = Path(protocol_ref['path']).read_bytes()
+    if hashlib.sha256(protocol_bytes).hexdigest() != protocol_ref['sha256']:
+        raise RuntimeError('Detector milestone protocol checksum differs')
+    protocol = json.loads(protocol_bytes)
+    order = manifest['mode_order']
+    declared = [x['name'] for x in protocol['ordered_modes']]
+    if not order or order[0] != declared[0] or order != [name for name in declared if name in order]:
+        raise RuntimeError('Detector modes differ from frozen order')
+    # Complete-file hashes and release are checked before any outcome reader.
+    for source in manifest['sources']:
+        if set(source['modes']) != set(order):
+            raise RuntimeError('Detector source does not cover every declared mode')
+        for record in source['modes'].values():
+            if native_file_checksum(record['path']) != record['sha256']:
+                raise RuntimeError('Detector output checksum differs: '+record['path'])
+    combined = {name: dict(events={}, muons={}, pairs={}) for name in order}
+    provenance = []
+    for source in manifest['sources']:
+        for name, record in source['modes'].items():
+            data, stamp = read_detector_audit(record['path'], source.get('source_context', 'combined'),
+                source['raw_input_sha256'], source.get('event_sources'))
+            ids = {key[1:] for key in data['events']}
+            if ids != {tuple(int(x) for x in key) for key in source['expected_ids']}:
+                raise RuntimeError('Detector file does not match every expected event ID')
+            for event in data['events'].values():
+                event['sample'] = event['sample'] or source['sample']
+                event['process'] = event['process'] or source['process']
+            for kind in ('events', 'muons', 'pairs'):
+                if combined[name][kind].keys() & data[kind].keys():
+                    raise RuntimeError('Detector manifest repeats physical '+kind+' identities')
+                combined[name][kind].update(data[kind])
+            provenance.append(dict(mode=name, source=source, native=stamp))
+    union = detector_population_union(combined)
+    baseline = combined[order[0]]
+    for name, data in combined.items():
+        for key in baseline['muons'].keys() & data['muons'].keys():
+            if baseline['muons'][key]['raw_signature'] != data['muons'][key]['raw_signature']:
+                raise RuntimeError('Original measured track fields differ for common source: '+str(key))
+    report = dict(schema='shift-detector-audit-comparison-v1', mode_order=order,
+        manifest_sha256=hashlib.sha256(payload).hexdigest(), protocol=protocol_ref,
+        analysis_source_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        bootstrap_draws=bootstrap, seed=seed, sources=provenance, population=union, groups=[],
+        scope='Selected-row detector closure; singleton counters retain all-attempt totals. Erased means geometric/invalid removal before cleaning; duplicate-cleaning losses are inputCandidates-erased-retained. No all-attempt identity or pulse/channel completeness claim.',
+        statistics_scope='Unweighted diagnostic summaries; native weights preserved for accounting. Each mode pairs separately with reference; common-all is supplemental only. All-retained per-mode counts can differ. No analysis fallback or fabricated missing pair.',
+        truth_scope='Independent hit-associated same-surface bracket/vector proxy only for evaluation. Production mass is chosen-pair closure with distinct GEN muons. Detector-surface candidate-pair closure includes same-SimTrack duplicates and is not physical dimuon/resonance resolution. Pair relation is unknown when either valid surface closure is unavailable.',
+        covariance_scope='Local5D fitted covariance, same native surface/chart and local-pz sign. Wrong-orientation states retain global-angle errors/counts but no ordinary local-pull coverage. No empirical rescaling. SimHit exits reuse entry momentum; bracket interpolation is a proxy, not exact surface truth.')
+    for sample in sorted({x['sample'] for x in baseline['events'].values()}):
+        keys = {key for key, event in baseline['events'].items() if event['sample'] == sample}
+        modes = {name: {kind: {key: value for key, value in data[kind].items()
+                    if (key if kind == 'events' else key[:-2] if kind == 'muons' else key[0][:-2]) in keys}
+                    for kind in ('events', 'muons', 'pairs')} for name, data in combined.items()}
+        group = dict(sample=sample, events=len(keys), population=detector_population_union(modes),
+                     telemetry={}, muon_metrics={}, pair_metrics={}, pull_coverage={})
+        for name, data in modes.items():
+            counts = Counter()
+            for event in data['events'].values():
+                counts.update({'event_'+k: v for k, v in event['counters'].items()})
+                c = event['counters']
+                counts['event_duplicate_cleaning_losses'] += c.get('inputCandidates', 0)-c.get('erased', 0)-c.get('retained', 0)
+            statuses = defaultdict(Counter)
+            for row in data['muons'].values():
+                counts['selected'] += 1
+                for field in ('measured_valid', 'truth_valid', 'covariance_valid', 'pull_reference_valid'):
+                    counts[field] += row['evaluation'][field]
+                counts['original_fallback'] += row['original_fallback']
+                counts['decomposed'] += 'material_return_error_gev' in row['metrics']
+                if row['production']:
+                    counts['hit_gen_matched'] += 1
+                    counts['canonical_wrong_charge'] += row['charge'] != (-1 if row['production']['pdgId'] == 13 else 1)
+                if row['truth']['valid'] and row['evaluation']['measured_valid']:
+                    counts['matched_detector_states'] += 1
+                    counts['detector_wrong_charge'] += row['audit']['Charge'] != row['truth_audit']['Charge']
+                    counts['local_direction_disagrees'] += row['audit']['LocalPzSign'] != row['truth_audit']['LocalPzSign']
+                if row['legacy_hit_association_agrees'] is not None:
+                    counts['legacy_hit_agree'] += row['legacy_hit_association_agrees']
+                    counts['legacy_hit_disagree'] += not row['legacy_hit_association_agrees']
+                statuses['TruthStatus'][str(int(row['truth_audit']['Status']))] += 1
+                if row['truth_audit']['Status'] == 1:
+                    for field in ('LowerKind', 'UpperKind'):
+                        statuses['Truth'+field][str(int(row['truth_audit'][field]))] += 1
+                for field in ('NativeStatus', 'TargetStatus', 'SnapshotKind', 'Variant', 'Iteration',
+                              'Available', 'FitAccepted', 'CanonicalAccepted'):
+                    statuses[field][str(int(row['audit'][field]))] += 1
+            for key in modes[order[0]]['muons'].keys() & data['muons'].keys():
+                for prefix in ('Input', 'Used'):
+                    before = tuple(modes[order[0]]['muons'][key]['audit'][prefix+'Hash'+half] for half in ('Lo', 'Hi'))
+                    after = tuple(data['muons'][key]['audit'][prefix+'Hash'+half] for half in ('Lo', 'Hi'))
+                    counts[prefix.lower()+'_hash_changed'] += before != after
+            spans = [row['truth_audit']['Span'] for row in data['muons'].values()
+                     if row['truth_audit']['Status'] == 1 and math.isfinite(row['truth_audit']['Span'])]
+            group['telemetry'][name] = dict(counts=dict(counts), statuses={k: dict(v) for k, v in statuses.items()},
+                truth_bracket_span=dict(entries=len(spans), minimum=min(spans), median=float(np.median(spans)),
+                                        maximum=max(spans)) if spans else dict(entries=0))
+        for kind, output_name in (('muons', 'muon_metrics'), ('pairs', 'pair_metrics')):
+            identities = group['population']['muon_union' if kind == 'muons' else 'pair_union']
+            parents = [repr(key[:-2] if kind == 'muons' else key[0][:-2]) for key in identities]
+            metric_names = sorted({metric for data in modes.values() for row in data[kind].values() for metric in row['metrics']})
+            for metric in metric_names:
+                values = {name: [data[kind].get(key, {}).get('metrics', {}).get(metric, math.nan)
+                                 for key in identities] for name, data in modes.items()}
+                group[output_name][metric] = detector_baseline_statistics(values, parents, bootstrap, seed)
+                if kind == 'muons' and metric.endswith('_pull'):
+                    group['pull_coverage'][metric] = {name: detector_pull_coverage(v, parents, bootstrap, seed)
+                                                    for name, v in values.items()}
+        group['categories'] = detector_category_statistics(modes, bootstrap, seed)
+        group['selected_case_ledger'] = detector_selected_case_ledger(modes)
+        for name, cases in group['selected_case_ledger'].items():
+            counts = Counter(row['surface_proxy_simtrack_relation'] for row in cases['pairs'])
+            group['telemetry'][name]['surface_proxy_simtrack_pairs'] = {key: counts[key]
+                for key in ('distinct', 'same', 'unknown')}
+        report['groups'].append(group)
+    return report
 
 
 def compare_native_reconstruction(manifest_path, bootstrap=200, seed=190019):
@@ -1116,6 +2057,177 @@ def plot(results, output):
     canvas.Print(pdf); canvas.Print(pdf+']')
 
 
+def plot_detector_audit_report(report, output_directory):
+    """Category PDFs for migrations and pairwise detector-mode diagnostics."""
+    output_directory = Path(output_directory)
+    output_directory.mkdir(parents=True, exist_ok=True)
+    ROOT.gStyle.SetOptStat(0)
+    ROOT.gStyle.SetPaperSize(28., 19.5)
+    modes = report['mode_order']
+    short = {'RKreference': 'RK', 'legacyG4none_diagnostic': 'G4 old', 'G4_B': 'B',
+             'G4_BE': 'BE', 'G4_BEF': 'BEF', 'G4_BEFV': 'BEFV',
+             'RKdedup': 'RK unique hits', 'BEFVreference': 'BEFV', 'BEFVdedup': 'BEFV unique hits'}
+    reference_label = short.get(modes[0], modes[0])
+    categories = sorted({name for group in report['groups'] for name in group['categories']})
+    pages = {}
+    for category in categories:
+        output = str(output_directory/(category+'.pdf'))
+        canvas = ROOT.TCanvas('detector_milestone', category, 1500, 1040)
+        canvas.Print(output+'[')
+        page_number = 0
+        def page(title):
+            nonlocal page_number
+            page_number += 1
+            canvas.Clear(); canvas.cd()
+            text = ROOT.TLatex(); text.SetNDC(); text.SetTextFont(42); text.SetTextSize(.029)
+            text.DrawLatex(.04, .955, category+' | '+title)
+            text.SetTextSize(.017)
+            text.DrawLatex(.04, .025, 'Prior-peeked development | selected-row closure + all-candidate counters | parent-bootstrap 68% intervals')
+            text.DrawLatex(.94, .025, str(page_number))
+            return [text]
+        retained = page('How to read this mechanism check')
+        text = ROOT.TLatex(); text.SetNDC(); text.SetTextFont(42); text.SetTextSize(.026)
+        notes = [
+            f'Each alternative pairs separately with {reference_label} on its own common valid source set.',
+            'A failed diagnostic mode does not shrink another mode. Missing states and pairs stay missing.',
+            'Native category counts may change. Paired curves use fixed reference-category identities.',
+            'Detector snapshot closure can include failed/unapplied fits; accepted production ancestry is separate.',
+            f'Graphs show changes from {reference_label}; negative width change alone does not establish improvement.',
+            'No width point below 20 finite observations. No population error bar from one physical parent.',
+            'Surface truth is a measured-plane SimHit bracket proxy; exits reuse entry momentum.',
+            'Detector-surface candidate-pair closure includes duplicate SimTracks; it is not dimuon resolution.',
+            'Same/distinct surface SimTrack flags and counts are explicit; unavailable surface references are unknown.',
+            'Local pulls require valid covariance, matching native surface and local-pz orientation.',
+            'Wrong charge/orientation, transport failures, erased candidates and pair migrations remain counted.',
+            'No truth, sample mass or lifetime enters reconstruction or selection; no empirical error scaling.',
+            'Summaries are unweighted diagnostics; native event weights remain preserved for accounting.',
+            'B: backward covariance; E: loss/interface Jacobian; F: field gradient; V: ionization variance.',
+        ]
+        for i, line in enumerate(notes): text.DrawLatex(.055, .84-.057*i, line)
+        retained.append(text); canvas.Print(output, 'Title:Guide')
+        for group in report['groups']:
+            if category not in group['categories']:
+                continue
+            selected = group['categories'][category]
+            retained = page(group['sample'].replace('_', ' ')+' | counts and limits')
+            text = ROOT.TLatex(); text.SetNDC(); text.SetTextFont(42); text.SetTextSize(.024)
+            text.DrawLatex(.05, .85, f'{group["events"]} frozen events; category reference: {selected["reference_pairs"]} pairs / {selected["reference_legs"]} distinct legs')
+            text.SetTextSize(.021)
+            text.DrawLatex(.05, .79, 'All candidates: input / available / detector-accepted / target-valid / geometric-erased / cleaned / retained')
+            for i, mode in enumerate(modes):
+                c = group['telemetry'][mode]['counts']
+                values = [c.get('event_'+key, 0) for key in ('inputCandidates', 'stateAvailable', 'fitAccepted',
+                          'targetValid', 'erased', 'duplicate_cleaning_losses', 'retained')]
+                text.DrawLatex(.06, .74-.041*i, short.get(mode, mode)+': '+ ' / '.join(map(str, values)))
+            y = .43
+            text.DrawLatex(.05, y, 'Category pairs: native / common reference IDs / lost / new / recategorized')
+            for i, mode in enumerate(modes):
+                m = selected['membership'][mode]
+                values = [selected['native_counts'][mode]['pairs'], m['common_reference_pairs'],
+                          m['lost_reference_pairs'], m['new_category_pairs'], m['recategorized_reference_pairs']]
+                text.DrawLatex(.06, y-.048-.038*i, short.get(mode, mode)+': '+' / '.join(map(str, values)))
+            text.SetTextSize(.019)
+            text.DrawLatex(.05, .105, 'Candidate state/closure is retained-row only; counters preserve erased totals, not their missing identities.')
+            text.DrawLatex(.05, .065, 'Native medians follow; graphs require paired uncertainty support; widths need at least 20 observations.')
+            retained.append(text); canvas.Print(output, 'Title:'+group['sample']+' counts')
+            retained = page(group['sample'].replace('_', ' ')+' | native medians and counts')
+            text = ROOT.TLatex(); text.SetNDC(); text.SetTextFont(42); text.SetTextSize(.024)
+            text.DrawLatex(.05, .85, 'Each mode uses its own native category and valid reference set; populations can differ.')
+            columns = ((.26, 'muon_metrics', 'p_relative', 'Detector p [%]', 100.),
+                       (.44, 'muon_metrics', 'angle_error', 'Detector angle [mrad]', 1000.),
+                       (.64, 'pair_metrics', 'production_mass_relative', 'Production mass [%]', 100.),
+                       (.83, 'pair_metrics', 'production_vertex_z', 'Production z [m]', .01))
+            text.SetTextSize(.019); text.DrawLatex(.05, .77, 'Mode')
+            for x, _, _, title, _ in columns: text.DrawLatex(x, .77, title)
+            for i, mode in enumerate(modes):
+                y = .70-.067*i
+                text.DrawLatex(.05, y, short.get(mode, mode))
+                for x, container, metric, _, factor in columns:
+                    item = selected[container].get(metric, {}).get('all_retained', {}).get(mode)
+                    policy = item['policies'][mode] if item else {}
+                    estimate = policy.get('estimate')
+                    value = '--; N=0' if not estimate else f'{factor*estimate["median"]:+.3g}; N={item["entries"]}'
+                    text.DrawLatex(x, y, value)
+                    if 'interval68' in policy:
+                        bounds = policy['interval68']['median']
+                        text.DrawLatex(x, y-.025, f'[{factor*bounds["low"]:+.3g}, {factor*bounds["high"]:+.3g}]')
+            text.SetTextSize(.022)
+            text.DrawLatex(.05, .20, 'Brackets: parent-bootstrap 68% interval of the median, where at least two physical parents exist.')
+            text.DrawLatex(.05, .15, 'One-parent values are raw mechanism observations; they establish no population precision.')
+            text.DrawLatex(.05, .10, 'All missing/error counts and conditional pull coverage remain in the numerical report.')
+            retained.append(text); canvas.Print(output, 'Title:'+group['sample']+' native medians')
+            panels = [
+                ('Detector and material return', (
+                    ('muon_metrics', 'p_relative', 'Detector momentum relative error', '%', 100.),
+                    ('muon_metrics', 'angle_error', 'Detector angular distance', 'mrad', 1000.),
+                    ('muon_metrics', 'qoverp_pull', 'Detector q/p pull', '', 1.),
+                    ('muon_metrics', 'material_return_relative', 'Material-return error / production p', '%', 100.))),
+                ('Production pair closure', (
+                    ('pair_metrics', 'production_mass_relative', 'Chosen-pair production mass error', '%', 100.),
+                    ('pair_metrics', 'production_vertex_x', 'Shared production x error', 'cm', 1.),
+                    ('pair_metrics', 'production_vertex_y', 'Shared production y error', 'cm', 1.),
+                    ('pair_metrics', 'production_vertex_z', 'Shared production z error', 'm', .01))),
+                ('Detector-surface candidate-pair closure', (
+                    ('pair_metrics', 'detector_pair_mass_relative', 'Candidate-pair surface mass closure', '%', 100.),
+                    ('pair_metrics', 'detector_pair_opening_error', 'Candidate-pair surface opening closure', 'mrad', 1000.))),
+            ]
+            for statistic, label in (('median', 'median'), ('sigma68', '68% half-width')):
+                for heading, definitions in panels:
+                    def supported(container, metric):
+                        item = selected[container].get(metric, {})
+                        return any('interval68' in row['policies'].get(mode, {}) and
+                                   (statistic != 'sigma68' or row['quantile_resolved'])
+                                   for mode, row in item.get('paired_vs_reference', {}).items())
+                    if not any(supported(a, b) for a, b, *_ in definitions):
+                        continue
+                    retained = page(group['sample'].replace('_', ' ')+' | '+heading+' | '+label+' change')
+                    pad = ROOT.TPad('detector_panels', '', 0., .065, 1., .90)
+                    pad.Draw(); pad.Divide(2, 2, .014, .018); retained.append(pad)
+                    for panel, (container, metric, title, unit, factor) in enumerate(definitions, 1):
+                        axis_pad = pad.cd(panel)
+                        axis_pad.SetLeftMargin(.18); axis_pad.SetBottomMargin(.18)
+                        axis_pad.SetRightMargin(.05); axis_pad.SetTopMargin(.12)
+                        multigraph = ROOT.TMultiGraph(); retained.append(multigraph)
+                        lows, highs, points = [], [], []
+                        graph = None
+                        for index, mode in enumerate(modes[1:], 1):
+                            item = selected[container].get(metric, {}).get('paired_vs_reference', {}).get(mode)
+                            policy = item['policies'].get(mode, {}) if item else {}
+                            if 'interval68' not in policy or (statistic == 'sigma68' and not item['quantile_resolved']):
+                                graph = None
+                                continue
+                            delta = policy['paired_delta_vs_canonical'][statistic]
+                            if graph is None:
+                                graph = ROOT.TGraphAsymmErrors(); graph.SetMarkerStyle(20)
+                                graph.SetMarkerColor(ROOT.kAzure+2); graph.SetLineColor(ROOT.kAzure+2)
+                                graph.SetLineWidth(2); multigraph.Add(graph, 'LP'); retained.append(graph)
+                            value, lo, hi = (factor*delta[k] for k in ('value', 'low', 'high'))
+                            n = graph.GetN(); graph.SetPoint(n, index, value)
+                            graph.SetPointError(n, 0., 0., max(0., value-lo), max(0., hi-value))
+                            lows.append(lo); highs.append(hi); points.append(index)
+                        if points:
+                            multigraph.SetTitle(title+';Mode paired with '+reference_label+';Change in '+label+(' ['+unit+']' if unit else ''))
+                            multigraph.Draw('A'); multigraph.GetXaxis().SetLimits(.5, len(modes)-.5)
+                            xaxis = multigraph.GetXaxis(); xaxis.SetLabelSize(.06)
+                            for index, mode in enumerate(modes[1:], 1):
+                                xaxis.SetBinLabel(xaxis.FindBin(index), short.get(mode, mode))
+                            xaxis.LabelsOption('h'); xaxis.SetTitleSize(.045); xaxis.SetTitleOffset(1.35)
+                            lo, hi = min(lows+[0.]), max(highs+[0.]); span = max(hi-lo, .1*max(abs(lo), abs(hi)), 1.e-6)
+                            multigraph.SetMinimum(lo-.15*span); multigraph.SetMaximum(hi+.2*span)
+                            multigraph.GetYaxis().SetTitleSize(.05); multigraph.GetYaxis().SetLabelSize(.045)
+                            multigraph.GetYaxis().SetTitleOffset(1.5)
+                            zero = ROOT.TLine(.5, 0., len(modes)-.5, 0.); zero.SetLineStyle(2)
+                            zero.Draw(); retained.append(zero)
+                        else:
+                            text = ROOT.TLatex(); text.SetNDC(); text.SetTextFont(42); text.SetTextSize(.041)
+                            text.DrawLatex(.12, .78, title)
+                            text.DrawLatex(.12, .52, 'No paired population interval; see counts / JSON')
+                            retained.append(text)
+                    canvas.cd(); canvas.Print(output, 'Title:'+group['sample']+' '+heading+' '+statistic)
+        canvas.Print(output+']'); canvas.Close(); pages[category] = page_number
+    return pages
+
+
 def plot_paired_report(report, output):
     """Category-specific fit diagnostics from already evaluated paired metrics."""
     ROOT.gStyle.SetPaperSize(28., 19.5)
@@ -1459,6 +2571,10 @@ def main():
     parser.add_argument('--paired-report-json', help='Render existing paired metrics without rereading or reevaluating samples')
     parser.add_argument('--paired-npz', help='Bounded branch extraction from the existing NanoAOD samples')
     parser.add_argument('--native-manifest', help='Paired native replay sources and measured alternative branch mappings')
+    parser.add_argument('--actual-birth-manifest', help='Frozen jointly published Nano/material-audit cohort')
+    parser.add_argument('--actual-birth-release', help='Explicit analysis release bound to the actual-birth cohort SHA')
+    parser.add_argument('--detector-audit-manifest', help='Released detector-fit milestone with explicit population migrations')
+    parser.add_argument('--detector-plot-output', help='Output directory for detector-milestone category PDFs')
     parser.add_argument('--native-detector-overlay', nargs=2, metavar=('BASELINE', 'REFIT'),
                         help='Prepare separate detector-refit branches while preserving every baseline event/pair')
     parser.add_argument('--extraction', help='Exact source inventory accompanying --paired-npz')
@@ -1468,6 +2584,31 @@ def main():
     parser.add_argument('--bootstrap', type=int, default=200)
     parser.add_argument('--seed', type=int, default=190019)
     args=parser.parse_args()
+    if args.actual_birth_manifest:
+        if (not args.actual_birth_release or args.inputs or args.native_manifest or args.native_detector_overlay
+                or args.detector_audit_manifest or args.paired_npz or args.paired_report_json or args.bootstrap < 20):
+            parser.error('Actual-birth audit requires its exact release, no other event inputs, and at least20 draws')
+        report = run_actual_birth_audit(args.actual_birth_manifest, args.actual_birth_release, args.bootstrap, args.seed)
+        output = Path(args.output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(report, indent=2, allow_nan=False)+'\n')
+        print(json.dumps(dict(output=str(output), counts=report['counts'])))
+        return
+    if args.actual_birth_release:
+        parser.error('--actual-birth-release requires --actual-birth-manifest')
+    if args.detector_audit_manifest:
+        if (args.inputs or args.native_manifest or args.native_detector_overlay or args.paired_npz
+                or args.paired_report_json or args.bootstrap < 20):
+            parser.error('Detector audit requires only its released manifest and at least20 bootstrap draws')
+        report = run_detector_audit(args.detector_audit_manifest, args.bootstrap, args.seed)
+        output = Path(args.output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(report, indent=2, allow_nan=False)+'\n')
+        pages = plot_detector_audit_report(report, args.detector_plot_output) if args.detector_plot_output else {}
+        print(json.dumps(dict(output=str(output), samples=len(report['groups']), category_pdf_pages=pages)))
+        return
+    if args.detector_plot_output:
+        parser.error('--detector-plot-output requires --detector-audit-manifest')
     if args.native_detector_overlay:
         if args.inputs or args.native_manifest or args.paired_npz or args.paired_report_json:
             parser.error('Detector overlay requires only baseline/refit files and an output ROOT path')

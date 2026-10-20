@@ -12,6 +12,221 @@ import shift_reco_audit as audit
 
 
 class PairedReconstructionTests(unittest.TestCase):
+    def test_detector_union_keeps_lost_new_and_charge_changed_pairs(self):
+        first, second, third = ((1, 1, 1, 0, i) for i in range(3))
+        pair = audit.detector_pair_identity(first, second)
+        new_pair = audit.detector_pair_identity(second, third)
+        event = dict(gen_sha256='fixed', weights={'genWeight': .25}, raw_input_sha256='same hits')
+        baseline = dict(events={(1, 1, 1): event},
+            muons={first: dict(charge=-1, topology=2), second: dict(charge=1, topology=2)},
+            pairs={pair: dict(is_os=True, category='Both-Both')})
+        changed = dict(events={(1, 1, 1): dict(event)},
+            muons={second: dict(charge=-1, topology=1), third: dict(charge=1, topology=2)},
+            pairs={new_pair: dict(is_os=True, category='Near-Both')})
+        result = audit.detector_population_union({'reference': baseline, 'changed': changed})
+        self.assertEqual(result['muon_common_all'], [second])
+        self.assertEqual(result['pair_common_all'], [])
+        self.assertEqual(set(result['pair_union']), {pair, new_pair})
+        self.assertEqual(result['modes']['changed']['muons']['disappeared'], [first])
+        self.assertEqual(result['modes']['changed']['muons']['appeared'], [third])
+        self.assertEqual(result['modes']['changed']['muons']['transitions']['charge'], {'1 -> -1': 1})
+        # Fitted multiplicities may change, but the raw input/GEN/weight contract may not.
+        for field, value in (('gen_sha256', 'bad'), ('raw_input_sha256', 'new hits'), ('weights', {})):
+            altered = dict(changed, events={(1, 1, 1): dict(event, **{field: value})})
+            with self.assertRaisesRegex(RuntimeError, 'raw inputs, GEN or native weights'):
+                audit.detector_population_union({'reference': baseline, 'changed': altered})
+        self.assertEqual(pair, audit.detector_pair_identity(second, first))
+        with self.assertRaisesRegex(ValueError, 'same event'):
+            audit.detector_pair_identity(first, (2, 1, 1, 0, 1))
+
+    def test_detector_decomposition_exposes_cancellation_of_fit_bias(self):
+        value = audit.detector_momentum_decomposition(8., 10., 20., 20.)
+        self.assertTrue(value['valid'])
+        self.assertEqual(value['detector_error_gev'], -2.)
+        self.assertEqual(value['material_return_error_gev'], 2.)
+        self.assertEqual(value['total_error_gev'], 0.)
+        self.assertAlmostEqual(value['detector_log_ratio']+value['material_return_log_ratio'],
+                               value['total_log_ratio'])
+        self.assertFalse(audit.detector_momentum_decomposition(8., -1., 20., 20.)['valid'])
+
+    def surface_state(self, parameters, covariance=None):
+        parameters = np.asarray(parameters, dtype=float)
+        direction = np.asarray([parameters[1], parameters[2], 1.])
+        momentum = direction/np.linalg.norm(direction)/abs(parameters[0])
+        return dict(valid=True, surface=(123, 'native'), local_pz_sign=1, momentum=momentum, parameters=parameters,
+                    covariance=np.eye(5) if covariance is None else covariance)
+
+    def test_detector_paired_statistics_do_not_use_a_six_mode_intersection(self):
+        result = audit.detector_baseline_statistics(
+            {'reference': [1., 2., 3.], 'failed_control': [np.nan, np.nan, np.nan],
+             'corrected': [2., 3., 4.]}, ['a', 'b', 'c'], bootstrap=40)
+        paired = result['paired_vs_reference']
+        self.assertEqual(paired['failed_control']['entries'], 0)
+        self.assertEqual(paired['corrected']['entries'], 3)
+        self.assertEqual(result['all_retained']['corrected']['entries'], 3)
+        self.assertAlmostEqual(paired['corrected']['policies']['corrected'][
+            'paired_delta_vs_canonical']['median']['value'], 1.)
+
+    def test_detector_surface_reference_must_use_the_same_chart(self):
+        fitted = self.surface_state([.1, 0., 0., 0., 0.])
+        truth = dict(fitted, surface=(456, 'native'))
+        result = audit.detector_surface_residuals(fitted, truth)
+        self.assertTrue(result['measured_valid'])
+        self.assertFalse(result['same_surface'])
+        self.assertFalse(result['truth_valid'])
+        self.assertEqual(result['metrics'], {})
+
+    def test_detector_wrong_orientation_keeps_angle_but_not_local_pull_coverage(self):
+        fitted = self.surface_state([.1, .01, .02, 0., 0.])
+        truth = dict(fitted, local_pz_sign=-1, momentum=-fitted['momentum'])
+        result = audit.detector_surface_residuals(fitted, truth)
+        self.assertTrue(result['measured_valid'])
+        self.assertTrue(result['truth_valid'])
+        self.assertTrue(result['covariance_valid'])
+        self.assertFalse(result['orientation_agrees'])
+        self.assertFalse(result['pull_reference_valid'])
+        self.assertAlmostEqual(result['metrics']['angle_error'], np.pi)
+        self.assertNotIn('qoverp_pull', result['metrics'])
+
+    def test_detector_pulls_use_full_correlated_fitted_covariance(self):
+        covariance = np.diag([.0001, .01, .01, .04, .09])
+        covariance[0, 3] = covariance[3, 0] = .001
+        truth = self.surface_state([.1, .01, .01, 0., 0.])
+        fitted = self.surface_state([.12, .02, .03, .4, -.3], covariance)
+        result = audit.detector_surface_residuals(fitted, truth)
+        self.assertTrue(result['covariance_valid'])
+        self.assertAlmostEqual(result['metrics']['qoverp_pull'], 2.)
+        self.assertAlmostEqual(result['metrics']['x_pull'], 2.)
+        # q/p and x each differ by2sigma with correlation1/2; their joint contribution is16/3.
+        self.assertAlmostEqual(result['metrics']['mahalanobis2'], 16./3.+.01+.04+1.)
+        self.assertAlmostEqual(result['metrics']['p_relative'], 5./6.-1.)
+
+    def test_detector_bad_covariance_never_replaces_a_measured_state(self):
+        truth = self.surface_state([.1, 0., 0., 0., 0.])
+        covariance = np.eye(5); covariance[0, 1] = covariance[1, 0] = 2.
+        fitted = self.surface_state([.2, .01, 0., 0., 0.], covariance)
+        result = audit.detector_surface_residuals(fitted, truth)
+        self.assertTrue(result['measured_valid'])
+        self.assertFalse(result['covariance_valid'])
+        self.assertAlmostEqual(result['metrics']['p_relative'], -.5)
+        self.assertNotIn('qoverp_pull', result['metrics'])
+        unavailable = audit.detector_surface_residuals(fitted, dict(truth, valid=False))
+        self.assertTrue(unavailable['measured_valid'])
+        self.assertFalse(unavailable['truth_valid'])
+        self.assertEqual(unavailable['metrics'], {})
+
+    def test_detector_charge_error_stays_visible_in_same_surface_closure(self):
+        truth = self.surface_state([.1, .01, .02, 0., 0.])
+        fitted = self.surface_state([-.1, .01, .02, 0., 0.])
+        result = audit.detector_surface_residuals(fitted, truth)
+        self.assertAlmostEqual(result['metrics']['p_relative'], 0.)
+        self.assertAlmostEqual(result['metrics']['qoverp_relative'], -2.)
+        self.assertAlmostEqual(result['metrics']['angle_error'], 0.)
+
+    def test_detector_pair_closure_uses_corresponding_surface_truth(self):
+        first = self.surface_state([.01, .001, .002, 0., 0.])
+        second = self.surface_state([-.02, -.001, .003, 1., 2.])
+        result = audit.detector_pair_surface_closure(first, second, first, second)
+        self.assertTrue(result['valid'])
+        self.assertAlmostEqual(result['mass_error_gev'], 0.)
+        self.assertAlmostEqual(result['opening_error'], 0.)
+        self.assertFalse(audit.detector_pair_surface_closure(first, second, first,
+                                                           dict(second, valid=False))['valid'])
+
+    def test_detector_pull_coverage_does_not_treat_two_legs_as_two_parents(self):
+        result = audit.detector_pull_coverage([.5, 3.], ['one event', 'one event'], bootstrap=40)
+        self.assertEqual(result['physical_parents'], 1)
+        self.assertEqual(result['one_sigma']['covered'], 1)
+        self.assertEqual(result['one_sigma']['fraction'], .5)
+        self.assertNotIn('interval68', result['one_sigma'])
+
+    def test_detector_manifest_is_closed_until_explicit_release(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'manifest.json'
+            path.write_text(json.dumps({'released_for_analysis': False}))
+            with patch.object(audit, 'read_detector_audit') as reader, patch.object(audit, 'native_file_checksum') as checksum:
+                with self.assertRaisesRegex(RuntimeError, 'not been released'):
+                    audit.run_detector_audit(path)
+                reader.assert_not_called()
+                checksum.assert_not_called()
+
+    def test_detector_report_allows_pair_disappearance_and_retains_counters(self):
+        context = 'fixedGEN'
+        event_key = (context, 1, 1, 1)
+        first, second = (event_key+(0, i) for i in range(2))
+        pair_key = audit.detector_pair_identity(first, second)
+        event = dict(gen_sha256='fixed', weights={'genWeight': 2.}, raw_input_sha256='input',
+                     sample='DP5', process='DarkPhoton', counters={'inputCandidates': 4, 'retained': 2})
+        def row(charge):
+            measured = dict(Available=1, FitAccepted=1, CanonicalAccepted=1, NativeStatus=1,
+                            TargetStatus=1, SnapshotKind=1, Variant=0, Iteration=1,
+                            Charge=charge, LocalPzSign=1, InputHashLo=1, InputHashHi=2,
+                            UsedHashLo=3, UsedHashHi=4)
+            return dict(charge=charge, topology=2, raw_signature=(3.,), audit=measured,
+                        truth_audit=dict(Status=1, Charge=charge, LocalPzSign=1, Span=.1, LowerKind=0, UpperKind=1),
+                        truth={'valid': True}, production={'pdgId': -13*charge},
+                        evaluation=dict(measured_valid=True, truth_valid=True, covariance_valid=True,
+                                        pull_reference_valid=True),
+                        metrics={'p_relative': .1, 'qoverp_pull': .5}, original_fallback=False,
+                        legacy_hit_association_agrees=True)
+        baseline = dict(events={event_key: event}, muons={first: row(-1), second: row(1)},
+                        pairs={pair_key: dict(is_os=True, category='Both-Both',
+                                             metrics={'production_mass_relative': .2})})
+        changed = dict(events={event_key: dict(event, counters={'inputCandidates': 4, 'retained': 1})},
+                       muons={first: row(-1)}, pairs={})
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            protocol = directory/'protocol.json'
+            protocol.write_text(json.dumps({'ordered_modes': [{'name': 'reference'}, {'name': 'changed'}]}))
+            manifest = directory/'manifest.json'
+            manifest.write_text(json.dumps(dict(released_for_analysis=True,
+                protocol=dict(path=str(protocol), sha256=hashlib.sha256(protocol.read_bytes()).hexdigest()),
+                mode_order=['reference', 'changed'], sources=[dict(sample='DP5', process='DarkPhoton',
+                    source_context=context, raw_input_sha256='input', expected_ids=[[1, 1, 1]],
+                    modes={name: {'path': name, 'sha256': 'checked'} for name in ('reference', 'changed')})])))
+            with patch.object(audit, 'native_file_checksum', return_value='checked'), patch.object(
+                    audit, 'read_detector_audit', side_effect=[(baseline, {}), (changed, {})]):
+                report = audit.run_detector_audit(manifest, bootstrap=40)
+        group = report['groups'][0]
+        self.assertEqual(group['telemetry']['changed']['counts']['event_retained'], 1)
+        self.assertEqual(group['population']['modes']['changed']['pairs']['disappeared'], [pair_key])
+        self.assertEqual(group['pair_metrics']['production_mass_relative'][
+            'paired_vs_reference']['changed']['entries'], 0)
+        self.assertEqual(group['muon_metrics']['p_relative'][
+            'paired_vs_reference']['changed']['entries'], 1)
+        ledger = group['selected_case_ledger']
+        self.assertEqual(len(ledger['reference']['muons']), 2)
+        self.assertEqual(len(ledger['changed']['muons']), 1)
+        self.assertEqual(ledger['changed']['pairs'], [])
+        self.assertEqual(ledger['reference']['muons'][0]['metrics'], baseline['muons'][first]['metrics'])
+        json.dumps(report, allow_nan=False)
+
+    def test_detector_reference_category_keeps_a_common_pair_after_category_migration(self):
+        first, second = ((1, 1, 1, 0, i) for i in range(2))
+        key = audit.detector_pair_identity(first, second)
+        muons = {x: {'metrics': {'p_relative': .1}} for x in key}
+        baseline = dict(muons=muons, pairs={key: dict(category='Both-Both', metrics={'mass': .2})})
+        changed = dict(muons=muons, pairs={key: dict(category='Near-Both', metrics={'mass': .3})})
+        result = audit.detector_category_statistics({'reference': baseline, 'changed': changed}, bootstrap=40)
+        old = result['Both-Both']
+        self.assertEqual(old['pair_metrics']['mass']['paired_vs_reference']['changed']['entries'], 1)
+        self.assertEqual(old['pair_metrics']['mass']['all_retained']['changed']['entries'], 0)
+        self.assertEqual(result['Near-Both']['native_counts']['changed']['pairs'], 1)
+
+    def test_detector_surface_pair_ledger_labels_duplicate_and_unavailable_truth(self):
+        keys = [(1, 1, 1, 0, i) for i in range(3)]
+        muons = {key: dict(charge=1, topology=2, original_fallback=False, audit={},
+            truth_audit={'SimTrackId': track}, evaluation={}, legacy_hit_association_agrees=None,
+            metrics={}) for key, track in zip(keys, (7, 7, 8))}
+        pairs = {audit.detector_pair_identity(keys[a], keys[b]): dict(category='Both-Both', is_os=False,
+            metrics={'detector_pair_mass_relative': .1} if available else {})
+            for a, b, available in ((0, 1, True), (0, 2, True), (1, 2, False))}
+        ledger = audit.detector_selected_case_ledger({'mode': dict(muons=muons, pairs=pairs)})
+        self.assertEqual([row['surface_proxy_simtrack_relation'] for row in ledger['mode']['pairs']],
+                         ['same', 'distinct', 'unknown'])
+        self.assertEqual(len(pairs), 3)
+        json.dumps(ledger, allow_nan=False)
+
     def test_detector_comparison_allows_state_updates_but_protects_the_population(self):
         events = {(1, 1, 1): dict(muons=2, pairs=1, gen_sha256='a', weights={'genWeight': 2.},
                                  protected_muons_sha256='original fitted states')}
@@ -234,6 +449,213 @@ class PairedReconstructionTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'requires a frozen policy'):
                     audit.run_paired_audit(base/'pairs.npz', base/'extraction.json', base/'protocol.json', mode='validation')
                 evaluation.assert_not_called()
+
+
+class ActualBirthReferenceTests(unittest.TestCase):
+    def track(self, number=1, pdg=13, momentum=(3., 0., 4.), vertex=None):
+        if vertex is None:
+            vertex = dict(index=0, parent_G4_track_id=-1, process_subtype=0,
+                          position_cm=[0., 0., -10000.], time_ns=2.)
+        return dict(track_id=number, pdg=pdg, GEN_barcode=1000+number,
+                    momentum_GeV=list(momentum), energy_GeV=float(np.hypot(np.linalg.norm(momentum), audit.MUON_MASS)),
+                    vertex=vertex, matched_GEN_muon=None, saved_parent_chain=[],
+                    missing_saved_parent_track_id=None, CSC_station_hits={})
+
+    def record(self, tracks=None):
+        tracks = [self.track()] if tracks is None else tracks
+        return dict(schema='shift-material-scout-SIM-audit-v1', passed=True, checks={'identities': True},
+                    complete_GEN={'sha256': 'a'*64}, events=[dict(event_id=[1, 2, 3], native_weight=.25,
+                    actual_saved_muons=len(tracks), muons=tracks)])
+
+    def references(self, tracks=None):
+        return audit.read_actual_birth_reference(self.record(tracks), 'source:case')[(1, 2, 3)]
+
+    def test_all_actual_muons_are_indexed_without_GEN_or_CSC_selection(self):
+        reference = self.references([self.track(), self.track(2, -13)])
+        self.assertEqual(set(reference['tracks']), {1, 2})
+        matched = audit.actual_birth_muon_reference(dict(hitSimTrackId=2, charge=1), reference)
+        self.assertEqual(matched['status'], 'matched')
+        self.assertFalse(matched['wrong_charge'])
+        self.assertEqual(matched['reference']['GEN_barcode'], 1002)
+
+    def test_no_barcode_or_angular_fallback_for_a_missing_actual_identity(self):
+        reference = self.references()
+        self.assertEqual(audit.actual_birth_muon_reference(dict(hitSimTrackId=1001, charge=-1), reference)[
+            'status'], 'no_saved_actual_muon')
+        self.assertEqual(audit.actual_birth_muon_reference(dict(hitSimTrackId=-1, charge=-1), reference)[
+            'status'], 'missing_hit_identity')
+
+    def test_wrong_measured_charge_and_orientation_remain_in_closure(self):
+        reference = self.references()
+        matched = audit.actual_birth_muon_reference(dict(hitSimTrackId=1, charge=1), reference)
+        self.assertEqual(matched['status'], 'matched')
+        self.assertTrue(matched['wrong_charge'])
+        metrics = audit.actual_birth_muon_metrics(dict(pt=3., phi=np.pi, pz=-4.), matched['reference'])
+        self.assertAlmostEqual(metrics['p_relative'], 0.)
+        self.assertAlmostEqual(metrics['angle_error_rad'], np.pi)
+        self.assertAlmostEqual(metrics['pz_relative'], -2.)
+
+    def test_non_muon_and_invalid_actual_birth_states_remain_coverage(self):
+        hadron = self.track(pdg=211)
+        matched = audit.actual_birth_muon_reference(dict(hitSimTrackId=1, charge=1), self.references([hadron]))
+        self.assertEqual(matched['status'], 'non_muon_reference')
+        invalid = self.track(); invalid['energy_GeV'] = float('nan')
+        matched = audit.actual_birth_muon_reference(dict(hitSimTrackId=1, charge=-1), self.references([invalid]))
+        self.assertEqual(matched['status'], 'invalid_actual_birth_state')
+        vertex_invalid = self.track(); vertex_invalid['vertex']['position_cm'][0] = float('nan')
+        matched = audit.actual_birth_muon_reference(dict(hitSimTrackId=1, charge=-1), self.references([vertex_invalid]))
+        self.assertEqual(matched['status'], 'matched')  # momentum reference survives missing vertex truth
+        self.assertIsNone(matched['reference']['vertex'])
+        self.assertEqual(matched['reference']['vertex_status'], 'invalid')
+
+    def test_duplicate_actual_ids_are_rejected_but_ids_reset_per_event(self):
+        with self.assertRaisesRegex(ValueError, 'SimTrack ID'):
+            self.references([self.track(), self.track()])
+        record = self.record(); record['events'].append(dict(record['events'][0], event_id=[1, 2, 4]))
+        references = audit.read_actual_birth_reference(record, 'source:case')
+        self.assertEqual(len(references), 2)
+        first, second = (references[e]['tracks'][1] for e in references)
+        with self.assertRaisesRegex(ValueError, 'source/event context'):
+            audit.actual_birth_pair_reference(first, second)
+        with self.assertRaisesRegex(ValueError, 'source/event context'):
+            audit.actual_birth_pair_reference(first, dict(first, context='another source/case', track_id=2))
+        record['events'][1]['event_id'] = [1, 2, 3]
+        with self.assertRaisesRegex(ValueError, 'Duplicate actual birth event'):
+            audit.read_actual_birth_reference(record, 'source:case')
+
+    def test_same_SimTrack_split_is_not_a_physical_two_muon_pair(self):
+        reference = self.references()['tracks'][1]
+        result = audit.actual_birth_pair_reference(reference, reference)
+        self.assertEqual(result['status'], 'same_simtrack_split')
+        self.assertNotIn('kinematic_birth_mass_gev', result)
+        self.assertEqual(audit.actual_birth_pair_reference(reference, None)['status'], 'unmatched_leg')
+
+    def test_rest_muon_is_valid_with_undefined_relative_momentum_and_angle(self):
+        refs = self.references([self.track(1, momentum=(0., 0., 0.)), self.track(2, -13)])['tracks']
+        self.assertTrue(refs[1]['valid'])
+        metrics = audit.actual_birth_muon_metrics(dict(pt=0., phi=0., pz=1.), refs[1])
+        self.assertNotIn('p_relative', metrics)
+        self.assertNotIn('angle_error_rad', metrics)
+        pair = audit.actual_birth_pair_reference(refs[1], refs[2])
+        self.assertEqual(pair['status'], 'distinct_actual_muons')
+        self.assertIsNone(pair['opening_angle'])
+        self.assertGreater(pair['kinematic_birth_mass_gev'], 2.*audit.MUON_MASS)
+
+    def test_shared_vertex_requires_physical_position_time_and_actual_links(self):
+        first, second = (self.track(1), self.track(2, -13))
+        def pair():
+            refs = self.references([first, second])['tracks']
+            return audit.actual_birth_pair_reference(refs[1], refs[2])
+        self.assertTrue(pair()['shared_vertex'])  # common primary vertex, parent=-1
+        second['vertex']['position_cm'][0] = 1.e-4
+        self.assertFalse(pair()['shared_vertex'])
+        second['vertex']['position_cm'][0] = 0.
+        second['vertex']['time_ns'] += 1.e-4
+        self.assertFalse(pair()['shared_vertex'])
+        second['vertex']['time_ns'] = 2.
+        second['vertex']['index'] = 7
+        self.assertFalse(pair()['shared_vertex'])  # equal coordinates alone are insufficient
+        first['vertex']['parent_G4_track_id'] = second['vertex']['parent_G4_track_id'] = 9
+        self.assertTrue(pair()['shared_vertex'])  # separate preassigned vertex indices
+
+    def test_separate_births_keep_stable_kinematics_without_a_vertex_truth(self):
+        first, second = self.track(1, momentum=(0., 0., 1.e5)), self.track(2, -13, (0., 0., 1.e5))
+        second['vertex']['position_cm'][2] += 100.
+        refs = self.references([first, second])['tracks']
+        result = audit.actual_birth_pair_reference(refs[1], refs[2])
+        self.assertFalse(result['shared_vertex'])
+        self.assertNotIn('vertex_cm', result)
+        self.assertAlmostEqual(result['kinematic_birth_mass_gev'], 2.*audit.MUON_MASS)
+
+    def test_sparse_rows_do_not_become_a_population_resolution(self):
+        repeated = [dict(parent='one original', metrics={'p_relative': float(i)}) for i in range(30)]
+        result = audit.actual_birth_group_statistics(repeated, bootstrap=20)['p_relative']
+        self.assertFalse(result['population_summary_available'])
+        self.assertIsNone(result['statistics'])
+        independent = [dict(parent=str(i), metrics={'p_relative': i*.01}) for i in range(20)]
+        result = audit.actual_birth_group_statistics(independent, bootstrap=20)['p_relative']
+        self.assertTrue(result['population_summary_available'])
+        self.assertEqual(result['statistics']['physical_parents'], 20)
+
+    def test_native_Float32_weight_rounding_is_explicit_not_a_tolerance(self):
+        native = 8.216943565012035e-09
+        saved = dict(genWeight=float(np.float32(native)), shiftOriginalGenWeight=native,
+                     shiftSamplingProbability=.25, shiftSamplingWeight=4., shiftSamplingGenWeight=native/.25,
+                     shiftDecayProposalDensity=1., shiftDecayProposalWeight=1., shiftProposalGenWeight=native/.25)
+        self.assertNotEqual(saved['genWeight'], native)
+        audit.actual_birth_check_weights(saved, native, .25)
+        with self.assertRaisesRegex(RuntimeError, 'serialized weight'):
+            audit.actual_birth_check_weights(dict(saved, genWeight=native), native, .25)
+        with self.assertRaisesRegex(RuntimeError, 'exact accounting'):
+            audit.actual_birth_check_weights(dict(saved, shiftOriginalGenWeight=float(np.float32(native))), native, .25)
+        with self.assertRaisesRegex(RuntimeError, 'exact accounting'):
+            audit.actual_birth_check_weights(dict(saved, shiftDecayProposalWeight=2.), native, .25)
+        missing = dict(saved); missing.pop('shiftProposalGenWeight')
+        with self.assertRaisesRegex(RuntimeError, 'exact accounting'):
+            audit.actual_birth_check_weights(missing, native, .25)
+
+    def test_terminal_publication_binds_both_payloads_and_source_weights(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            sample = dict(id='case', event_ids=[[1, 2, 3]], native_weights=[.25], probability=1.)
+            (base/'request.json').write_text(json.dumps(dict(source=dict(source_id='source', gen_sha256='a'*64), sample=sample)))
+            (base/'nano.root').write_bytes(b'unit fixture; no native event data')
+            record = self.record()
+            record['complete_GEN']['sha256'] = 'd'*64  # timed/sliced GEN differs from original raw GEN
+            record['SIM'] = {'sha256': 'e'*64}
+            packed = audit.gzip.compress(json.dumps(record).encode())
+            with audit.tarfile.open(base/'evidence.tar.gz', 'w:gz') as archive:
+                member = audit.tarfile.TarInfo('material_audit.json.gz'); member.size = len(packed)
+                archive.addfile(member, audit.io.BytesIO(packed))
+                # The embedded report is deliberately prepublication, and is not terminal authority.
+                raw = b'{"complete":false}'
+                member = audit.tarfile.TarInfo('report.json'); member.size = len(raw)
+                archive.addfile(member, audit.io.BytesIO(raw))
+            publications = {n: dict(url='unit://'+n, bytes=(base/n).stat().st_size,
+                                   sha256=audit.native_file_checksum(base/n)) for n in ('nano.root', 'evidence.tar.gz')}
+            terminal = dict(complete=True, exit_code=0, source_id='source', original_source_sha256='a'*64,
+                            request_sha256=audit.native_file_checksum(base/'request.json'),
+                            published=list(publications.values()), removed_scratch_inputs=[
+                                dict(path='timed_gen.root', sha256='d'*64), dict(path='step1.root', sha256='e'*64)])
+            (base/'complete.json').write_text(json.dumps(terminal))
+            case = dict(source_id='source', case_id='case', source={'gen_sha256':'a'*64}, sample=sample,
+                nano_path=str(base/'nano.root'), material_evidence_path=str(base/'evidence.tar.gz'),
+                request_path=str(base/'request.json'), request_sha256=terminal['request_sha256'],
+                terminal_result_path=str(base/'complete.json'), terminal_result_sha256=audit.native_file_checksum(base/'complete.json'),
+                publications=publications, expected_event_ids=[[1, 2, 3]], expected_native_EDM_double_weights=[.25])
+            self.assertEqual(len(audit.actual_birth_case_inputs(case)), 1)
+            changed = dict(case, expected_native_EDM_double_weights=[.5])
+            with self.assertRaisesRegex(RuntimeError, 'request source, membership or weight'):
+                audit.actual_birth_case_inputs(changed)
+            terminal['published'][0] = dict(terminal['published'][0], sha256='b'*64)
+            (base/'complete.json').write_text(json.dumps(terminal))
+            case['terminal_result_sha256'] = audit.native_file_checksum(base/'complete.json')
+            with self.assertRaisesRegex(RuntimeError, 'share the terminal publication'):
+                audit.actual_birth_case_inputs(case)
+
+    def test_exact_cohort_and_source_release_precede_every_payload_read(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            manifest = base/'manifest.json'
+            manifest.write_text(json.dumps(dict(schema='shift-corrected-QCD-offline-birth-join-frozen-cohort-v1',
+                                                kernel={'pileup':'on'})))
+            release = base/'release.json'
+            permission = dict(outcome_analysis_released=True, cohort_sha256='wrong',
+                              analysis_source_sha256=audit.native_file_checksum(audit.__file__))
+            release.write_text(json.dumps(permission))
+            with patch.object(audit, 'actual_birth_case_inputs') as reader:
+                with self.assertRaisesRegex(ValueError, 'exact frozen cohort'):
+                    audit.run_actual_birth_audit(manifest, release)
+                permission['cohort_sha256'] = audit.native_file_checksum(manifest)
+                permission['analysis_source_sha256'] = 'wrong source'
+                release.write_text(json.dumps(permission))
+                with self.assertRaisesRegex(ValueError, 'exact frozen cohort'):
+                    audit.run_actual_birth_audit(manifest, release)
+                permission['analysis_source_sha256'] = audit.native_file_checksum(audit.__file__)
+                release.write_text(json.dumps(permission))
+                with self.assertRaisesRegex(ValueError, 'no pileup'):
+                    audit.run_actual_birth_audit(manifest, release)
+                reader.assert_not_called()
 
 
 if __name__ == '__main__':
