@@ -12,6 +12,287 @@ import shift_reco_audit as audit
 
 
 class PairedReconstructionTests(unittest.TestCase):
+    def test_upstream_event_draws_keep_zero_originals_and_source_strata(self):
+        parents = [('fileA', 1), ('fileA', 2), ('fileB', 1), ('fileB', 2)]
+        events = {key: {'source_context': key[0]} for key in parents}
+        def rows(offset):
+            return [dict(event=parents[0], row_index=0, metrics={'mass_relative': 1.+offset}),
+                    dict(event=parents[2], row_index=7, metrics={'mass_relative': 3.+offset})]
+        modes = {'etaOff': dict(events=events, pairs=rows(0.)),
+                 'etaOn': dict(events=dict(events), pairs=rows(5.))}
+        result = audit.upstream_event_statistics(modes, 'pairs', 'mass_relative', bootstrap=80)
+        self.assertEqual(result['originals'], 4)
+        self.assertEqual(result['source_strata'], {'fileA': 2, 'fileB': 2})
+        self.assertEqual(result['arms']['etaOff']['zero_metric_originals'], 2)
+        self.assertEqual(result['arms']['etaOn']['contributing_originals'], 2)
+        comparison = result['paired_delta_vs_reference']['etaOn']
+        self.assertAlmostEqual(comparison['estimate']['median'], 5.)
+        self.assertAlmostEqual(comparison['interval68']['median']['low'], 5.)
+        self.assertAlmostEqual(comparison['interval68']['median']['high'], 5.)
+        self.assertFalse(result['arms']['etaOn']['quantile_resolved'])
+
+    def test_upstream_singleton_source_strata_do_not_fabricate_precision(self):
+        events = {('fileA', 1): {'source_context': 'fileA'}, ('fileB', 1): {'source_context': 'fileB'}}
+        rows = [dict(event=key, row_index=0, metrics={'mass_relative': value})
+                for key, value in zip(events, (.1, .2))]
+        result = audit.upstream_event_statistics({'etaOff': dict(events=events, pairs=rows)},
+                                                 'pairs', 'mass_relative', bootstrap=20)
+        self.assertEqual(result['arms']['etaOff']['contributing_originals'], 2)
+        self.assertEqual(result['arms']['etaOff']['resampleable_contributing_originals'], 0)
+        self.assertNotIn('interval68', result['arms']['etaOff'])
+
+    def test_upstream_statistics_keep_own_changed_and_empty_populations(self):
+        events = {('source', i): {'source_context': 'source'} for i in range(4)}
+        first = [dict(event=('source', 0), row_index=0, metrics={'p_relative': .1}),
+                 dict(event=('source', 0), row_index=1, metrics={'p_relative': -.1})]
+        # Different row numbers do not suppress or force-match either arm.
+        changed = [dict(event=('source', 1), row_index=90, metrics={'p_relative': .3})]
+        modes = {'etaOff': dict(events=events, muons=first),
+                 'etaOn': dict(events=events, muons=changed)}
+        result = audit.upstream_event_statistics(modes, 'muons', 'p_relative', bootstrap=40)
+        self.assertEqual(result['arms']['etaOff']['finite_rows'], 2)
+        self.assertEqual(result['arms']['etaOn']['finite_rows'], 1)
+        self.assertEqual(result['arms']['etaOff']['contributing_originals'], 1)
+        self.assertNotIn('interval68', result['arms']['etaOff'])
+        self.assertNotIn('interval68', result['paired_delta_vs_reference']['etaOn'])
+        modes['etaOn']['muons'] = []
+        result = audit.upstream_event_statistics(modes, 'muons', 'p_relative', bootstrap=40)
+        self.assertIsNone(result['arms']['etaOn']['estimate'])
+        self.assertEqual(result['arms']['etaOn']['bootstrap_empty_draws'], 40)
+        self.assertNotIn('interval68', result['arms']['etaOn'])
+
+    def test_upstream_wrong_charge_and_orientation_remain_in_closure(self):
+        truth = dict(pdgId=13, momentum=[0., 0., 10.])
+        result = audit.upstream_muon_residuals([0., 0., -10.], 1, truth)
+        self.assertTrue(result['wrong_charge'])
+        self.assertTrue(result['direction_disagrees'])
+        self.assertAlmostEqual(result['metrics']['production_p_relative'], 0.)
+        self.assertAlmostEqual(result['metrics']['production_pz_relative'], -2.)
+        self.assertAlmostEqual(result['metrics']['production_qoverp_relative'], 2.)
+        self.assertAlmostEqual(result['metrics']['production_angle_rad'], np.pi)
+        rest = audit.upstream_muon_residuals([0., 0., 10.], -1, dict(pdgId=13, momentum=[0., 0., 0.]))
+        self.assertIsNone(rest['direction_disagrees'])
+        self.assertEqual(rest['metrics'], {})
+        self.assertIsNone(audit.upstream_muon_residuals([0., 0., 1.], -1, {})['wrong_charge'])
+        invalid = audit.upstream_muon_residuals([np.nan, 0., 1.], 1, truth)
+        self.assertTrue(invalid['wrong_charge'])
+        self.assertEqual(invalid['metrics'], {})
+        self.assertEqual(audit.upstream_report_values({'failed_state': [np.nan, np.inf, 3.]}),
+                         {'failed_state': [None, None, 3.]})
+
+    def test_upstream_pair_reference_requires_distinct_positive_simtracks_and_GEN(self):
+        first = dict(matched_production=True, hit_simtrack_id=7, hit_gen_index=0, charge=1)
+        second = dict(matched_production=True, hit_simtrack_id=8, hit_gen_index=1, charge=1)
+        self.assertEqual(audit.upstream_pair_reference_status(first, second), 'distinct_hit_associated_muons')
+        self.assertEqual(audit.upstream_pair_reference_status(first, dict(second, hit_simtrack_id=7)), 'same_simtrack_split')
+        self.assertEqual(audit.upstream_pair_reference_status(first, dict(second, hit_simtrack_id=-1)), 'missing_hit_simtrack_identity')
+        self.assertEqual(audit.upstream_pair_reference_status(first, dict(second, hit_gen_index=0)), 'same_hit_associated_GEN_muon')
+        self.assertEqual(audit.upstream_pair_reference_status(first, dict(second, matched_production=False)), 'missing_or_nonmuon_hit_reference')
+
+    def test_upstream_plot_points_exclude_singletons_and_never_request_width(self):
+        arm = dict(contributing_originals=1, estimate={'median': .1, 'sigma68': 9.},
+                   interval68={'median': dict(error_down=.02, error_up=.03)})
+        report = dict(sources=[{'source': dict(sample='jpsi_test', process='JPsi')}], groups=[dict(
+            name='sample/jpsi_test', categories={'Both-Both': {'metrics': {'pairs': {
+                'production_mass_relative': {'arms': {'etaOff': arm, 'etaOn': dict(arm, contributing_originals=2)}}}}}})])
+        points = audit.upstream_plot_summary_points(report, 'Both-Both', 'pairs', 'production_mass_relative')
+        self.assertEqual(len(points), 1)
+        self.assertEqual(points[0]['mode'], 'etaOn')
+        self.assertEqual(points[0]['value'], .1)
+        self.assertEqual(points[0]['error_up'], .03)
+
+    def test_upstream_case_cells_show_absolute_error_changes_without_missing_fallback(self):
+        def pair(mass, vertex):
+            return dict(category='Both-Both', canonical={'mass': 3.},
+                        metrics=dict(production_mass_relative=mass, production_vertex_z_cm=vertex))
+        case = dict(arms={'etaOff': {'pairs': [pair(-.2, 300.)]}, 'etaOn': {'pairs': [pair(-.1, -100.)]}})
+        cells = audit.upstream_event_case_cells(case, 'Both-Both', ['etaOff', 'etaOn'])
+        self.assertAlmostEqual(cells['delta_abs_mass_error_pp'], -10.)
+        self.assertAlmostEqual(cells['delta_abs_z_error_m'], -2.)
+        case['arms']['etaOn']['pairs'] = []
+        self.assertIsNone(audit.upstream_event_case_cells(case, 'Both-Both', ['etaOff', 'etaOn'])['delta_abs_mass_error_pp'])
+        case['arms']['etaOn']['pairs'] = [pair(0., 0.), pair(.2, 100.)]
+        self.assertIsNone(audit.upstream_event_case_cells(case, 'Both-Both', ['etaOff', 'etaOn'])['etaOn']['mass_gev'])
+
+    def test_upstream_native_source_integrity_does_not_protect_fitted_tracks(self):
+        key = ('context', 1, 1, 1)
+        event = dict(gen_sha256='gen', weights={'genWeight': -.25}, weight_types={'genWeight': 'Float_t'},
+                     raw_input_sha256='AOD', source_context='context', protected_muons_sha256='before')
+        baseline = dict(events={key: event}, muons=[], pairs=[])
+        changed = dict(events={key: dict(event, protected_muons_sha256='after')}, muons=[], pairs=[])
+        audit.validate_upstream_populations({'etaOff': baseline, 'etaOn': changed})
+        for field, value in (('weights', {'genWeight': .25}), ('weight_types', {}),
+                             ('raw_input_sha256', 'other'), ('gen_sha256', 'other')):
+            altered = dict(changed, events={key: dict(changed['events'][key], **{field: value})})
+            with self.assertRaisesRegex(RuntimeError, 'GEN/source/native weights'):
+                audit.validate_upstream_populations({'etaOff': baseline, 'etaOn': altered})
+        row = dict(event=key, row_index=0)
+        with self.assertRaisesRegex(RuntimeError, 'Duplicate'):
+            audit.validate_upstream_populations({'etaOff': baseline,
+                'etaOn': dict(changed, muons=[row, dict(row)])})
+
+    def test_upstream_physical_units_have_declared_tail_thresholds(self):
+        relative = audit.upstream_scalar_statistics([.1, .6, 2.], 'mass_relative')
+        vertex = audit.upstream_scalar_statistics([10., 200., 600.], 'production_vertex_z_cm')
+        self.assertAlmostEqual(relative['tail_abs_gt_100pct'], 1./3.)
+        self.assertAlmostEqual(vertex['tail_abs_gt_1m'], 2./3.)
+        self.assertNotIn('tail100', vertex)
+        self.assertNotIn('tail_abs_gt_50pct', vertex)
+
+    def test_upstream_weight_concentration_keeps_signs_and_original_units(self):
+        positive = audit.upstream_weight_accounting([1., 9.])
+        self.assertAlmostEqual(positive['effective_originals_signed'], 100./82.)
+        self.assertEqual(positive['nonzero_absolute_range'], 9.)
+        self.assertTrue(positive['positive_weight_CDF_allowed'])
+        signed = audit.upstream_weight_accounting([-1., 1.])
+        self.assertEqual(signed['effective_originals_signed'], 0.)
+        self.assertEqual(signed['effective_originals_absolute'], 2.)
+        self.assertFalse(signed['positive_weight_CDF_allowed'])
+        with self.assertRaisesRegex(RuntimeError, 'Nonfinite'):
+            audit.upstream_weight_accounting([1., np.inf])
+
+    def test_upstream_route_is_closed_before_any_outcome_reader(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory)/'manifest.json'; release = Path(directory)/'release.json'
+            manifest.write_text('{}'); release.write_text(json.dumps({'released_for_analysis': False}))
+            with patch.object(audit, 'read_upstream_reconstruction') as reader:
+                with self.assertRaisesRegex(RuntimeError, 'not released'):
+                    audit.run_upstream_replay(manifest, release)
+                reader.assert_not_called()
+
+    def test_upstream_case_migrations_retain_zeros_and_signed_weight_accounting(self):
+        parents = [('context', 1, 1, index) for index in (1, 2, 3)]
+        events = {key: dict(gen_sha256='fixed', weights={'genWeight': weight},
+            weight_types={'genWeight': 'Float_t'}, raw_input_sha256='AOD', source_context='context',
+            native_EDM_double_weight=weight) for key, weight in zip(parents, (-2., .5, 1.))}
+        def muon(parent, index):
+            return dict(event=parent, row_index=index, charge=1, algorithm=1, category='Both',
+                matched_production=True, wrong_charge=False, direction_disagrees=False, metrics={})
+        def pair(parent):
+            return dict(event=parent, row_index=0, legs=[0, 1], category='Both-Both',
+                distinct_hit_associated_muons=True, shared_production_vertex=True,
+                reference_status='distinct_hit_associated_muons', metrics={})
+        modes = {'etaOff': dict(events=events, muons=[muon(parents[0], i) for i in range(2)], pairs=[pair(parents[0])]),
+                 'etaOn': dict(events=dict(events), muons=[muon(parents[1], i) for i in range(2)], pairs=[pair(parents[1])])}
+        result = audit.upstream_population_report(modes)
+        self.assertEqual(len(result['event_cases']), 3)
+        self.assertEqual(result['transitions_vs_reference']['etaOn']['pairs'], {'1 -> 0': 1, '0 -> 1': 1, '0 -> 0': 1})
+        self.assertEqual(result['transitions_vs_reference']['etaOn']['category/Both-Both']['0 -> 0'], 1)
+        self.assertEqual(result['arms']['etaOff']['zero_selected_pair_originals'], 2)
+        self.assertEqual(result['arms']['etaOn']['native_EDM_double_sumw'], -.5)
+        self.assertEqual(result['arms']['etaOn']['persisted_weights']['genWeight']['sumw2'], 5.25)
+        self.assertEqual(result['event_cases'][2]['arms']['etaOn']['pairs'], [])
+        modes['etaOn']['pairs'][0]['legs'] = [0, 0]
+        with self.assertRaisesRegex(RuntimeError, 'repeated muon legs'):
+            audit.validate_upstream_populations(modes)
+
+    def test_upstream_full_route_gates_sources_and_retains_pair_migrations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            def write(name, value):
+                path = directory/name
+                path.write_text(json.dumps(value))
+                return dict(path=str(path), sha256=hashlib.sha256(path.read_bytes()).hexdigest(), bytes=path.stat().st_size)
+            native = {mode: write(mode+'.root', mode) for mode in ('etaOff', 'etaOn')}
+            ids = [[1, 1, 1], [1, 1, 2]]
+            declared = dict(source='sourceA', sample='jpsi_test', kernel='V10 engineering', parent_GEN_sha256='full GEN',
+                full_GEN_accounting={'parent_gen_sha256': 'full GEN', 'full_gen_accepted_events': 100},
+                original_AOD_reference={'sha256': 'AOD'}, selected_for_replay=[
+                    dict(event_id=identity, native_EDM_double_weight=weight) for identity, weight in zip(ids, (-.25, .5))])
+            cohort = write('cohort.json', {'sources': [declared]})
+            gate = write('gate.json', dict(passed=True, original_equivalence=True, outputs=[dict(source='sourceA', mode=mode, **record)
+                                                               for mode, record in native.items()]))
+            source = dict(source_name='sourceA', source_context='context', process='JPsi', sample='jpsi_test',
+                kernel='V10 engineering', raw_input_sha256='AOD', expected_ids=ids,
+                expected_native_EDM_double_weights=[-.25, .5], reference='saved_hit_associated_GEN_engineering_only', modes=native)
+            manifest = write('manifest.json', dict(cohort=cohort, native_gate=gate,
+                                                    mode_order=['etaOff', 'etaOn'], sources=[source]))
+            release = write('release.json', dict(released_for_analysis=True, manifest_sha256=manifest['sha256'],
+                cohort_sha256=cohort['sha256'], analysis_source_sha256=audit.native_file_checksum(audit.__file__)))
+            parents = [('context',)+tuple(identity) for identity in ids]
+            def data(active):
+                events = {key: dict(gen_sha256='GEN'+str(i), weights={'genWeight': weight},
+                    weight_types={'genWeight': 'Float_t'}, source_context='context')
+                    for i, (key, weight) in enumerate(zip(parents, (-.25, .5)))}
+                muons = [dict(event=parents[active], row_index=i, charge=(-1 if i else 1), algorithm=1,
+                    category='Both', matched_production=True, wrong_charge=False, direction_disagrees=False,
+                    metrics={'production_p_relative': .1}) for i in range(2)]
+                pair = dict(event=parents[active], row_index=0, legs=[0, 1], category='Both-Both',
+                    distinct_hit_associated_muons=True, shared_production_vertex=True,
+                    reference_status='distinct_hit_associated_muons', metrics={'production_mass_relative': .2})
+                return dict(events=events, muons=muons, pairs=[pair])
+            records = [(data(i), {'bytes': native[mode]['bytes']}) for i, mode in enumerate(native)]
+            with patch.object(audit, 'read_upstream_reconstruction', side_effect=records):
+                report = audit.run_upstream_replay(manifest['path'], release['path'], bootstrap=12)
+            self.assertEqual(report['population']['transitions_vs_reference']['etaOn']['pairs'],
+                             {'1 -> 0': 1, '0 -> 1': 1})
+            self.assertEqual(report['population']['arms']['etaOn']['native_EDM_double_sumw'], .25)
+            self.assertEqual(report['groups'][0]['categories']['Both-Both']['native_counts']['etaOn']['pairs'], 1)
+            json.dumps(report, allow_nan=False)
+            figures = audit.plot_upstream_report(report, directory/'figures')
+            self.assertEqual(set(figures), {'Both-Both'})
+            pdf = Path(figures['Both-Both']['path'])
+            self.assertTrue(pdf.read_bytes().startswith(b'%PDF'))
+            self.assertEqual(figures['Both-Both']['pages'], 2)
+            self.assertEqual(figures['Both-Both']['sha256'], audit.native_file_checksum(pdf))
+            # An all-zero-weight source has undefined effective N, but still has valid cases to show.
+            weights = report['population']['arms']['etaOff']['original_native_weights_by_source']
+            for source_name in weights:
+                weights[source_name] = audit.upstream_weight_accounting([0., 0.])
+            zero_figures = audit.plot_upstream_report(report, directory/'zero_weight_figures')
+            self.assertTrue(Path(zero_figures['Both-Both']['path']).read_bytes().startswith(b'%PDF'))
+            # A historical failed gate needs a separate exact root qualification, never an implicit bypass.
+            historical = write('historical.json', {'passed': False})
+            qualification = write('qualification.json', dict(schema='shift-eta45-engineering-baseline-qualification-v1',
+                released_for_downstream=True, passed_for_scope=True, original_full_raw_equality_passed=False,
+                refs=[historical, cohort], mismatching_original=[1, 1, 1]))
+            gate = write('gate.json', dict(passed=True, original_equivalence=False, comparison_qualification=qualification,
+                outputs=[dict(source='sourceA', mode=mode, **record) for mode, record in native.items()]))
+            manifest = write('manifest.json', dict(cohort=cohort, native_gate=gate, reference_directory=str(directory),
+                comparison_qualification=qualification, mode_order=['etaOff', 'etaOn'], sources=[source]))
+            release = write('release.json', dict(released_for_analysis=True, manifest_sha256=manifest['sha256'],
+                cohort_sha256=cohort['sha256'], analysis_source_sha256=audit.native_file_checksum(audit.__file__)))
+            with patch.object(audit, 'read_upstream_reconstruction') as reader:
+                with self.assertRaisesRegex(RuntimeError, 'exact explicit engineering qualification'):
+                    audit.run_upstream_replay(manifest['path'], release['path'], bootstrap=12)
+                reader.assert_not_called()
+            release = write('release.json', dict(released_for_analysis=True, manifest_sha256=manifest['sha256'],
+                cohort_sha256=cohort['sha256'], comparison_qualification_sha256=qualification['sha256'],
+                analysis_source_sha256=audit.native_file_checksum(audit.__file__)))
+            records = [(data(i), {'bytes': native[mode]['bytes']}) for i, mode in enumerate(native)]
+            with patch.object(audit, 'read_upstream_reconstruction', side_effect=records):
+                qualified = audit.run_upstream_replay(manifest['path'], release['path'], bootstrap=12)
+            self.assertFalse(qualified['original_equivalence'])
+            self.assertFalse(qualified['comparison_qualification']['record']['original_full_raw_equality_passed'])
+            self.assertFalse(json.loads(Path(historical['path']).read_text())['passed'])
+            gate = write('gate.json', dict(passed=True, original_equivalence=True,
+                outputs=[dict(source='sourceA', mode=mode, **record) for mode, record in native.items()]))
+            # A manifest cannot replace the original source's exact double ledger.
+            source['expected_native_EDM_double_weights'] = [.25, .5]
+            manifest = write('manifest.json', dict(cohort=cohort, native_gate=gate,
+                mode_order=['etaOff', 'etaOn'], sources=[source]))
+            release = write('release.json', dict(released_for_analysis=True, manifest_sha256=manifest['sha256'],
+                cohort_sha256=cohort['sha256'], analysis_source_sha256=audit.native_file_checksum(audit.__file__)))
+            with patch.object(audit, 'read_upstream_reconstruction') as reader:
+                with self.assertRaisesRegex(RuntimeError, 'source/weight/reference'):
+                    audit.run_upstream_replay(manifest['path'], release['path'], bootstrap=12)
+                reader.assert_not_called()
+            # Changing a file/context label cannot count the same physical GEN original twice.
+            source['expected_native_EDM_double_weights'] = [-.25, .5]
+            second_declared = dict(declared, source='sourceB', original_AOD_reference={'sha256': 'AOD2'})
+            second = dict(source, source_name='sourceB', source_context='different context', raw_input_sha256='AOD2')
+            cohort = write('cohort.json', {'sources': [declared, second_declared]})
+            gate = write('gate.json', dict(passed=True, original_equivalence=True, outputs=[dict(source=name, mode=mode, **record)
+                for name in ('sourceA', 'sourceB') for mode, record in native.items()]))
+            manifest = write('manifest.json', dict(cohort=cohort, native_gate=gate,
+                mode_order=['etaOff', 'etaOn'], sources=[source, second]))
+            release = write('release.json', dict(released_for_analysis=True, manifest_sha256=manifest['sha256'],
+                cohort_sha256=cohort['sha256'], analysis_source_sha256=audit.native_file_checksum(audit.__file__)))
+            with patch.object(audit, 'read_upstream_reconstruction') as reader:
+                with self.assertRaisesRegex(RuntimeError, 'physical GEN original across source files'):
+                    audit.run_upstream_replay(manifest['path'], release['path'], bootstrap=12)
+                reader.assert_not_called()
+
     def test_detector_union_keeps_lost_new_and_charge_changed_pairs(self):
         first, second, third = ((1, 1, 1, 0, i) for i in range(3))
         pair = audit.detector_pair_identity(first, second)

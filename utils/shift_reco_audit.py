@@ -1082,6 +1082,675 @@ def read_native_reconstruction(path):
     return events, pairs, stamp
 
 
+def upstream_muon_residuals(momentum, charge, production):
+    """Evaluate a fixed selected state; wrong charge/direction never remove it."""
+    measured = np.asarray(momentum, dtype=float)
+    truth = np.asarray(production.get('momentum', ()), dtype=float)
+    pdg = production.get('pdgId', 0)
+    if abs(pdg) != 13:
+        return dict(metrics={}, wrong_charge=None, direction_disagrees=None)
+    expected_charge = -1 if pdg == 13 else 1
+    wrong_charge = int(charge) != expected_charge
+    if (measured.shape != (3,) or truth.shape != (3,) or not np.isfinite(measured).all()
+            or not np.isfinite(truth).all()):
+        return dict(metrics={}, wrong_charge=wrong_charge, direction_disagrees=None)
+    p, reference = float(np.linalg.norm(measured)), float(np.linalg.norm(truth))
+    metrics = {}
+    for name, value, target in (('p', p, reference), ('pt', np.hypot(*measured[:2]), np.hypot(*truth[:2])),
+                                ('pz', measured[2], truth[2])):
+        if target != 0.:
+            metrics['production_'+name+'_relative'] = float(value/target-1.)
+    direction = None
+    if p > 0. and reference > 0.:
+        metrics['production_qoverp_relative'] = float((charge/p-expected_charge/reference)/(1./reference))
+        metrics['production_angle_rad'] = float(np.arctan2(np.linalg.norm(np.cross(measured, truth)),
+                                                          np.dot(measured, truth)))
+        direction = bool(np.dot(measured, truth) < 0.)
+    return dict(metrics=metrics, wrong_charge=wrong_charge,
+                direction_disagrees=direction)
+
+
+def upstream_scalar_statistics(values, metric):
+    """Use existing estimators with explicit relative, centimetre or radian tails."""
+    finite = np.asarray(values, dtype=float)
+    finite = finite[np.isfinite(finite)]
+    result = residual_statistics(finite)
+    if result is None:
+        return None
+    result.pop('tail100'); result.pop('tail50')
+    thresholds = ((('tail_abs_gt_50pct', .5), ('tail_abs_gt_100pct', 1.)) if metric.endswith('_relative')
+                  else (('tail_abs_gt_1m', 100.), ('tail_abs_gt_5m', 500.)) if metric.endswith('_cm')
+                  else (('tail_abs_gt_10mrad', .01), ('tail_abs_gt_100mrad', .1)) if metric.endswith('_rad')
+                  else ())
+    for name, threshold in thresholds:
+        result[name] = float(np.mean(np.abs(finite) > threshold))
+    return result
+
+
+def upstream_weight_accounting(weights):
+    """Original-event weight concentration only; never turn signed weights into a CDF."""
+    values = [float(weight) for weight in weights]
+    if not all(math.isfinite(weight) for weight in values):
+        raise RuntimeError('Nonfinite upstream original weight')
+    total = math.fsum(values)
+    squared = math.fsum(weight*weight for weight in values)
+    absolute = math.fsum(abs(weight) for weight in values)
+    nonzero = [abs(weight) for weight in values if weight != 0.]
+    return dict(originals=len(values), positive=sum(weight > 0. for weight in values),
+        negative=sum(weight < 0. for weight in values), zero=sum(weight == 0. for weight in values),
+        minimum=min(values) if values else None, maximum=max(values) if values else None,
+        nonzero_absolute_range=max(nonzero)/min(nonzero) if nonzero else None,
+        sumw=total, sumw2=squared, sum_absw=absolute,
+        effective_originals_signed=total*total/squared if squared else None,
+        effective_originals_absolute=absolute*absolute/squared if squared else None,
+        positive_weight_CDF_allowed=bool(values and min(values) >= 0. and total > 0.),
+        interpretation='Weight concentration of original events; no rate, weighted width or adoption estimate.')
+
+
+def upstream_event_statistics(modes, kind, metric, bootstrap=200, seed=190019):
+    """Same original-event draws, each arm's own rows, stratified by source file.
+
+    Zero-response originals remain sampling units. No row intersection, missing
+    state replacement or matching by sourceIndex enters this comparison.
+    """
+    if not modes:
+        raise ValueError('Upstream statistics need a reference arm')
+    baseline = next(iter(modes.values()))['events']
+    for name, data in modes.items():
+        if set(data['events']) != set(baseline):
+            raise RuntimeError('Upstream statistics original event membership differs: '+name)
+    parents = sorted(baseline)
+    strata = defaultdict(list)
+    for parent in parents:
+        event = baseline[parent]
+        strata[event.get('bootstrap_stratum', event['source_context'])].append(parent)
+    values = {}
+    result = dict(originals=len(parents), source_strata={name: len(rows) for name, rows in strata.items()},
+                  sampling_unit='original event; shared draws within each source/file', arms={},
+                  paired_delta_vs_reference={})
+    for name, data in modes.items():
+        grouped = {parent: [] for parent in parents}
+        total_rows = Counter()
+        for row in data[kind]:
+            parent = tuple(row['event'])
+            if parent not in grouped:
+                raise RuntimeError('Upstream selected row references an absent original')
+            total_rows[parent] += 1
+            value = row['metrics'].get(metric, math.nan)
+            if math.isfinite(value):
+                grouped[parent].append(float(value))
+        values[name] = grouped
+        finite = [value for parent in parents for value in grouped[parent]]
+        contributing = sum(bool(grouped[parent]) for parent in parents)
+        resampleable = sum(bool(grouped[parent]) for rows in strata.values() if len(rows) > 1 for parent in rows)
+        result['arms'][name] = dict(selected_rows=sum(total_rows.values()), finite_rows=len(finite),
+            omitted_or_undefined_rows=sum(total_rows.values())-len(finite), contributing_originals=contributing,
+            resampleable_contributing_originals=resampleable,
+            zero_metric_originals=len(parents)-contributing,
+            quantile_resolved=bool(len(finite) >= 20 and contributing >= 20),
+            estimate=upstream_scalar_statistics(finite, metric))
+        if all('native_EDM_double_weight' in event for event in data['events'].values()):
+            result['arms'][name]['contributing_original_weights_by_source'] = {
+                source: upstream_weight_accounting([data['events'][parent]['native_EDM_double_weight']
+                    for parent in rows if grouped[parent]]) for source, rows in strata.items()}
+    generator = np.random.default_rng(seed)
+    draws = {name: [] for name in modes}
+    for _ in range(bootstrap):
+        chosen = []
+        for group in strata.values():
+            chosen.extend(group[i] for i in generator.integers(0, len(group), size=len(group)))
+        for name in modes:
+            sample = [value for parent in chosen for value in values[name][parent]]
+            draws[name].append(upstream_scalar_statistics(sample, metric))
+    reference = next(iter(modes))
+    for name, arm in result['arms'].items():
+        valid = [row for row in draws[name] if row is not None]
+        arm['bootstrap_nonempty_draws'] = len(valid)
+        arm['bootstrap_empty_draws'] = bootstrap-len(valid)
+        if arm['resampleable_contributing_originals'] < 2:
+            arm['uncertainty_status'] = 'undefined: fewer than two contributing originals in resampleable source strata'
+        elif len(valid) < 2:
+            arm['uncertainty_status'] = 'undefined: fewer than two nonempty bootstrap draws'
+        else:
+            arm['uncertainty_status'] = 'diagnostic original-event bootstrap; sparse widths remain unresolved'
+            arm['interval68'] = {}
+            for statistic, estimate in arm['estimate'].items():
+                low, high = np.quantile([row[statistic] for row in valid], [.158655, .841345])
+                arm['interval68'][statistic] = dict(low=float(low), high=float(high),
+                    error_down=float(max(0., estimate-low)), error_up=float(max(0., high-estimate)))
+        if name == reference:
+            continue
+        comparison = dict(contributing_originals_reference=result['arms'][reference]['contributing_originals'],
+                          contributing_originals_arm=arm['contributing_originals'])
+        paired = [(a, b) for a, b in zip(draws[reference], draws[name]) if a is not None and b is not None]
+        comparison['jointly_nonempty_draws'] = len(paired)
+        comparison['omitted_empty_draws'] = bootstrap-len(paired)
+        if result['arms'][reference]['estimate'] is not None and arm['estimate'] is not None:
+            comparison['estimate'] = {key: value-result['arms'][reference]['estimate'][key]
+                                      for key, value in arm['estimate'].items()}
+        if min(result['arms'][reference]['resampleable_contributing_originals'],
+               arm['resampleable_contributing_originals']) >= 2 and len(paired) >= 2:
+            comparison['interval68'] = {}
+            for statistic, value in comparison['estimate'].items():
+                low, high = np.quantile([b[statistic]-a[statistic] for a, b in paired], [.158655, .841345])
+                comparison['interval68'][statistic] = dict(value=float(value), low=float(low), high=float(high))
+        else:
+            comparison['uncertainty_status'] = 'undefined: fewer than two contributing originals in an arm'
+        result['paired_delta_vs_reference'][name] = comparison
+    return result
+
+
+def upstream_report_values(value):
+    """Retain failed/nonfinite case states as JSON null, never invented zeroes."""
+    if isinstance(value, dict):
+        return {key: upstream_report_values(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, np.ndarray)):
+        return [upstream_report_values(item) for item in value]
+    if isinstance(value, np.generic):
+        value = value.item()
+    return None if isinstance(value, float) and not math.isfinite(value) else value
+
+
+def upstream_pair_reference_status(first, second):
+    """Two saved hit-GEN indices alone must not turn a split SimTrack into a pair."""
+    if not first['matched_production'] or not second['matched_production']:
+        return 'missing_or_nonmuon_hit_reference'
+    ids = [row['hit_simtrack_id'] for row in (first, second)]
+    if min(ids) <= 0:
+        return 'missing_hit_simtrack_identity'
+    if ids[0] == ids[1]:
+        return 'same_simtrack_split'
+    if first['hit_gen_index'] == second['hit_gen_index']:
+        return 'same_hit_associated_GEN_muon'
+    return 'distinct_hit_associated_muons'
+
+
+def read_upstream_reconstruction(path, context):
+    """Reuse native pair/GEN extraction and retain every arm's selected muons."""
+    events, native_pairs, stamp = read_native_reconstruction(path)
+    source = ROOT.TFile.Open(str(path))
+    try:
+        tree = source.Get('Events')
+        branches = {b.GetName() for b in tree.GetListOfBranches()}
+        fields = ('recoAlgorithm', 'sourceIndex', 'charge', 'topology', 'pt', 'pz', 'phi', 'hitGenPartIdx', 'hitSimTrackId')
+        required = {'run', 'luminosityBlock', 'event', 'nShiftMuon', 'nGenPart', 'genWeight'}
+        required.update('ShiftMuon_'+name for name in fields)
+        gen_fields = ('pdgId', 'pt', 'pz', 'phi', 'vx', 'vy', 'vz')
+        required.update('GenPart_'+name for name in gen_fields)
+        if required-branches:
+            raise RuntimeError('Upstream selected-muon branches missing: '+str(sorted(required-branches)))
+        weight_names = sorted(name for name in branches if name == 'genWeight' or
+                              (name.startswith('shift') and ('Weight' in name or 'Probability' in name)))
+        weight_types = {name: tree.GetBranch(name).GetLeaf(name).GetTypeName() for name in weight_names}
+        if weight_types.get('genWeight') != 'Float_t':
+            raise RuntimeError('Upstream genWeight must retain standard Float_t serialization')
+        tree.SetBranchStatus('*', False)
+        for name in required | set(weight_names):
+            tree.SetBranchStatus(name, True)
+        output = dict(events={}, muons=[], pairs=[])
+        labels = {0: 'Near', 1: 'Near-Barrel', 2: 'Both', 3: 'Far', 4: 'Other'}
+        for entry in range(int(tree.GetEntries())):
+            tree.GetEntry(entry)
+            identity = tuple(int(getattr(tree, name)) for name in ('run', 'luminosityBlock', 'event'))
+            key = (context,)+identity
+            event = dict(events[identity], source_context=context,
+                         weights={name: float(getattr(tree, name)) for name in weight_names}, weight_types=weight_types)
+            if not all(math.isfinite(value) for value in event['weights'].values()):
+                raise RuntimeError('Nonfinite upstream native/sampling weight')
+            output['events'][key] = event
+            gen = {name: list(getattr(tree, 'GenPart_'+name)) for name in gen_fields}
+            selected = []
+            for index in range(int(tree.nShiftMuon)):
+                measured = {name: float(getattr(tree, 'ShiftMuon_'+name)[index]) for name in fields}
+                vector = momentum_vector(np.array([measured['pt']]), np.array([measured['phi']]),
+                                         np.array([measured['pz']]))[0]
+                matched = int(measured['hitGenPartIdx'])
+                production = {}
+                if 0 <= matched < int(tree.nGenPart) and abs(gen['pdgId'][matched]) == 13:
+                    production = {name: gen[name][matched] for name in gen_fields}
+                    production['momentum'] = momentum_vector(np.array([production['pt']]),
+                        np.array([production['phi']]), np.array([production['pz']]))[0].tolist()
+                evaluated = upstream_muon_residuals(vector, int(measured['charge']), production)
+                row = dict(event=key, row_index=index, algorithm=int(measured['recoAlgorithm']),
+                    source_index=int(measured['sourceIndex']), charge=int(measured['charge']),
+                    topology=int(measured['topology']), category=labels.get(int(measured['topology']), 'Other'),
+                    canonical_momentum=vector.tolist(), production=production, hit_gen_index=matched,
+                    hit_simtrack_id=int(measured['hitSimTrackId']),
+                    matched_production=bool(production), **evaluated)
+                selected.append(row); output['muons'].append(row)
+            for native_key, pair in native_pairs.items():
+                if native_key[:3] != identity:
+                    continue
+                canonical, truth = pair['canonical'], pair['truth']
+                legs = [int(pair['measured'][name]) for name in ('muonIdx1', 'muonIdx2')]
+                reference_status = upstream_pair_reference_status(*(selected[i] for i in legs))
+                truth_valid = bool(truth) and reference_status == 'distinct_hit_associated_muons'
+                metrics = {}
+                if truth_valid:
+                    for name in ('mass', 'pt', 'pz', 'p'):
+                        value = np.hypot(canonical['pt'], canonical['pz']) if name == 'p' else canonical[name]
+                        if math.isfinite(value) and math.isfinite(truth[name]) and truth[name] != 0.:
+                            metrics['production_'+name+'_relative'] = float(value/truth[name]-1.)
+                    vectors = [np.asarray(selected[i]['canonical_momentum']) for i in legs]
+                    if (all(np.isfinite(v).all() and np.linalg.norm(v) > 0. for v in vectors)
+                            and math.isfinite(truth['opening_angle'])):
+                        metrics['production_angle_rad'] = float(np.arctan2(np.linalg.norm(np.cross(*vectors)),
+                            np.dot(*vectors))-truth['opening_angle'])
+                    if truth['shared_vertex']:
+                        for axis in 'xyz':
+                            if math.isfinite(canonical['v'+axis]) and math.isfinite(truth['v'+axis]):
+                                metrics['production_vertex_'+axis+'_cm'] = float(canonical['v'+axis]-truth['v'+axis])
+                output['pairs'].append(dict(event=key, row_index=native_key[3], legs=legs,
+                    category='-'.join(labels.get(value, 'Other') for value in pair['category']),
+                    is_os=bool(pair['measured']['isOS']), canonical=canonical, metrics=metrics,
+                    distinct_hit_associated_muons=truth_valid, reference_status=reference_status,
+                    shared_production_vertex=bool(truth_valid and truth.get('shared_vertex', False))))
+        stamp['upstream_selected_branches'] = sorted(required | set(weight_names))
+        return output, stamp
+    finally:
+        source.Close()
+
+
+def validate_upstream_populations(modes):
+    """Validate shared originals/GEN/accounting; fitted track fields may change."""
+    baseline = next(iter(modes.values()))['events']
+    for name, data in modes.items():
+        if data['events'].keys() != baseline.keys():
+            raise RuntimeError('Upstream original membership differs: '+name)
+        for key, event in data['events'].items():
+            for field in ('gen_sha256', 'weights', 'weight_types', 'raw_input_sha256', 'source_context'):
+                if field not in event or event[field] != baseline[key].get(field):
+                    raise RuntimeError('Upstream original GEN/source/native weights differ: '+name+' '+field)
+        for kind in ('muons', 'pairs'):
+            seen = set()
+            for row in data[kind]:
+                identity = (tuple(row['event']), row['row_index'])
+                if identity[0] not in baseline or identity in seen:
+                    raise RuntimeError('Duplicate or absent upstream original/selected row')
+                seen.add(identity)
+        muons = {(tuple(row['event']), row['row_index']) for row in data['muons']}
+        for pair in data['pairs']:
+            if (len(pair['legs']) != 2 or pair['legs'][0] == pair['legs'][1]
+                    or any((tuple(pair['event']), index) not in muons for index in pair['legs'])):
+                raise RuntimeError('Upstream chosen pair references absent or repeated muon legs')
+
+
+def upstream_population_report(modes):
+    """Count event-level migrations without claiming track or pair identity."""
+    validate_upstream_populations(modes)
+    reference = next(iter(modes))
+    result = dict(arms={}, event_cases=[], transitions_vs_reference={})
+    categories = sorted({row['category'] for data in modes.values() for row in data['pairs']})
+    for name, data in modes.items():
+        weight_names = sorted({field for event in data['events'].values() for field in event['weights']})
+        result['arms'][name] = dict(originals=len(data['events']), selected_muons=len(data['muons']),
+            selected_pairs=len(data['pairs']), matched_production_muons=sum(r['matched_production'] for r in data['muons']),
+            missing_production_muons=sum(not r['matched_production'] for r in data['muons']),
+            wrong_charge=sum(r['wrong_charge'] is True for r in data['muons']),
+            wrong_direction=sum(r['direction_disagrees'] is True for r in data['muons']),
+            distinct_hit_associated_pairs=sum(r['distinct_hit_associated_muons'] for r in data['pairs']),
+            unknown_pair_reference=sum(not r['distinct_hit_associated_muons'] for r in data['pairs']),
+            shared_vertex_pairs=sum(r['shared_production_vertex'] for r in data['pairs']),
+            muon_charge_counts=dict(Counter(str(r['charge']) for r in data['muons'])),
+            muon_source_counts=dict(Counter(str(r['algorithm']) for r in data['muons'])),
+            muon_category_counts=dict(Counter(r['category'] for r in data['muons'])),
+            pair_category_counts=dict(Counter(r['category'] for r in data['pairs'])),
+            pair_reference_counts=dict(Counter(r['reference_status'] for r in data['pairs'])),
+            undefined_direction=sum(r['direction_disagrees'] is None for r in data['muons']),
+            zero_selected_muon_originals=sum(not any(tuple(row['event']) == key for row in data['muons'])
+                                              for key in data['events']),
+            zero_selected_pair_originals=sum(not any(tuple(row['event']) == key for row in data['pairs'])
+                                              for key in data['events']),
+            native_EDM_double_sumw=math.fsum(event['native_EDM_double_weight'] for event in data['events'].values()),
+            persisted_weights={field: dict(events_present=sum(field in event['weights'] for event in data['events'].values()),
+                sumw=math.fsum(event['weights'].get(field, 0.) for event in data['events'].values()),
+                sumw2=math.fsum(event['weights'].get(field, 0.)**2 for event in data['events'].values()))
+                for field in weight_names})
+        source_weights = defaultdict(list)
+        for event in data['events'].values():
+            source_weights[event.get('bootstrap_stratum', event['source_context'])].append(event['native_EDM_double_weight'])
+        result['arms'][name]['original_native_weights_by_source'] = {
+            source: upstream_weight_accounting(weights) for source, weights in source_weights.items()}
+    for event in sorted(modes[reference]['events']):
+        case = dict(event=event, arms={})
+        for name, data in modes.items():
+            muons = [row for row in data['muons'] if tuple(row['event']) == event]
+            pairs = [row for row in data['pairs'] if tuple(row['event']) == event]
+            case['arms'][name] = dict(muons=muons, pairs=pairs, weights=data['events'][event]['weights'],
+                                     native_EDM_double_weight=data['events'][event]['native_EDM_double_weight'])
+        result['event_cases'].append(case)
+    for name in list(modes)[1:]:
+        transitions = defaultdict(Counter)
+        for case in result['event_cases']:
+            for kind in ('muons', 'pairs'):
+                a, b = (len(case['arms'][arm][kind]) for arm in (reference, name))
+                transitions[kind][str(a)+' -> '+str(b)] += 1
+            for category in categories:
+                a, b = (sum(r['category'] == category for r in case['arms'][arm]['pairs']) for arm in (reference, name))
+                transitions['category/'+category][str(a)+' -> '+str(b)] += 1
+        result['transitions_vs_reference'][name] = {key: dict(value) for key, value in transitions.items()}
+    result['identity_qualification'] = 'Event/count migrations only. Equal sourceIndex or row number never proves a common track/pair; native detector-lineage evidence is separate.'
+    return result
+
+
+def run_upstream_replay(manifest_path, release_path, bootstrap=200, seed=190019):
+    """Explicit upstream route; existing same-raw-track audit gates stay intact."""
+    payload = Path(manifest_path).read_bytes()
+    manifest = json.loads(payload)
+    release = json.loads(Path(release_path).read_text())
+    source_sha = native_file_checksum(__file__)
+    if (release.get('released_for_analysis') is not True
+            or release.get('manifest_sha256') != hashlib.sha256(payload).hexdigest()
+            or release.get('analysis_source_sha256') != source_sha):
+        raise RuntimeError('Upstream outcomes are not released for this manifest/source')
+    cohort_ref, gate_ref = manifest['cohort'], manifest['native_gate']
+    for record in (cohort_ref, gate_ref):
+        if native_file_checksum(record['path']) != record['sha256']:
+            raise RuntimeError('Upstream frozen cohort/native gate hash mismatch')
+    if release.get('cohort_sha256') != cohort_ref['sha256']:
+        raise RuntimeError('Upstream release/cohort differs')
+    cohort = json.loads(Path(cohort_ref['path']).read_text())
+    native_gate = json.loads(Path(gate_ref['path']).read_text())
+    if native_gate.get('passed') is not True or manifest['mode_order'] != ['etaOff', 'etaOn']:
+        raise RuntimeError('Upstream native gate/order is not qualified')
+    original_equivalence = native_gate.get('original_equivalence')
+    qualification = None
+    if original_equivalence is not True:
+        record = manifest.get('comparison_qualification')
+        if (original_equivalence is not False or not record or native_gate.get('comparison_qualification') != record
+                or release.get('comparison_qualification_sha256') != record['sha256']
+                or native_file_checksum(record['path']) != record['sha256']):
+            raise RuntimeError('Upstream historical baseline mismatch lacks exact explicit engineering qualification')
+        qualification = json.loads(Path(record['path']).read_text())
+        reference_directory = Path(manifest['reference_directory'])
+        def reference_path(reference):
+            path = Path(reference['path'])
+            return path if path.is_absolute() else reference_directory/path
+        same_cohort = any(reference['sha256'] == cohort_ref['sha256'] and
+                          reference_path(reference).resolve() == Path(cohort_ref['path']).resolve()
+                          for reference in qualification.get('refs', []))
+        if (qualification.get('schema') != 'shift-eta45-engineering-baseline-qualification-v1'
+                or qualification.get('released_for_downstream') is not True
+                or qualification.get('passed_for_scope') is not True
+                or qualification.get('original_full_raw_equality_passed') is not False
+                or not same_cohort):
+            raise RuntimeError('Upstream engineering qualification/cohort is not explicit')
+        for reference in qualification['refs']:
+            if native_file_checksum(reference_path(reference)) != reference['sha256']:
+                raise RuntimeError('Upstream engineering qualification historical reference changed')
+        historical = json.loads(reference_path(qualification['refs'][0]).read_text())
+        if historical.get('passed') is not False:
+            raise RuntimeError('Upstream historical failed raw gate was not preserved')
+    fixed = {row['source']: row for row in cohort['sources']}
+    if (len(fixed) != len(cohort['sources']) or len(manifest['sources']) != len(fixed)
+            or {row['source_name'] for row in manifest['sources']} != set(fixed)):
+        raise RuntimeError('Upstream source membership differs from frozen cohort')
+    bindings = {(row['source'], row['mode'], row['path'], row['sha256'], row['bytes'])
+                for row in native_gate['outputs']}
+    # Hash every declared output before any outcome reader is called.
+    for source in manifest['sources']:
+        if set(source['modes']) != set(manifest['mode_order']):
+            raise RuntimeError('Upstream source lacks an arm')
+        for name, record in source['modes'].items():
+            if ((source['source_name'], name, record['path'], record['sha256'], record['bytes']) not in bindings
+                    or native_file_checksum(record['path']) != record['sha256']):
+                raise RuntimeError('Upstream output lacks native qualification/hash binding')
+    modes = {name: dict(events={}, muons=[], pairs=[]) for name in manifest['mode_order']}
+    provenance = []
+    physical_originals = set()
+    expected_sources = {}
+    for source in manifest['sources']:
+        declared = fixed[source['source_name']]
+        expected = [tuple(row['event_id']) for row in declared['selected_for_replay']]
+        weights = [row['native_EDM_double_weight'] for row in declared['selected_for_replay']]
+        expected_process = ('DarkPhoton' if declared['sample'].startswith('darkphoton_') else
+                            'JPsi' if declared['sample'].startswith('jpsi_') else None)
+        if (len(set(expected)) != len(expected) or any(not math.isfinite(weight) for weight in weights)
+                or source['expected_ids'] != [list(key) for key in expected]
+                or source['expected_native_EDM_double_weights'] != weights
+                or source['raw_input_sha256'] != declared['original_AOD_reference']['sha256']
+                or source['sample'] != declared['sample'] or source['process'] != expected_process
+                or expected_process is None or source['kernel'] != declared['kernel']
+                or declared['full_GEN_accounting']['parent_gen_sha256'] != declared['parent_GEN_sha256']
+                or source['reference'] != 'saved_hit_associated_GEN_engineering_only'):
+            raise RuntimeError('Upstream source/weight/reference differs from frozen inputs')
+        for identity in expected:
+            physical = (declared['parent_GEN_sha256'],)+identity
+            if physical in physical_originals:
+                raise RuntimeError('Upstream manifest duplicates a physical GEN original across source files')
+            physical_originals.add(physical)
+        expected_sources[source['source_name']] = (expected, weights)
+    for source in manifest['sources']:
+        expected, weights = expected_sources[source['source_name']]
+        for name, record in source['modes'].items():
+            data, stamp = read_upstream_reconstruction(record['path'], source['source_context'])
+            ids = [key[1:] for key in data['events']]
+            if ids != expected or stamp['bytes'] != record['bytes']:
+                raise RuntimeError('Upstream output original order/count/bytes differs')
+            for key, weight in zip(data['events'], weights):
+                event = data['events'][key]
+                if event['weights']['genWeight'] != float(np.float32(weight)):
+                    raise RuntimeError('Upstream native Float32 weight differs from original EDM double')
+                event.update(raw_input_sha256=source['raw_input_sha256'], native_EDM_double_weight=weight,
+                             sample=source['sample'], process=source['process'],
+                             bootstrap_stratum=source['source_name']+':'+source['raw_input_sha256'])
+            if set(modes[name]['events']) & set(data['events']):
+                raise RuntimeError('Upstream manifest duplicates physical originals')
+            modes[name]['events'].update(data['events'])
+            for kind in ('muons', 'pairs'):
+                modes[name][kind].extend(data[kind])
+            provenance.append(dict(source=source, mode=name, native=stamp))
+    validate_upstream_populations(modes)
+    report = dict(schema='shift-upstream-event-paired-comparison-v1', manifest_sha256=hashlib.sha256(payload).hexdigest(),
+        analysis_source_sha256=source_sha, cohort=cohort_ref, native_gate=gate_ref, sources=provenance,
+        original_equivalence=original_equivalence,
+        comparison_qualification=dict(reference=manifest['comparison_qualification'], record=qualification) if qualification else None,
+        full_GEN_sources={name: row['full_GEN_accounting'] for name, row in fixed.items()},
+        declared_cohort_counts=cohort.get('counts', {}),
+        mode_order=manifest['mode_order'], bootstrap_draws=bootstrap, seed=seed,
+        population=upstream_population_report(modes), groups=[],
+        statistics_scope='Unweighted conditional mechanism diagnostics of each arm native populations; same original-event bootstrap draws within each source/file, including every zero/failed event. No forced track/pair intersection or fallback. Source weight ranges/concentration are separate; these are not physical weighted resolutions or adoption proof.',
+        reference_scope='Declared prior-exposed JPsi/DP engineering kernels: distinct positive hitSimTrack IDs and distinct stored hit-associated saved GEN muons only. Wrong charge/direction retained. No angular match, nominal resonance mass or corrected-QCD actual-birth substitution.',
+        sparse_scope='Finite selected rows and independent contributing originals are separate. Fewer than two contributing originals in resampleable source strata gives no interval. Widths need20 contributing originals to be labelled resolved; sparse baseline-BB cases do not establish resolution.',
+        physics_normalization_ready=False)
+    baseline = modes[manifest['mode_order'][0]]['events']
+    groups = [('all_conditioned_controls', set(baseline))]
+    for field in ('process', 'sample'):
+        groups += [(field+'/'+value, {key for key, row in baseline.items() if row[field] == value})
+                   for value in sorted({row[field] for row in baseline.values()})]
+    for label, keys in groups:
+        group_modes = {name: dict(events={key: row for key, row in data['events'].items() if key in keys},
+            **{kind: [row for row in data[kind] if tuple(row['event']) in keys] for kind in ('muons', 'pairs')})
+            for name, data in modes.items()}
+        group = dict(name=label, originals=len(keys), metrics={}, categories={})
+        for kind in ('muons', 'pairs'):
+            metrics = sorted({metric for data in group_modes.values() for row in data[kind] for metric in row['metrics']})
+            group['metrics'][kind] = {metric: upstream_event_statistics(group_modes, kind, metric, bootstrap, seed)
+                                      for metric in metrics}
+        categories = sorted({row['category'] for data in group_modes.values() for row in data['pairs']})
+        for category in categories:
+            selected_modes = {}
+            for name, data in group_modes.items():
+                pairs = [row for row in data['pairs'] if row['category'] == category]
+                legs = {(tuple(row['event']), index) for row in pairs for index in row['legs']}
+                selected_modes[name] = dict(events=data['events'], pairs=pairs,
+                    muons=[row for row in data['muons'] if (tuple(row['event']), row['row_index']) in legs])
+            counts = {name: dict(pairs=len(data['pairs']), muons=len(data['muons'])) for name, data in selected_modes.items()}
+            statistics = {}
+            for kind in ('muons', 'pairs'):
+                metrics = sorted({metric for data in selected_modes.values() for row in data[kind] for metric in row['metrics']})
+                statistics[kind] = {metric: upstream_event_statistics(selected_modes, kind, metric, bootstrap, seed)
+                                   for metric in metrics}
+            group['categories'][category] = dict(native_counts=counts, metrics=statistics)
+        report['groups'].append(group)
+    return upstream_report_values(report)
+
+
+def upstream_plot_summary_points(report, category, kind, metric):
+    """Only display median summaries with identifiable original-event intervals."""
+    order = list(dict.fromkeys(row['source']['sample'] for row in report['sources']))
+    process = {row['source']['sample']: row['source']['process'] for row in report['sources']}
+    points = []
+    for group in report['groups']:
+        if not group['name'].startswith('sample/'):
+            continue
+        sample = group['name'].removeprefix('sample/')
+        summary = group.get('categories', {}).get(category, {}).get('metrics', {}).get(kind, {}).get(metric)
+        if summary is None:
+            continue
+        for mode, arm in summary['arms'].items():
+            interval = arm.get('interval68', {}).get('median')
+            if arm['contributing_originals'] < 2 or not interval or arm['estimate'] is None:
+                continue
+            points.append(dict(mode=mode, sample=sample, process=process[sample], x=order.index(sample)+1,
+                value=arm['estimate']['median'], error_down=interval['error_down'], error_up=interval['error_up'],
+                contributing_originals=arm['contributing_originals']))
+    return points
+
+
+def upstream_event_case_cells(case, category, order):
+    """A table compares each event's chosen outputs, without inventing pair lineage."""
+    cells = {}
+    for mode in order:
+        pairs = [row for row in case['arms'][mode]['pairs'] if row['category'] == category]
+        row = pairs[0] if len(pairs) == 1 else {}
+        metrics = row.get('metrics', {})
+        cells[mode] = dict(pairs=len(pairs), mass_gev=row.get('canonical', {}).get('mass'),
+            mass_error_percent=100.*metrics['production_mass_relative'] if 'production_mass_relative' in metrics else None,
+            z_error_m=.01*metrics['production_vertex_z_cm'] if 'production_vertex_z_cm' in metrics else None)
+    first, second = (cells[name] for name in order)
+    for field, label in (('mass_error_percent', 'delta_abs_mass_error_pp'), ('z_error_m', 'delta_abs_z_error_m')):
+        cells[label] = (abs(second[field])-abs(first[field])
+                        if first[field] is not None and second[field] is not None else None)
+    return cells
+
+
+def plot_upstream_report(report, directory):
+    """Compact category PDFs: native populations, event cases and supported medians."""
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    order = report['mode_order']
+    cases = report['population']['event_cases']
+    categories = sorted({pair['category'] for case in cases for arm in case['arms'].values() for pair in arm['pairs']})
+    sample_order = list(dict.fromkeys(row['source']['sample'] for row in report['sources']))
+    source_names = {row['source']['source_context']: row['source']['source_name'] for row in report['sources']}
+    figures = {}
+    for category in categories:
+        path = directory/(category+'.pdf')
+        canvas = ROOT.TCanvas('upstream_'+category, '', 1900, 1150)
+        canvas.Print(str(path)+'[')
+        pages = 0
+        def text_page(title, lines, size=.025):
+            nonlocal pages
+            canvas.Clear(); canvas.cd()
+            text = ROOT.TText(); text.SetNDC(); text.SetTextFont(82); text.SetTextSize(size)
+            retained = [text.DrawText(.035, .94, title)]
+            y = .88
+            for line in lines:
+                retained.append(text.DrawText(.035, y, line)); y -= .043
+            canvas.Print(str(path), 'Title:'+title); pages += 1
+        lines = ['Each arm keeps its own selected muons/pairs; all original events remain in accounting.',
+                 'Prior-exposed source/file-defined engineering controls; no physical rate or adoption proof.',
+                 'Unweighted diagnostic summaries. Native weights and full GEN exposure remain separate.',
+                 'No forced track/sourceIndex match or analysis fallback. Zero/failed cases remain in JSON.', '']
+        for mode in order:
+            native = report['population']['arms'][mode]
+            count = sum(pair['category'] == category for case in cases for pair in case['arms'][mode]['pairs'])
+            occupied = sum(any(pair['category'] == category for pair in case['arms'][mode]['pairs']) for case in cases)
+            lines.append(f'{mode}: {native["originals"]} originals, {count} {category} pairs in {occupied} originals')
+        transitions = report['population']['transitions_vs_reference'][order[1]].get('category/'+category, {})
+        lines += ['Event pair-count transitions off -> on: '+', '.join(f'{key}: {value}' for key, value in transitions.items()), '',
+                  'Original native-weight concentration (not weighted resolution):']
+        native = report['population']['arms'][order[0]]
+        for source, weights in native['original_native_weights_by_source'].items():
+            label = source.split(':', 1)[0]
+            ess = weights['effective_originals_signed']
+            ess_label = '--' if ess is None else f'{ess:.3g}'
+            lines.append(f'{label}: N={weights["originals"]}, W=[{weights["minimum"]:.3g},{weights["maximum"]:.3g}], '
+                         f'effective N={ess_label}, negative={weights["negative"]}')
+        lines += ['', 'Error bars: shared original-event bootstrap within source/file, finite contributors reported.',
+                  'No interval from one contributing original or singleton source strata.',
+                  'No unresolved resolution widths are drawn. Sparse baseline-BB cases do not measure resolution.']
+        if report.get('original_equivalence') is False:
+            mismatch = report['comparison_qualification']['record']['mismatching_original']
+            lines += ['Historical original raw equality FAILED for '+':'.join(map(str, mismatch))+'. All originals retained.',
+                      'Only identical replay-runtime etaOff/etaOn is qualified; no production equivalence.']
+        text_page(category+' | population and interpretation', lines, .022)
+        selected = [case for case in cases if any(any(pair['category'] == category for pair in arm['pairs'])
+                                                for arm in case['arms'].values())]
+        def number(value):
+            return '--' if value is None or not math.isfinite(value) else f'{value:.4g}'
+        def pair_values(cells, key):
+            return number(cells[order[0]][key])+'/'+number(cells[order[1]][key])
+        for start in range(0, len(selected), 12):
+            lines = ['Event-wise chosen outputs, off/on. Changes do not assert the same physical track/pair.',
+                     'Negative Delta|error| means a smaller absolute error for that event selected output.',
+                     'Missing reference/no pair/multiple pairs: --. Shared-vertex z only; full cases are in JSON.', '',
+                     'source                run:lumi:event        Noff/on  mass GeV(off/on)  mass err %(off/on)  D|mass| pp  z err m(off/on)  D|z| m']
+            for case in selected[start:start+12]:
+                cells = upstream_event_case_cells(case, category, order)
+                label = source_names[case['event'][0]][:20]
+                identity = ':'.join(map(str, case['event'][1:]))
+                counts = str(cells[order[0]]['pairs'])+'/'+str(cells[order[1]]['pairs'])
+                lines.append(f'{label:<21} {identity:<21} {counts:<7} {pair_values(cells,"mass_gev"):<18} '
+                    f'{pair_values(cells,"mass_error_percent"):<19} {number(cells["delta_abs_mass_error_pp"]):<11} '
+                    f'{pair_values(cells,"z_error_m"):<17} {number(cells["delta_abs_z_error_m"])}')
+            no_pair = len(cases)-len(selected)
+            lines += ['', f'{no_pair} originals have no {category} pair in either arm; all are retained in accounting.',
+                      'Charge/orientation, missing/split references and all selected muons remain in the JSON ledger.']
+            text_page(category+f' | original-event cases {start+1}-{min(start+12,len(selected))}', lines, .0165)
+        panels = [('pairs', 'production_mass_relative', 'Chosen mass error median', '%', 100.),
+                  ('pairs', 'production_vertex_z_cm', 'Shared-vertex z error median', 'm', .01),
+                  ('muons', 'production_p_relative', 'Muon p error median', '%', 100.),
+                  ('muons', 'production_pt_relative', 'Muon pT error median', '%', 100.),
+                  ('muons', 'production_pz_relative', 'Muon pz error median', '%', 100.),
+                  ('muons', 'production_qoverp_relative', 'Muon q/p error median', '%', 100.)]
+        summaries = [upstream_plot_summary_points(report, category, kind, metric) for kind, metric, *_ in panels]
+        if any(summaries):
+            canvas.Clear(); canvas.Divide(3, 2); retained = []
+            for index, ((kind, metric, title, unit, scale), points) in enumerate(zip(panels, summaries)):
+                pad = canvas.cd(index+1); pad.SetLeftMargin(.15); pad.SetBottomMargin(.23); pad.SetTopMargin(.12)
+                if not points:
+                    text = ROOT.TLatex(); text.SetNDC(); text.SetTextSize(.045)
+                    retained += [text, text.DrawLatex(.12,.6,title), text.DrawLatex(.12,.5,'No identifiable bootstrap interval')]
+                    continue
+                low = min((point['value']-point['error_down'])*scale for point in points)
+                high = max((point['value']+point['error_up'])*scale for point in points)
+                span = max(high-low, .1*max(abs(low),abs(high)), .01)
+                frame = ROOT.TH1F('upstream_frame_'+category+str(index), title, len(sample_order), .5, len(sample_order)+.5)
+                frame.SetDirectory(0); frame.SetMinimum(low-.2*span); frame.SetMaximum(high+.35*span)
+                frame.GetYaxis().SetTitle('Median error ['+unit+']'); frame.GetYaxis().SetTitleOffset(1.7)
+                for i, sample in enumerate(sample_order):
+                    label = sample.replace('jpsi_pThat','JPsi ').replace('darkphoton_','').replace('GeV','').replace('_',' ')
+                    frame.GetXaxis().SetBinLabel(i+1,label)
+                frame.GetXaxis().SetLabelSize(.04); frame.Draw('AXIS'); retained.append(frame)
+                heading = ROOT.TLatex(); heading.SetNDC(); heading.SetTextSize(.045)
+                retained += [heading, heading.DrawLatex(.15,.94,title)]
+                legend = ROOT.TLegend(.16,.76,.63,.88); legend.SetBorderSize(0); legend.SetTextSize(.037)
+                for mode_index, mode in enumerate(order):
+                    legend_added = False
+                    for process in sorted({point['process'] for point in points}):
+                        selected_points = sorted((point for point in points if point['mode'] == mode and
+                                                  point['process'] == process), key=lambda point: point['x'])
+                        if not selected_points:
+                            continue
+                        graph = ROOT.TGraphAsymmErrors(len(selected_points))
+                        for i, point in enumerate(selected_points):
+                            graph.SetPoint(i,point['x'],point['value']*scale)
+                            graph.SetPointError(i,0.,0.,point['error_down']*scale,point['error_up']*scale)
+                        graph.SetMarkerStyle(20+4*mode_index); graph.SetMarkerColor(COLORS[mode_index])
+                        graph.SetLineColor(COLORS[mode_index]); graph.SetLineWidth(2)
+                        graph.Draw('LP SAME' if len(selected_points)>1 else 'P SAME'); retained.append(graph)
+                        if not legend_added:
+                            legend.AddEntry(graph,mode,'lp'); legend_added=True
+                legend.Draw(); retained.append(legend)
+            canvas.cd(); canvas.Print(str(path),'Title:Supported median diagnostics, original-event bootstrap'); pages += 1
+        canvas.Print(str(path)+']'); canvas.Close()
+        figures[category] = dict(path=str(path.resolve()), bytes=path.stat().st_size,
+                                  sha256=native_file_checksum(path), pages=pages)
+    return figures
+
+
 def detector_pull_coverage(values, parents, bootstrap=200, seed=190019):
     """Marginal local-pull coverage; resample physical parents, never individual legs."""
     values, parents = np.asarray(values, dtype=float), np.asarray(parents)
@@ -2573,6 +3242,9 @@ def main():
     parser.add_argument('--native-manifest', help='Paired native replay sources and measured alternative branch mappings')
     parser.add_argument('--actual-birth-manifest', help='Frozen jointly published Nano/material-audit cohort')
     parser.add_argument('--actual-birth-release', help='Explicit analysis release bound to the actual-birth cohort SHA')
+    parser.add_argument('--upstream-replay-manifest', help='Frozen upstream replay sources and native arm qualification')
+    parser.add_argument('--upstream-replay-release', help='Explicit release bound to the upstream cohort, manifest and reader')
+    parser.add_argument('--upstream-plot-output', help='Optional final PDF directory, one file per observed upstream category')
     parser.add_argument('--detector-audit-manifest', help='Released detector-fit milestone with explicit population migrations')
     parser.add_argument('--detector-plot-output', help='Output directory for detector-milestone category PDFs')
     parser.add_argument('--native-detector-overlay', nargs=2, metavar=('BASELINE', 'REFIT'),
@@ -2584,6 +3256,22 @@ def main():
     parser.add_argument('--bootstrap', type=int, default=200)
     parser.add_argument('--seed', type=int, default=190019)
     args=parser.parse_args()
+    if args.upstream_replay_manifest:
+        if (not args.upstream_replay_release or args.inputs or args.actual_birth_manifest or args.actual_birth_release
+                or args.native_manifest or args.native_detector_overlay or args.detector_audit_manifest
+                or args.paired_npz or args.paired_report_json or args.paired_plot_output or args.detector_plot_output):
+            parser.error('Upstream replay requires only its manifest, explicit release and output JSON')
+        report = run_upstream_replay(args.upstream_replay_manifest, args.upstream_replay_release,
+                                     args.bootstrap, args.seed)
+        if args.upstream_plot_output:
+            report['figures'] = plot_upstream_report(report, args.upstream_plot_output)
+        output = Path(args.output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(report, indent=2, allow_nan=False)+'\n')
+        print(json.dumps(dict(output=str(output), arms=report['mode_order'], groups=len(report['groups']))))
+        return
+    if args.upstream_replay_release or args.upstream_plot_output:
+        parser.error('Upstream release/plots require --upstream-replay-manifest')
     if args.actual_birth_manifest:
         if (not args.actual_birth_release or args.inputs or args.native_manifest or args.native_detector_overlay
                 or args.detector_audit_manifest or args.paired_npz or args.paired_report_json or args.bootstrap < 20):
