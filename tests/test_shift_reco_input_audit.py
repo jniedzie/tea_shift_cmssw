@@ -1,12 +1,14 @@
 # Code style: AI-code. AI-generated independent CSC hit-association tests.
 import copy
+import importlib.util
 import json
 from pathlib import Path
 import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "utils"))
-from shift_reco_input_audit import associate_csc_hits, json_safe_report, validate_selected_association
+from shift_reco_input_audit import (associate_csc_hits, json_safe_report, validate_selected_association,
+                                    CSC_RECHIT_COLLECTION, CSC_SEGMENT_COLLECTION)
 
 
 def fixture():
@@ -85,6 +87,20 @@ class HitAssociationTest(unittest.TestCase):
             dict(path="/raw_tracks/0/hits/0/position_cm/0", value="nan"),
             dict(path="/raw_tracks/0/hits/1/error_cm2/0", value="+inf")])
         self.assertIsNone(report["raw_tracks"][0]["p_GeV"])
+
+
+@unittest.skipUnless(importlib.util.find_spec("DataFormats"), "Requires native CMSSW FWLite")
+class NativeDictionaryTest(unittest.TestCase):
+    def test_mandatory_product_wrappers(self):
+        import ROOT
+        from DataFormats.FWLite import Handle
+        ROOT.gSystem.Load("libFWCoreFWLite")
+        ROOT.FWLiteEnabler.enable()
+        for typename in (CSC_RECHIT_COLLECTION, CSC_SEGMENT_COLLECTION,
+                         "edm::DetSetVector<StripDigiSimLink>", "std::vector<reco::Track>",
+                         "std::vector<SimTrack>", "std::vector<SimVertex>", "std::vector<PSimHit>"):
+            with self.subTest(typename=typename):
+                Handle(typename)
 
 
 if __name__ == "__main__":

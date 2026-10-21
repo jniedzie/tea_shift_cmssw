@@ -13,6 +13,12 @@ from pathlib import Path
 
 
 TRACK_BANKS = ("displacedStandAloneMuons", "shiftTraversingMuons", "shiftCosmicMuons")
+# FWLite needs dictionary class names; these collection typedefs are not loaded
+# as aliases in the stock runtime. Keep the explicit ClonePolicy parameters.
+CSC_RECHIT_COLLECTION = ("edm::RangeMap<CSCDetId,edm::OwnVector<CSCRecHit2D,"
+                        "edm::ClonePolicy<CSCRecHit2D> >,edm::ClonePolicy<CSCRecHit2D> >")
+CSC_SEGMENT_COLLECTION = ("edm::RangeMap<CSCDetId,edm::OwnVector<CSCSegment,"
+                         "edm::ClonePolicy<CSCSegment> >,edm::ClonePolicy<CSCSegment> >")
 SELECTED_FIELDS = ("recoAlgorithm", "sourceIndex", "hitSimTrackId", "hitGenPartIdx",
                    "hitTruthLayers", "hitTruthMatchedLayers", "hitTruthAmbiguousLayers", "hitTruthPurity")
 
@@ -198,7 +204,8 @@ def audit_reco_inputs(sim_path, digi_path, reco_path, nano_path):
             links = get(digi, "edm::DetSetVector<StripDigiSimLink>", ("simMuonCSCDigis", instance))
             products[instance] = dict(present=True, detector_sets=int(links.size()),
                                      links=sum(int(detset.size()) for detset in links))
-        for typename, label in (("CSCRecHit2DCollection", "csc2DRecHits"), ("CSCSegmentCollection", "cscSegments")):
+        for typename, label in ((CSC_RECHIT_COLLECTION, "csc2DRecHits"),
+                                (CSC_SEGMENT_COLLECTION, "cscSegments")):
             product = get(reco, typename, label)
             products[label] = dict(present=True, objects=int(product.size()))
         raw_tracks = []
