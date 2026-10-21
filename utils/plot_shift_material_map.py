@@ -36,6 +36,21 @@ def xy_coordinates(grid):
     return x, y
 
 
+def polar_coordinates(grid):
+    """Use theta from the source-to-CMS (-z) axis as the polar radius.
+
+    CMS phi retains its usual atan2(py,px) orientation. The angular cell edges
+    and untraced central disk remain explicit; no new material rays are made.
+    """
+    xy_coordinates(grid)  # Apply the same finite, forward-ray validation.
+    origin = np.asarray(grid['origin_cm'], dtype=float)
+    if (np.any(origin[:2] != 0) or origin[2] <= 0
+            or not 0 <= grid['target_z_cm'] < origin[2]):
+        raise ValueError('Theta-phi view requires an on-axis source looking toward CMS along -z')
+    theta = np.degrees(2.*np.arctan(np.exp(np.asarray(grid['eta_edges'],dtype=float))))
+    return np.meshgrid(np.asarray(grid['phi_edges'],dtype=float),theta,indexing='ij')
+
+
 def plot(data, output, view='eta-phi', quantity='all', xy_limit_m=10.):
     grid = data['angular_grid']
     eta = np.asarray(grid['eta_edges'])
@@ -45,13 +60,17 @@ def plot(data, output, view='eta-phi', quantity='all', xy_limit_m=10.):
               ('column', 'column_density_g_cm2', r'Material column: $\log_{10}(1+\Sigma/\mathrm{g\,cm^{-2}})$')]
     if quantity != 'all':
         fields = [entry for entry in fields if entry[0] == quantity]
-    if not fields or view not in ('eta-phi', 'xy'):
+    if not fields or view not in ('eta-phi', 'xy', 'theta-phi'):
         raise ValueError('Unknown material quantity or view')
     if not np.isfinite(xy_limit_m) or xy_limit_m <= 0:
         raise ValueError('XY display range must be finite and positive')
-    coordinates = xy_coordinates(grid) if view == 'xy' else (eta, phi)
+    coordinates = (xy_coordinates(grid) if view == 'xy' else
+                   polar_coordinates(grid) if view == 'theta-phi' else (eta, phi))
     figsize = (16,5) if view == 'eta-phi' and quantity == 'all' else (6*len(fields),6)
-    fig, axes = plt.subplots(1,len(fields),figsize=figsize,squeeze=False,constrained_layout=True)
+    if view == 'theta-phi':
+        figsize = (7*len(fields),7)
+    fig, axes = plt.subplots(1,len(fields),figsize=figsize,squeeze=False,constrained_layout=True,
+                             subplot_kw={'projection':'polar'} if view == 'theta-phi' else {})
     cmap = plt.get_cmap('viridis').copy()
     cmap.set_bad('lightgray')
     for axis,(_,field,label) in zip(axes[0],fields):
@@ -62,6 +81,8 @@ def plot(data, output, view='eta-phi', quantity='all', xy_limit_m=10.):
                 if not np.isfinite(value) or value < 0:
                     raise ValueError('A complete ray has an invalid material integral')
                 values[row['phi_index'],row['eta_index']] = np.log10(1.+value)
+        if view == 'theta-phi':
+            axis.grid(False)
         mesh = axis.pcolormesh(*coordinates,np.ma.masked_invalid(values),cmap=cmap,rasterized=True)
         if view == 'xy':
             axis.set_xlabel('CMS x at entrance [m]')
@@ -73,12 +94,21 @@ def plot(data, output, view='eta-phi', quantity='all', xy_limit_m=10.):
             # there is no material measurement. Never draw it as vacuum.
             axis.set_facecolor('lightgray')
             axis.plot(0.,0.,marker='+',color='black',markersize=6)
+        elif view == 'theta-phi':
+            axis.set_theta_zero_location('E')
+            axis.set_theta_direction(1)
+            axis.set_ylim(0.,float(np.max(coordinates[1])))
+            ticks = np.asarray(axis.get_yticks())
+            ticks = ticks[(ticks > 0) & (ticks <= np.max(coordinates[1]))]
+            axis.set_yticks(ticks)
+            axis.set_yticklabels([f'{value:g}°' for value in ticks])
+            axis.set_facecolor('lightgray')
         else:
             axis.set_xlabel(r'Direction $\eta$')
             axis.set_ylabel(r'Direction $\phi/\pi$')
             axis.set_yticks([-1.,-.5,0.,.5,1.])
         bar = fig.colorbar(mesh,ax=axis,label=label,orientation='horizontal',pad=.12)
-        if view == 'xy' and field == 'radiation_depth_proxy':
+        if view in ('xy','theta-phi') and field == 'radiation_depth_proxy':
             ticks = [value for value in (0,1,2,5,10,20,50,100,200,500,1000,2000,5000,10000)
                      if mesh.get_clim()[0] <= np.log10(1.+value) <= mesh.get_clim()[1]]
             bar.set_ticks(np.log10(1.+np.asarray(ticks)))
@@ -86,14 +116,19 @@ def plot(data, output, view='eta-phi', quantity='all', xy_limit_m=10.):
             bar.set_label(r'Integrated radiation lengths $X/X_0$ (logarithmic color scale)')
     start = grid['origin_cm'][2]/100.
     end = grid['target_z_cm']/100.
-    if view == 'xy':
+    if view == 'theta-phi':
+        title = (f'Material seen from collimator z={start:g} m toward CMS\n'
+                 f'Straight rays to entrance z={end:g} m; central CMS and bending excluded.\n'
+                 r'Radius: $\theta$ from line to CMS [degrees]; azimuth: CMS $\phi$.'+'\n'
+                 'Gray: untraced directions.')
+    elif view == 'xy':
         title = (f'Material from collimator z={start:g} m to CMS entrance z={end:g} m\n'
                  'Straight rays; central CMS and magnetic bending excluded.\n'
                  'Gray: untraced directions.')
     else:
         title = (f'IR5 material along straight rays: source z={start:g} m to z={end:g} m\n'
                  'Gray: incomplete geometry coverage. Magnetic bending and central CMS are excluded.')
-    fig.suptitle(title,fontsize=13)
+    fig.suptitle(title,fontsize=12 if view == 'theta-phi' else 13)
     output.parent.mkdir(parents=True,exist_ok=True)
     fig.savefig(output,metadata={'CreationDate':None,'ModDate':None})
     plt.close(fig)
@@ -103,7 +138,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--input', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--view', choices=('eta-phi', 'xy'), default='eta-phi')
+    parser.add_argument('--view', choices=('eta-phi', 'xy', 'theta-phi'), default='eta-phi')
     parser.add_argument('--quantity', choices=('all', 'radiation', 'interaction', 'column'), default='all')
     parser.add_argument('--xy-limit-m', type=float, default=10., help='Displayed CMS x/y range is +/- this distance')
     args = parser.parse_args()
