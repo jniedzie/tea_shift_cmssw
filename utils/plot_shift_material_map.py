@@ -51,7 +51,51 @@ def polar_coordinates(grid):
     return np.meshgrid(np.asarray(grid['phi_edges'],dtype=float),theta,indexing='ij')
 
 
-def plot(data, output, view='eta-phi', quantity='all', xy_limit_m=10.):
+def project_directions(points_cm, origin_cm):
+    """Project supplied CMS points from an explicit source toward minus-z."""
+    points = np.asarray(points_cm,dtype=float)
+    origin = np.asarray(origin_cm,dtype=float)
+    if (origin.shape != (3,) or points.ndim != 2 or points.shape[1] != 3 or len(points) < 2
+            or not np.all(np.isfinite(points)) or not np.all(np.isfinite(origin))):
+        raise ValueError('Geometry outlines need finite CMS points and source coordinates')
+    delta = points-origin
+    if np.any(delta[:,2] >= 0):
+        raise ValueError('Geometry outlines must be in front of the source toward minus-z')
+    return np.arctan2(delta[:,1],delta[:,0]),np.degrees(np.arctan2(np.hypot(delta[:,0],delta[:,1]),-delta[:,2]))
+
+
+def geometry_overlays(axis, overlays, grid):
+    """Draw only the supplied, provenance-labelled geometry location curves."""
+    if (overlays.get('schema') != 'shift-material-polar-geometry-overlays-v1'
+            or overlays.get('origin_cm') != grid['origin_cm']
+            or overlays.get('looking_direction') != [0,0,-1]
+            or overlays.get('nominal_geometry_location_outlines_only') is not True
+            or overlays.get('acceptance_or_electronics_prediction') is not False):
+        raise ValueError('Geometry overlay source, direction or interpretation differs from the map')
+    groups = {}
+    colors = ('#e66101','#323232','#e7298a')
+    for curve in overlays['curves']:
+        if curve.get('acceptance_boundary') is not False or not curve.get('authority'):
+            raise ValueError('Geometry outlines need an explicit authority and location-only meaning')
+        phi,theta = project_directions(curve['points_cm'],grid['origin_cm'])
+        recorded_phi = np.asarray(curve['phi_rad'],dtype=float)
+        recorded_theta = np.asarray(curve['theta_deg'],dtype=float)
+        if (recorded_phi.shape != phi.shape or recorded_theta.shape != theta.shape
+                or not np.all(np.isfinite(recorded_phi)) or not np.all(np.isfinite(recorded_theta))
+                or not np.allclose(np.arctan2(np.sin(phi-recorded_phi),np.cos(phi-recorded_phi)),0.,atol=1.e-10,rtol=0.)
+                or not np.allclose(theta,recorded_theta,atol=1.e-9,rtol=0.)):
+            raise ValueError('Recorded geometry outline angles differ from their CMS points')
+        group = curve['legend_group']
+        first = group not in groups
+        if first:
+            groups[group] = colors[len(groups)%len(colors)]
+        axis.plot(phi,theta,color=groups[group],linewidth=1.,alpha=.85,
+                  label=overlays['legend_labels'][group] if first else '_nolegend_')
+    axis.legend(loc='center left',bbox_to_anchor=(1.09,.5),frameon=False,fontsize=9,
+                title='Geometry locations',title_fontsize=10)
+
+
+def plot(data, output, view='eta-phi', quantity='all', xy_limit_m=10., overlays=None):
     grid = data['angular_grid']
     eta = np.asarray(grid['eta_edges'])
     phi = np.asarray(grid['phi_edges'])/np.pi
@@ -64,11 +108,13 @@ def plot(data, output, view='eta-phi', quantity='all', xy_limit_m=10.):
         raise ValueError('Unknown material quantity or view')
     if not np.isfinite(xy_limit_m) or xy_limit_m <= 0:
         raise ValueError('XY display range must be finite and positive')
+    if overlays is not None and view != 'theta-phi':
+        raise ValueError('Geometry overlays use the theta-phi directional view')
     coordinates = (xy_coordinates(grid) if view == 'xy' else
                    polar_coordinates(grid) if view == 'theta-phi' else (eta, phi))
     figsize = (16,5) if view == 'eta-phi' and quantity == 'all' else (6*len(fields),6)
     if view == 'theta-phi':
-        figsize = (7*len(fields),7)
+        figsize = ((10 if overlays is not None else 7)*len(fields),7)
     fig, axes = plt.subplots(1,len(fields),figsize=figsize,squeeze=False,constrained_layout=True,
                              subplot_kw={'projection':'polar'} if view == 'theta-phi' else {})
     cmap = plt.get_cmap('viridis').copy()
@@ -103,6 +149,8 @@ def plot(data, output, view='eta-phi', quantity='all', xy_limit_m=10.):
             axis.set_yticks(ticks)
             axis.set_yticklabels([f'{value:g}°' for value in ticks])
             axis.set_facecolor('lightgray')
+            if overlays is not None:
+                geometry_overlays(axis,overlays,grid)
         else:
             axis.set_xlabel(r'Direction $\eta$')
             axis.set_ylabel(r'Direction $\phi/\pi$')
@@ -117,7 +165,9 @@ def plot(data, output, view='eta-phi', quantity='all', xy_limit_m=10.):
     start = grid['origin_cm'][2]/100.
     end = grid['target_z_cm']/100.
     if view == 'theta-phi':
-        title = (f'Material seen from collimator z={start:g} m toward CMS\n'
+        source_label = (f'Source point x={grid["origin_cm"][0]/100:g}, y={grid["origin_cm"][1]/100:g}, z={start:g} m'
+                        if overlays is not None else f'Material seen from collimator z={start:g} m toward CMS')
+        title = (source_label+'\n'
                  f'Straight rays to entrance z={end:g} m; central CMS and bending excluded.\n'
                  r'Radius: $\theta$ from line to CMS [degrees]; azimuth: CMS $\phi$.'+'\n'
                  'Gray: untraced directions.')
@@ -141,13 +191,15 @@ def main():
     parser.add_argument('--view', choices=('eta-phi', 'xy', 'theta-phi'), default='eta-phi')
     parser.add_argument('--quantity', choices=('all', 'radiation', 'interaction', 'column'), default='all')
     parser.add_argument('--xy-limit-m', type=float, default=10., help='Displayed CMS x/y range is +/- this distance')
+    parser.add_argument('--overlays', type=Path, help='External geometry location authority for the polar view')
     args = parser.parse_args()
     if args.output.suffix.lower() != '.pdf':
         parser.error('Final geometry diagnostics must be PDF')
     opener = gzip.open if args.input.suffix == '.gz' else open
     with opener(args.input, 'rt') as stream:
         data = json.load(stream)
-    plot(data, args.output, args.view, args.quantity, args.xy_limit_m)
+    overlays = json.loads(args.overlays.read_text()) if args.overlays else None
+    plot(data, args.output, args.view, args.quantity, args.xy_limit_m, overlays)
 
 
 if __name__ == '__main__':

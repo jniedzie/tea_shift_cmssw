@@ -1,5 +1,6 @@
 # Code style: AI-code. AI-generated material-map projection and PDF checks.
 import importlib.util
+import copy
 import math
 from pathlib import Path
 import shutil
@@ -17,6 +18,40 @@ spec.loader.exec_module(material_map)
 
 
 class MaterialMapPlotTest(unittest.TestCase):
+    def test_external_geometry_projection_uses_source_relative_forward_angles(self):
+        phi,theta = material_map.project_directions([[101.,200.,299.],[100.,202.,298.]],[100.,200.,300.])
+        np.testing.assert_allclose(phi,[0.,math.pi/2.],atol=1.e-14)
+        np.testing.assert_allclose(theta,[45.,45.],atol=1.e-13)
+        with self.assertRaisesRegex(ValueError,'in front'):
+            material_map.project_directions([[1.,0.,1.],[0.,1.,-1.]],[0.,0.,0.])
+
+    def test_overlay_authority_and_recorded_projection_are_checked(self):
+        grid = dict(origin_cm=[0.,0.,14800.],target_z_cm=1100.,
+                    eta_edges=[-9.,-3.],phi_edges=[-math.pi,math.pi])
+        points = [[10.,0.,13800.],[0.,10.,13800.],[-10.,0.,13800.],[10.,0.,13800.]]
+        phi,theta = material_map.project_directions(points,grid['origin_cm'])
+        overlay = dict(schema='shift-material-polar-geometry-overlays-v1',origin_cm=grid['origin_cm'],
+            looking_direction=[0,0,-1],nominal_geometry_location_outlines_only=True,
+            acceptance_or_electronics_prediction=False,legend_labels={'synthetic':'Synthetic outline'},
+            curves=[dict(points_cm=points,phi_rad=phi.tolist(),theta_deg=theta.tolist(),legend_group='synthetic',
+                         acceptance_boundary=False,authority={'reference':'synthetic test geometry'})])
+        data = dict(angular_grid=grid,paths=[dict(eta_index=0,phi_index=0,complete=True,radiation_depth_proxy=500.)])
+        with tempfile.TemporaryDirectory(prefix='shift-overlay-plot-test-') as directory:
+            path = Path(directory)/'overlay.pdf'
+            material_map.plot(data,path,view='theta-phi',quantity='radiation',overlays=overlay)
+            self.assertTrue(path.read_bytes().startswith(b'%PDF-'))
+            if shutil.which('pdftotext'):
+                text = subprocess.check_output(['pdftotext',str(path),'-'],text=True)
+                self.assertIn('Synthetic outline',text)
+                self.assertIn('Geometry locations',text)
+                self.assertIn('Source point x=0, y=0, z=148 m',text)
+            wrong = copy.deepcopy(overlay);wrong['curves'][0]['theta_deg'][0] += .1
+            with self.assertRaisesRegex(ValueError,'angles differ'):
+                material_map.plot(data,path,view='theta-phi',quantity='radiation',overlays=wrong)
+            wrong = copy.deepcopy(overlay);wrong['origin_cm'] = [0.,0.,14799.]
+            with self.assertRaisesRegex(ValueError,'source, direction'):
+                material_map.plot(data,path,view='theta-phi',quantity='radiation',overlays=wrong)
+
     def test_polar_theta_is_from_minus_z_and_phi_agrees_with_cms_xy(self):
         grid = dict(origin_cm=[0.,0.,300.],target_z_cm=200.,
                     eta_edges=[-math.asinh(2.),-math.asinh(1.)],
