@@ -130,8 +130,8 @@ class ReplayValuePreservationTest(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.base = Path(self.directory.name)
 
-    def nano(self, name, edit=None, reverse=False, pt_type="float32",
-             normalization='{"full_source_trials":2000}', drop_tree=None):
+    def nano(self, name, edit=None, reverse_tree=None, pt_type="float32",
+             normalization='{"full_source_trials":2000}', drop_tree=None, empty_tree=None):
         import numpy as np
         import uproot
         # Large IDs and tiny Double weights must survive without a float cast
@@ -147,10 +147,12 @@ class ReplayValuePreservationTest(unittest.TestCase):
         if edit:
             tree, branch, row, value = edit
             columns[tree][branch][row] = value
-        if reverse:
-            columns["Events"] = {key: values[::-1] for key, values in columns["Events"].items()}
+        if reverse_tree:
+            columns[reverse_tree] = {key: values[::-1] for key, values in columns[reverse_tree].items()}
         if drop_tree:
             del columns[drop_tree]
+        if empty_tree:
+            columns[empty_tree] = {key: values[:0] for key, values in columns[empty_tree].items()}
         path = self.base / name
         with uproot.recreate(path) as target:
             for tree, arrays in columns.items():
@@ -191,7 +193,8 @@ class ReplayValuePreservationTest(unittest.TestCase):
 
     def test_order_and_typed_schema_are_exact(self):
         baseline = self.nano("baseline.root")
-        for arguments in (dict(reverse=True), dict(pt_type="float64")):
+        for arguments in (dict(reverse_tree="Events"), dict(reverse_tree="Runs"),
+                          dict(reverse_tree="LuminosityBlocks"), dict(pt_type="float64")):
             replay = self.nano("replay.root", **arguments)
             with self.subTest(arguments=arguments), self.assertRaisesRegex(ValueError, "changed ordered typed"):
                 integrity.compare_replay_values(baseline, replay)
@@ -208,6 +211,16 @@ class ReplayValuePreservationTest(unittest.TestCase):
         for name in integrity.EDM_METADATA_TREES:
             replay = self.nano("replay.root", drop_tree=name)
             with self.subTest(tree=name), self.assertRaisesRegex(ValueError, "Missing retained Nano tree"):
+                integrity.compare_replay_values(baseline, replay)
+
+    def test_parameter_set_delta_is_provenance_but_empty_metadata_fails(self):
+        baseline = self.nano("baseline.root")
+        replay = self.nano("replay.root", edit=("ParameterSets", "parameter", 0, 101))
+        proof = integrity.compare_replay_values(baseline, replay)
+        self.assertFalse(proof["edm_metadata"]["ParameterSets"]["basket_inventory_equal"])
+        for name in integrity.EDM_METADATA_TREES:
+            replay = self.nano("empty.root", empty_tree=name)
+            with self.subTest(tree=name), self.assertRaisesRegex(ValueError, "empty EDM metadata"):
                 integrity.compare_replay_values(baseline, replay)
 
 
