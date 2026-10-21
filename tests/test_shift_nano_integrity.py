@@ -123,5 +123,93 @@ class NanoValuePreservationTest(unittest.TestCase):
             integrity.compare_all_branches([original], changed)
 
 
+@unittest.skipUnless(importlib.util.find_spec("uproot"), "Requires uproot and awkward")
+class ReplayValuePreservationTest(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.base = Path(self.directory.name)
+
+    def nano(self, name, edit=None, reverse=False, pt_type="float32",
+             normalization='{"full_source_trials":2000}', drop_tree=None):
+        import numpy as np
+        import uproot
+        # Large IDs and tiny Double weights must survive without a float cast
+        # or a tolerance that hides physics changes.
+        columns = dict(
+            Events=dict(event=np.array([2**63 + 1, 2**63 + 2], dtype="uint64"),
+                        pt=np.array([3.5, 7.25], dtype=pt_type),
+                        nativeWeight=np.array([4.953869585087369e-13, 1.4637661928892926e-15])),
+            Runs=dict(run=np.array([10, 11], dtype="uint32"), generated=np.array([2000, 3000])),
+            LuminosityBlocks=dict(run=np.array([10, 11], dtype="uint32"),
+                                 luminosityBlock=np.array([2, 3], dtype="uint32")),
+            MetaData=dict(history=np.array([17])), ParameterSets=dict(parameter=np.array([23])))
+        if edit:
+            tree, branch, row, value = edit
+            columns[tree][branch][row] = value
+        if reverse:
+            columns["Events"] = {key: values[::-1] for key, values in columns["Events"].items()}
+        if drop_tree:
+            del columns[drop_tree]
+        path = self.base / name
+        with uproot.recreate(path) as target:
+            for tree, arrays in columns.items():
+                target.mktree(tree, {key: values.dtype for key, values in arrays.items()})
+                target[tree].extend(arrays)
+            if normalization is not None:
+                target["shiftSamplingNormalization"] = normalization
+        return path
+
+    def test_replay_allows_labeled_edm_provenance_changes_but_not_retirement(self):
+        baseline = self.nano("baseline.root")
+        replay = self.nano("replay.root", edit=("MetaData", "history", 0, 99))
+        proof = integrity.compare_replay_values(baseline, replay)
+        self.assertTrue(proof["complete"])
+        self.assertEqual(proof["events"], 2)
+        self.assertEqual(proof["baseline_sha256"], integrity.sha256(baseline))
+        self.assertEqual(proof["replay_sha256"], integrity.sha256(replay))
+        self.assertEqual(proof["string_metadata_objects"], ["shiftSamplingNormalization"])
+        self.assertFalse(proof["edm_metadata"]["MetaData"]["basket_inventory_equal"])
+        self.assertTrue(proof["edm_metadata"]["ParameterSets"]["basket_inventory_equal"])
+        self.assertFalse(proof["edm_metadata_byte_equivalence_claimed"])
+        self.assertFalse(proof["retirement_authorized"])
+        with self.assertRaisesRegex(ValueError, "changed branch values"):
+            integrity.compare_all_branches([baseline], replay)
+        merged_receipt = receipt()
+        merged_receipt["merged_nano_integrity"] = proof
+        with self.assertRaisesRegex(ValueError, "complete all-branch"):
+            integrity.validate_retirement_proof(merged_receipt)
+
+    def test_physics_tiny_weights_run_and_lumi_changes_fail(self):
+        baseline = self.nano("baseline.root")
+        for edit in (("Events", "pt", 1, 8.), ("Events", "nativeWeight", 0, 0.),
+                     ("Events", "nativeWeight", 1, 1.4637661928892928e-15),
+                     ("Runs", "generated", 0, 2001), ("LuminosityBlocks", "luminosityBlock", 1, 4)):
+            changed = self.nano("changed.root", edit=edit)
+            with self.subTest(edit=edit), self.assertRaisesRegex(ValueError, "changed ordered typed"):
+                integrity.compare_replay_values(baseline, changed)
+
+    def test_order_and_typed_schema_are_exact(self):
+        baseline = self.nano("baseline.root")
+        for arguments in (dict(reverse=True), dict(pt_type="float64")):
+            replay = self.nano("replay.root", **arguments)
+            with self.subTest(arguments=arguments), self.assertRaisesRegex(ValueError, "changed ordered typed"):
+                integrity.compare_replay_values(baseline, replay)
+
+    def test_changed_or_missing_normalization_fails(self):
+        baseline = self.nano("baseline.root")
+        for normalization in (None, '{"full_source_trials":2}'):
+            replay = self.nano("replay.root", normalization=normalization)
+            with self.subTest(normalization=normalization), self.assertRaisesRegex(ValueError, "string metadata"):
+                integrity.compare_replay_values(baseline, replay)
+
+    def test_missing_edm_metadata_fails(self):
+        baseline = self.nano("baseline.root")
+        for name in integrity.EDM_METADATA_TREES:
+            replay = self.nano("replay.root", drop_tree=name)
+            with self.subTest(tree=name), self.assertRaisesRegex(ValueError, "Missing retained Nano tree"):
+                integrity.compare_replay_values(baseline, replay)
+
+
 if __name__ == "__main__":
     unittest.main()

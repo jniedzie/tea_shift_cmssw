@@ -110,6 +110,53 @@ def compare_all_branches(inputs, merged):
         edm_metadata_baskets_preserved=True, edm_metadata_values_preserved=True)
 
 
+def compare_replay_values(baseline, replay):
+    """Require identical ordered data values, allowing fresh EDM provenance.
+
+    A replay creates a new process/output history. Its MetaData/ParameterSets
+    baskets must exist, but are not a physics-value equivalence criterion.
+    Every other object, including all TObjString normalization records, remains
+    exact. This proof cannot authorize retiring either original file.
+    """
+    expected = semantic_inventory([baseline])
+    actual = semantic_inventory([replay])
+    for inventory in (expected, actual):
+        for name in EDM_METADATA_TREES:
+            require(inventory[name]["entries"] > 0 and inventory[name]["branches"],
+                    "Replay Nano has empty EDM metadata: " + name)
+    expected_data = {name: value for name, value in expected.items()
+                     if name not in EDM_METADATA_TREES}
+    actual_data = {name: value for name, value in actual.items()
+                   if name not in EDM_METADATA_TREES}
+    require(expected_data == actual_data,
+            "Replay Nano changed ordered typed branch values, schema, rows or string metadata")
+    compact = json.dumps(actual_data, sort_keys=True, separators=(",", ":")).encode()
+    provenance = {}
+    for name in EDM_METADATA_TREES:
+        before, after = expected[name], actual[name]
+        provenance[name] = dict(
+            baseline_entries=before["entries"], replay_entries=after["entries"],
+            baseline_branches=len(before["branches"]), replay_branches=len(after["branches"]),
+            baseline_inventory_sha256=hashlib.sha256(
+                json.dumps(before, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+            replay_inventory_sha256=hashlib.sha256(
+                json.dumps(after, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+            basket_inventory_equal=before == after)
+    return dict(schema="shift-nano-replay-value-equivalence-v1", complete=True,
+        baseline_sha256=sha256(baseline), replay_sha256=sha256(replay),
+        events=actual["Events"]["entries"], ordered_typed_values_preserved=True,
+        trees={name: dict(entries=value["entries"], branches=len(value["branches"]))
+               for name, value in actual_data.items() if value["classname"] == "TTree"},
+        string_metadata_objects=sorted(name for name, value in actual_data.items()
+                                       if value["classname"] == "TObjString"),
+        string_metadata_preserved=True,
+        data_inventory_sha256=hashlib.sha256(compact).hexdigest(),
+        edm_metadata_present=True, edm_metadata=provenance,
+        edm_metadata_comparison="Presence and inventory only; new process/output provenance may differ.",
+        edm_metadata_byte_equivalence_claimed=False,
+        retirement_authorized=False)
+
+
 def compare_in_runtime(inputs, merged, cmssw_base=None):
     """Use the stock CVMFS Python dependencies, without reading shared AFS."""
     if cmssw_base is None:
