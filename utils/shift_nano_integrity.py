@@ -110,13 +110,16 @@ def compare_all_branches(inputs, merged):
         edm_metadata_baskets_preserved=True, edm_metadata_values_preserved=True)
 
 
-def compare_replay_values(baseline, replay):
+def compare_replay_values(baseline, replay, *, weight_annotations=None):
     """Require identical ordered data values, allowing fresh EDM provenance.
 
     A replay creates a new process/output history. Its MetaData/ParameterSets
     baskets must exist, but are not a physics-value equivalence criterion.
-    Every other object, including all TObjString normalization records, remains
-    exact. This proof cannot authorize retiring either original file.
+    Every other object remains exact. With explicit original worker annotations,
+    only their pre-annotation file hashes may differ: fresh EDM provenance changes
+    those bytes too. All normalization fields and typed data still match exactly.
+    Callers must bind the worker reports to the published files independently.
+    This proof cannot authorize retiring either original file.
     """
     expected = semantic_inventory([baseline])
     actual = semantic_inventory([replay])
@@ -128,6 +131,37 @@ def compare_replay_values(baseline, replay):
                      if name not in EDM_METADATA_TREES}
     actual_data = {name: value for name, value in actual.items()
                    if name not in EDM_METADATA_TREES}
+    annotation_provenance = None
+    strings_identical = all(expected.get(name) == value for name, value in actual.items()
+                            if value["classname"] == "TObjString")
+    if weight_annotations is not None:
+        require(isinstance(weight_annotations, dict)
+                and set(weight_annotations) == {"baseline", "replay"},
+                "Replay needs both independently bound worker weight annotations")
+        key = "ShiftDecayProposalWeights"
+        stripped, records = [], {}
+        for side, inventory in (("baseline", expected_data), ("replay", actual_data)):
+            require(key in inventory and inventory[key]["classname"] == "TObjString",
+                    "Replay Nano is missing its weight annotation")
+            annotation = json.loads(inventory[key]["value"])
+            require(isinstance(annotation, dict) and annotation == weight_annotations[side]
+                    and annotation.get("schema") == "shift-decay-proposal-weight-annotation-v1",
+                    "Replay weight annotation differs from its bound worker report")
+            digest = annotation.get("input_nano_sha256")
+            require(isinstance(digest, str) and len(digest) == 64
+                    and all(value in "0123456789abcdef" for value in digest),
+                    "Replay annotation needs a valid pre-annotation Nano hash")
+            records[side] = dict(input_nano_sha256=digest,
+                annotation_string_sha256=hashlib.sha256(inventory[key]["value"].encode()).hexdigest())
+            body = {name: value for name, value in annotation.items() if name != "input_nano_sha256"}
+            stripped.append(body)
+            inventory[key] = dict(classname="TObjString", value=json.dumps(
+                body, sort_keys=True, separators=(",", ":"), allow_nan=False))
+        require(stripped[0] == stripped[1],
+                "Replay changed weight policy, event authority or source normalization")
+        annotation_provenance = dict(records, independently_bound_worker_annotations=True,
+            only_excluded_field="ShiftDecayProposalWeights.input_nano_sha256",
+            all_other_annotation_fields_preserved=True)
     require(expected_data == actual_data,
             "Replay Nano changed ordered typed branch values, schema, rows or string metadata")
     compact = json.dumps(actual_data, sort_keys=True, separators=(",", ":")).encode()
@@ -149,7 +183,9 @@ def compare_replay_values(baseline, replay):
                for name, value in actual_data.items() if value["classname"] == "TTree"},
         string_metadata_objects=sorted(name for name, value in actual_data.items()
                                        if value["classname"] == "TObjString"),
-        string_metadata_preserved=True,
+        string_metadata_preserved=strings_identical,
+        normalization_metadata_preserved=True,
+        weight_annotation_provenance=annotation_provenance,
         data_inventory_sha256=hashlib.sha256(compact).hexdigest(),
         edm_metadata_present=True, edm_metadata=provenance,
         edm_metadata_comparison="Presence and inventory only; new process/output provenance may differ.",

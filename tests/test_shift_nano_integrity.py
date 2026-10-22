@@ -131,7 +131,8 @@ class ReplayValuePreservationTest(unittest.TestCase):
         self.base = Path(self.directory.name)
 
     def nano(self, name, edit=None, reverse_tree=None, pt_type="float32",
-             normalization='{"full_source_trials":2000}', drop_tree=None, empty_tree=None):
+             normalization='{"full_source_trials":2000}', drop_tree=None, empty_tree=None,
+             annotation=None):
         import numpy as np
         import uproot
         # Large IDs and tiny Double weights must survive without a float cast
@@ -160,7 +161,72 @@ class ReplayValuePreservationTest(unittest.TestCase):
                 target[tree].extend(arrays)
             if normalization is not None:
                 target["shiftSamplingNormalization"] = normalization
+            if annotation is not None:
+                target["ShiftDecayProposalWeights"] = json.dumps(annotation, sort_keys=True)
         return path
+
+    def annotation(self, digest="a" * 64):
+        return dict(schema="shift-decay-proposal-weight-annotation-v1",
+            input_nano_sha256=digest, events=2, original_event_ids=[[10, 2, 1], [11, 3, 2]],
+            weight_policy="native_gen_weight*decay_proposal_weight/reco_inclusion_probability",
+            source_exposures=[dict(full_source_trials=2000)], normalization_ready=False)
+
+    def test_replay_binds_changed_pre_annotation_hash_but_keeps_all_data_exact(self):
+        before, after = self.annotation(), self.annotation("b" * 64)
+        baseline = self.nano("baseline.root", annotation=before)
+        replay = self.nano("replay.root", annotation=after, edit=("MetaData", "history", 0, 99))
+        with self.assertRaisesRegex(ValueError, "string metadata"):
+            integrity.compare_replay_values(baseline, replay)
+        proof = integrity.compare_replay_values(baseline, replay,
+            weight_annotations=dict(baseline=before, replay=after))
+        self.assertTrue(proof["ordered_typed_values_preserved"])
+        self.assertTrue(proof["normalization_metadata_preserved"])
+        self.assertFalse(proof["string_metadata_preserved"])
+        self.assertEqual(proof["weight_annotation_provenance"]["baseline"]["input_nano_sha256"], "a" * 64)
+        self.assertFalse(proof["retirement_authorized"])
+        with self.assertRaisesRegex(ValueError, "changed branch values"):
+            integrity.compare_all_branches([baseline], replay)
+
+    def test_bound_annotation_cannot_hide_weight_authority_or_source_changes(self):
+        before = self.annotation()
+        baseline = self.nano("baseline.root", annotation=before)
+        for edit in (lambda a: a.update(weight_policy="different"),
+                     lambda a: a["source_exposures"][0].update(full_source_trials=2),
+                     lambda a: a["original_event_ids"].reverse(),
+                     lambda a: a.update(new_field=True)):
+            after = self.annotation("b" * 64)
+            edit(after)
+            replay = self.nano("replay.root", annotation=after)
+            with self.assertRaisesRegex(ValueError, "weight policy, event authority or source normalization"):
+                integrity.compare_replay_values(baseline, replay,
+                    weight_annotations=dict(baseline=before, replay=after))
+
+    def test_annotation_bindings_and_hashes_are_required_and_exact(self):
+        before, after = self.annotation(), self.annotation("b" * 64)
+        baseline = self.nano("baseline.root", annotation=before)
+        replay = self.nano("replay.root", annotation=after)
+        for binding in ({}, dict(baseline=before), dict(baseline=before, replay=before)):
+            with self.subTest(binding=binding), self.assertRaises(ValueError):
+                integrity.compare_replay_values(baseline, replay, weight_annotations=binding)
+        for invalid in (None, "", "A" * 64, "x" * 64):
+            bad = self.annotation(invalid)
+            replay = self.nano("bad.root", annotation=bad)
+            with self.subTest(hash=invalid), self.assertRaisesRegex(ValueError, "pre-annotation Nano hash"):
+                integrity.compare_replay_values(baseline, replay,
+                    weight_annotations=dict(baseline=before, replay=bad))
+
+    def test_bound_provenance_does_not_hide_physics_or_other_string_changes(self):
+        before, after = self.annotation(), self.annotation("b" * 64)
+        baseline = self.nano("baseline.root", annotation=before)
+        for edit in (dict(edit=("Events", "nativeWeight", 1, 1.4637661928892928e-15)),
+                     dict(edit=("Runs", "generated", 0, 2001)),
+                     dict(normalization='{"full_source_trials":2}'), dict(annotation=None)):
+            arguments = dict(annotation=after)
+            arguments.update(edit)
+            replay = self.nano("bad.root", **arguments)
+            with self.subTest(edit=edit), self.assertRaises(ValueError):
+                integrity.compare_replay_values(baseline, replay,
+                    weight_annotations=dict(baseline=before, replay=after))
 
     def test_replay_allows_labeled_edm_provenance_changes_but_not_retirement(self):
         baseline = self.nano("baseline.root")
