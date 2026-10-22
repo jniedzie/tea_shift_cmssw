@@ -33,6 +33,18 @@ EXPOSURE = dict(source_id="original-source", original_source_sha256="a" * 64,
 
 
 class ProposalWeightTests(unittest.TestCase):
+    def test_native_LO_exposure_is_not_mislabeled_as_fixed_source_trials(self):
+        exposure = dict(source_id='original-source', original_source_sha256='a'*64,
+                        denominator_kind='accepted_gen_events', full_source_events=1000)
+        result = weights.validate_proposal_rows([row(correction=1.)], [exposure])[0]
+        self.assertEqual(result['shiftProposalGenWeight'], 8.)
+        for bad in (dict(exposure, full_source_trials=1000),
+                    dict(exposure, full_source_events=0),
+                    dict(exposure, denominator_kind='unknown')):
+            with self.assertRaises(ValueError): weights.validate_proposal_rows([row()], [bad])
+        trial = dict(EXPOSURE, full_source_events=1000)
+        with self.assertRaises(ValueError): weights.validate_proposal_rows([row()], [trial])
+
     def test_old_detector_correction_and_new_likelihood_enter_once(self):
         result = weights.validate_proposal_rows([row()])[0]
         self.assertEqual(result["shiftOriginalGenWeight"], 2.)
@@ -184,6 +196,23 @@ class ProposalNanoTests(unittest.TestCase):
         self.assertEqual(int(runs.genEventCount), 1000)
         self.assertEqual(float(runs.genEventSumw), 1000.)
         self.assertEqual(str(source.Get("OriginalMetadata").GetString()), "original metadata retained byte for byte")
+        source.Close()
+
+    def test_native_LO_annotation_preserves_full_run_payload_without_invented_trials(self):
+        rows = [row(native=1., correction=1.)]
+        self.fixture(rows)
+        exposure = dict(source_id='original-source', original_source_sha256='a'*64,
+                        denominator_kind='accepted_gen_events', full_source_events=1000)
+        result = weights.annotate_proposal_weights(self.path, rows, [exposure],
+            expected_nano_sha256=hashlib.sha256(self.path.read_bytes()).hexdigest())
+        self.assertEqual(result['source_exposures'], [exposure])
+        self.assertFalse(result['normalization_ready'])
+        source = ROOT.TFile.Open(str(self.path))
+        event = source.Get('Events'); event.GetEntry(0)
+        self.assertEqual(float(event.shiftProposalGenWeight), 4.)
+        self.assertEqual(float(event.genWeight), 1.)
+        run = source.Get('Runs'); run.GetEntry(0)
+        self.assertEqual(int(run.genEventCount), 1000)
         source.Close()
 
     def test_existing_detector_weights_stay_unchanged_and_cannot_be_applied_twice(self):

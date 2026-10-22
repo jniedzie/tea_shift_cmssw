@@ -109,9 +109,17 @@ def validate_proposal_rows(rows, source_exposures=None):
         exposed = {}
         for exposure in source_exposures:
             source, digest = source_identity(exposure)
-            trials = exposure.get("full_source_trials")
-            if isinstance(trials, bool) or not isinstance(trials, int) or trials <= 0:
-                raise ValueError("Full original GEN trial counts must be positive integers")
+            kind = exposure.get("denominator_kind", "fixed_source_trials")
+            if kind == "fixed_source_trials":
+                count = exposure.get("full_source_trials")
+                ambiguous = "full_source_events" in exposure
+            elif kind == "accepted_gen_events":
+                count = exposure.get("full_source_events")
+                ambiguous = "full_source_trials" in exposure
+            else:
+                raise ValueError("Unknown original GEN denominator kind")
+            if ambiguous or isinstance(count, bool) or not isinstance(count, int) or count <= 0:
+                raise ValueError("Full original GEN exposure needs one positive integer denominator")
             if source in exposed or digest in exposed.values():
                 raise ValueError("Repeated original source exposure")
             exposed[source] = digest
