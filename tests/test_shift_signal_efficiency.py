@@ -100,9 +100,104 @@ class EfficiencyDiagnosticTest(unittest.TestCase):
 
     def test_active_z_binning_is_read_from_existing_plot(self):
         settings = DIAGNOSTIC.plot_settings()
-        self.assertIsInstance(settings["rebin"], int)
-        self.assertGreater(settings["rebin"], 0)
-        self.assertLess(settings["minimum_cm"], settings["maximum_cm"])
+        self.assertEqual(settings["rebin"], 10)
+        self.assertIsNone(settings["minimum_cm"])
+        self.assertIsNone(settings["maximum_cm"])
+
+    def test_automatic_limits_use_the_recorded_histogram_domain(self):
+        self.settings.update(minimum_cm=None, maximum_cm=None)
+        result = self.shape([1, 2, 3])
+        self.assertEqual(result["visible_selected_events"], 6)
+        self.assertEqual(result["edges_cm"], [0., 1., 2., 3.])
+
+    def test_equal_passing_targets_scale_with_efficiency(self):
+        efficient = DIAGNOSTIC.event_statistics_plan(dict(
+            generated_events=1000, selected_events=100, efficiency_interval_95=[.08, .12]))
+        inefficient = DIAGNOSTIC.event_statistics_plan(dict(
+            generated_events=1000, selected_events=30, efficiency_interval_95=[.02, .04]))
+        self.assertEqual(efficient["nominal_target_total_events"], 30000)
+        self.assertEqual(inefficient["nominal_target_total_events"], 100000)
+        self.assertGreater(inefficient["conservative_target_total_events"], 100000)
+
+    def test_zero_passes_have_finite_pilot_and_no_invented_final_target(self):
+        plan = DIAGNOSTIC.event_statistics_plan(dict(
+            generated_events=100, selected_events=0, efficiency_interval_95=[0., .0362]))
+        self.assertIsNone(plan["nominal_target_total_events"])
+        self.assertIsNone(plan["conservative_target_total_events"])
+        self.assertEqual(plan["planned_next_stage_total_events"], 10100)
+        self.assertEqual(plan["status"], "zero_pass_pilot")
+
+    def test_sparse_event_measurement_is_remeasured_before_full_allocation(self):
+        plan = DIAGNOSTIC.event_statistics_plan(dict(
+            generated_events=1320, selected_events=3, efficiency_interval_95=[.0004, .0066]))
+        self.assertEqual(plan["nominal_target_total_events"], 1320000)
+        self.assertEqual(plan["pilot_total_events"], 44000)
+        self.assertLess(plan["planned_next_stage_total_events"], plan["nominal_target_total_events"])
+
+    def test_event_allocation_credits_pending_independent_events(self):
+        import json
+        import tempfile
+        counts = dict(generated_events=1000, selected_events=100, efficiency_interval_95=[.08, .12])
+        row = dict(point="p", both_both=counts, vertex_z_plan=self.shape([10, 10], generated=1000),
+                   event_statistics_plan=DIAGNOSTIC.event_statistics_plan(counts))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "credit.json"
+            path.write_text(json.dumps({"points": {"p": {"completed_total_events": 2000,
+                                                       "independent_inflight_events": 3000}}}))
+            DIAGNOSTIC.apply_credit([row], path)
+        self.assertEqual(row["event_statistics_plan"]["additional_events_after_completed"], 3000)
+        self.assertEqual(row["event_statistics_plan"]["additional_events_if_inflight_succeeds"], 0)
+        self.assertTrue(row["event_statistics_plan"]["credit_inventory_supplied"])
+
+    def test_new_model_credit_does_not_reuse_old_histogram_population(self):
+        import json
+        import tempfile
+        counts = dict(generated_events=1000, selected_events=100, efficiency_interval_95=[.08, .12])
+        row = dict(point="p", both_both=counts, vertex_z_plan=self.shape([10, 10], generated=1000),
+                   event_statistics_plan=DIAGNOSTIC.event_statistics_plan(counts))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "credit.json"
+            path.write_text(json.dumps({"points": {"p": {"completed_total_events": 200,
+                "reference_histogram_is_allocation_population": False}}}))
+            DIAGNOSTIC.apply_credit([row], path)
+        self.assertEqual(row["production_credit"]["completed_total_events"], 200)
+        self.assertEqual(row["event_statistics_plan"]["additional_events_after_completed"], 4800)
+
+    def test_partial_processing_is_not_detector_inefficiency(self):
+        import json
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            campaign = Path(directory)
+            (campaign / "histograms_merged").mkdir()
+            (campaign / "cross_sections.json").write_text(json.dumps({"full_gen": {
+                "accepted_events": 1000, "sum_weights": 1000, "sum_weights_squared": 1000,
+                "source_collisions": 500000}}))
+            result = DIAGNOSTIC.normalization_context(campaign / "histograms_merged/h.root", 100, 10)
+        self.assertEqual(result["processing_fraction"], .1)
+        self.assertEqual(result["selected_per_full_gen_available"], .01)
+        self.assertEqual(result["source_collisions"], 500000)
+
+    def test_storage_round_respects_cap_and_prioritizes_long_flights(self):
+        rows = [dict(point=name, mass_gev=.3, mean_lab_flight_m=flight,
+                     both_both=dict(efficiency=.01, selected_events=10),
+                     production_credit=dict(completed_total_events=0, independent_inflight_events=0))
+                for name, flight in (("short", 5), ("long", 1000))]
+        densities = {"points": {name: dict(reserved_bytes_per_gen=100., fixed_bytes_per_point=0.)
+                                for name in ("short", "long")}}
+        plan = DIAGNOSTIC.storage_capped_round(rows, densities, 50000, base_passes=1, priority_passes=10)
+        allocated = {p["point"]: p for p in plan["points"]}
+        self.assertLessEqual(plan["reserved_bytes"], 50000)
+        self.assertGreater(allocated["long"]["additional_gen_events"], allocated["short"]["additional_gen_events"])
+        self.assertFalse(plan["production_admitted"])
+
+    def test_storage_round_never_credits_old_population_or_invents_zero_acceptance(self):
+        row = dict(point="zero", mass_gev=.3, mean_lab_flight_m=1000,
+                   both_both=dict(efficiency=0., selected_events=0),
+                   production_credit=dict(completed_total_events=200, independent_inflight_events=0))
+        plan = DIAGNOSTIC.storage_capped_round([row], {"points": {"zero": {
+            "reserved_bytes_per_gen": 100., "fixed_bytes_per_point": 1000.}}}, 10000)
+        self.assertEqual(plan["additional_gen_events"], 0)
+        self.assertEqual(plan["points"][0]["allocation_status"], "zero_efficiency_requires_separate_exploration")
 
 
 if __name__ == "__main__":
