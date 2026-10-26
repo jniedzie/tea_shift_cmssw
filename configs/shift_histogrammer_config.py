@@ -354,6 +354,7 @@ histParams = (
 # range; fine source bins are merged only when rendering sparsely populated tails.
 for category in dimuonCategories:
     for variable, bins, low, high in (
+        ("logMass", 160, -1.0, 3.0),  # log10(m / GeV), from 0.1 to 1000 GeV.
         ("openingAngle", 630, 0.0, 3.15),
         ("openingAngleFine", 400, 0.0, 0.2),
         ("constrainedOpeningAngle", 630, 0.0, 3.15),

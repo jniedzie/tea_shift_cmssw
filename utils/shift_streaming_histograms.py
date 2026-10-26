@@ -31,6 +31,9 @@ MAXIMUM_PUBLICATION_BYTES = 512 * 1024 * 1024
 REQUIRED_HISTOGRAMS = tuple(
     "dimuon/ShiftDimuonVertex" + category + "_" + variable
     for category in ("", "Both-Both") for variable in ("mass", "pt")
+) + tuple(
+    "dimuon/ShiftDimuonVertex" + category + "_logMass"
+    for category in ("", "Good", "Near-Both", "Near-Far", "Both-Both", "Both-Far", "Other")
 )
 
 

@@ -1,6 +1,14 @@
 <!-- Code style: human-code. -->
 # Running the SHIFT MC histogrammer
 
+Production runtimes must freeze the current main histogrammer config and its
+matching rebuilt binary together. Both SM streaming and DP publication require
+`logMass` in all seven dimuon categories. Before a new DP runtime is accepted,
+its exact frozen archive must pass a real canary with a filled inclusive
+`logMass` histogram; empty categories in ordinary production are valid. See
+the workflow generation instructions for the qualification record. These
+production checks do not restrict plotting partial results.
+
 ## Histogram files while GEN and reconstruction continue
 
 The production controller can call `utils/shift_streaming_histograms.py` after

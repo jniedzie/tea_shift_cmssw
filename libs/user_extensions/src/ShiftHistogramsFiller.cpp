@@ -667,6 +667,8 @@ void ShiftHistogramsFiller::FillDimuonKinematics(const shared_ptr<Event> event) 
     double const mass = dimuon->GetAs<float>("mass");
     double const pt = dimuon->GetAs<float>("pt");
     double const pz = dimuon->GetAs<float>("pz");
+    // Mass is stored in GeV. Nonpositive masses have no logarithm.
+    if (mass > 0.) fill("logMass", log10(mass));
     double const transverseMass = hypot(mass, pt);
     if (mass >= 0. && pt >= 0. && transverseMass > 0.)
       fill("rapidity", asinh(pz / transverseMass));

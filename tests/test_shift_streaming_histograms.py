@@ -59,6 +59,20 @@ class StreamingHistogramsTest(unittest.TestCase):
                     streaming.publish_campaign_histograms(rows, [], str(scratch/'data'), '20261019_test',
                         '20261019T120000Z_abcdef123456', scratch)
 
+    def test_runtime_missing_any_log_mass_category_is_rejected(self):
+        import ROOT
+        names=[name for name in streaming.REQUIRED_HISTOGRAMS if name.endswith('_logMass')]
+        self.assertEqual(len(names),7)
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'old_runtime.root';source=ROOT.TFile(str(path),'RECREATE')
+            source.mkdir('dimuon').cd()
+            for name in streaming.REQUIRED_HISTOGRAMS:
+                if name==names[-1]:continue
+                histogram=ROOT.TH1D(Path(name).name,'',160,-1.,3.);histogram.Write()
+            source.Close()
+            with self.assertRaisesRegex(ValueError,'Missing required histogram.*logMass'):
+                streaming.histogram_summary(path)
+
     def test_resume_summary_does_not_rewrite_published_histograms(self):
         import ROOT
         with tempfile.TemporaryDirectory() as temporary:
