@@ -214,7 +214,11 @@ def histogram_gen_normalization(path, stratum):
             cross_section = metadata.get('cross_section_pb', 0)
             if metadata.get('schema') != 'shift-preserved-full-GEN-histogram-v1':
                 raise ValueError('Invalid preserved GEN exposure: ' + path)
-        if (metadata.get('stratum') != stratum
+        # The analysis historically spells the open upper edge as -1; the
+        # production uses inf. They identify the same physical bin.
+        observed_stratum = str(metadata.get('stratum')).replace('to-1', 'toinf')
+        expected_stratum = stratum.replace('to-1', 'toinf')
+        if (observed_stratum != expected_stratum
                 or metadata.get('histogram_weight') != 'native_gen_weight/reco_inclusion_probability'
                 or metadata.get('no_second_filter_efficiency') is not True
                 or not math.isfinite(denominator) or denominator <= 0
