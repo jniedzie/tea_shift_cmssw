@@ -137,7 +137,7 @@ class HistogramMergeTest(unittest.TestCase):
             jobs = merge.collect_explicit_jobs([
                 ('/nano/a.root', '', '/hist/a.root'), ('/nano/b.root', '', '/hist/empty.root'),
             ], skip_no_keys=True)
-        filter_keys.assert_called_once_with(['/hist/a.root', '/hist/empty.root'])
+        filter_keys.assert_called_once_with(['/hist/a.root', '/hist/empty.root'], None)
         self.assertEqual(jobs[0][-1], ['/hist/a.root'])
 
     def test_exact_inventory_takes_precedence_over_directory_globs(self):
@@ -306,7 +306,8 @@ class HistogramMergeTest(unittest.TestCase):
             ]))
             result = subprocess.run([sys.executable, str(PROJECT / 'bin/merge.py'),
                 '--files_config', str(files_config), '--allow-incomplete', '--hadd-workers', '1'],
-                capture_output=True, text=True, env=dict(os.environ, PYTHONPATH=str(PROJECT / 'bin')), timeout=90)
+                capture_output=True, text=True, env=dict(os.environ,
+                    PYTHONPATH=os.pathsep.join([str(PROJECT / 'bin'), os.environ.get('PYTHONPATH', '')])), timeout=90)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn('Incomplete histogram productions:', result.stdout)
             self.assertNotIn('RuntimeWarning', result.stdout + result.stderr)

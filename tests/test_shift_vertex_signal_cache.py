@@ -127,7 +127,7 @@ class SignalCacheTests(unittest.TestCase):
 
     def run_synthetic_read(self, pair_count):
         import awkward as ak
-        frozen = ROOT / 'plots/DNN_vertex_20261013/fresh_signal_transfer/cache/source_snapshot'
+        frozen = ROOT / 'plots/vertex_classifier/DNN_vertex_20261013/fresh_signal_transfer/cache/source_snapshot'
         sources = {name: dict(path=str((frozen / name).resolve()), sha256=m.digest(frozen / name))
                    for name in m.SOURCE_ORDER if name != 'shift_vertex_reco_information.py'}
         rich_path = ROOT / 'utils/shift_vertex_reco_information.py'

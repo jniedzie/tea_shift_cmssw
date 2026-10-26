@@ -1,5 +1,6 @@
 # Code style: AI-code. AI-generated regression test.
 import hashlib
+import ast
 import json
 from pathlib import Path
 import runpy
@@ -155,7 +156,7 @@ class AvailableHistogramPlotConfigTest(unittest.TestCase):
         return path
 
     def config(self, *, bsm_campaign=None, masses=(15,), flights=(100,), epsilons=None, histogram_rebins=None,
-               streaming_inventory=None, campaign=None, cross_sections=None):
+               streaming_inventory=None, campaign=None, cross_sections=None, plot_groups=None):
         from Histogram import Histogram
 
         def histogram(*args, **kwargs):
@@ -174,7 +175,18 @@ class AvailableHistogramPlotConfigTest(unittest.TestCase):
                 patch('shift_sample_paths.full_gen_weight_sums', side_effect=AssertionError('Full GEN validation')), \
                 patch('shift_sample_paths._read_normalization_record', side_effect=AssertionError('Production records')), \
                 patch('shift_sample_paths._bsm_campaign_records', side_effect=AssertionError('BSM production validation')):
-            return SimpleNamespace(**runpy.run_path(str(self.repository / 'configs/shift_plotter_config.py')))
+            path = self.repository / 'configs/shift_plotter_config.py'
+            if plot_groups is None:
+                return SimpleNamespace(**runpy.run_path(str(path)))
+            definitions = ast.parse(path.read_text())
+            for statement in definitions.body:
+                if isinstance(statement, ast.Assign) and len(statement.targets) == 1:
+                    name = statement.targets[0]
+                    if isinstance(name, ast.Name) and name.id in plot_groups:
+                        statement.value = ast.Constant(plot_groups[name.id])
+            namespace = {}
+            exec(compile(ast.fix_missing_locations(definitions), str(path), 'exec'), namespace)
+            return SimpleNamespace(**namespace)
 
     def streaming_inventory(self):
         rows = {}
@@ -307,6 +319,56 @@ class AvailableHistogramPlotConfigTest(unittest.TestCase):
         self.assertEqual(config.samples[0].initial_weight_sum, -1)
         self.assertTrue(warn.called)  # The missing bin does not block the ready one.
 
+    def test_default_plots_and_independent_optional_groups(self):
+        defaults = self.config()
+        self.assertEqual(len(defaults.histograms), 64)
+        self.assertEqual(defaults.histograms2D, [])
+        self.assertTrue(all(h.name.startswith(('dimuon/', 'event/Event_nShiftDimuonVertex'))
+                            for h in defaults.histograms))
+        self.assertEqual(sum(h.name.endswith('_logMass') for h in defaults.histograms), 2)
+        switches = dict.fromkeys(('plot_dimuons', 'plot_muons', 'plot_reco',
+                                  'plot_diagnostics', 'plot_2d'), False)
+        empty = self.config(plot_groups=switches)
+        self.assertEqual(empty.histograms + empty.histograms2D, [])
+        names = set()
+        for switch in switches:
+            config = self.config(plot_groups=dict(switches, **{switch: True}))
+            group = {h.name for h in config.histograms + config.histograms2D}
+            self.assertTrue(group, switch)
+            self.assertFalse(names & group, switch)
+            names.update(group)
+        all_on = self.config(plot_groups=dict.fromkeys(switches, True))
+        self.assertEqual(len(all_on.histograms), 141)
+        self.assertEqual(len(all_on.histograms2D), 4)
+        self.assertEqual(names, {h.name for h in all_on.histograms + all_on.histograms2D})
+
+    def test_label_helpers_preserve_explicit_plot_controls(self):
+        from Histogram import Histogram, Histogram2D
+        from HistogramNormalizer import NormalizationType
+        from shift_plot_style import apply_plot_style, apply_2d_plot_style
+
+        controls = dict(log_x=True, log_y=False, norm_type=NormalizationType.none,
+                        rebin=3, x_min=0.5, x_max=12., y_min=0.25, y_max=40.,
+                        allow_legend_x_extension=False)
+        for variable in ('mass', 'openingAngleFine'):
+            histogram = Histogram('dimuon/ShiftDimuonVertex_' + variable, **controls)
+            apply_plot_style([histogram])
+            self.assertEqual({key: getattr(histogram, key) for key in controls}, controls)
+
+        for enabled in (False, True):
+            histogram = Histogram('dimuon/ShiftDimuonVertex_logMass', de_loggify_x_axis=enabled)
+            apply_plot_style([histogram])
+            self.assertEqual(histogram.x_label, 'm_{#mu#mu} (GeV)' if enabled
+                             else 'log_{10}(m_{#mu#mu} / GeV)')
+            self.assertFalse(histogram.scale_by_bin_width)
+
+        controls2d = dict(log_x=True, log_y=True, log_z=False,
+                          norm_type=NormalizationType.to_lumi,
+                          x_min=0.1, x_max=0.5, y_min=1., y_max=5., z_min=1., z_max=20.)
+        histogram = Histogram2D('dimuon/ShiftDimuonVertex_massVsOpeningAngle', **controls2d)
+        apply_2d_plot_style([histogram])
+        self.assertEqual({key: getattr(histogram, key) for key in controls2d}, controls2d)
+
     def test_partial_bsm_needs_no_plan_marker_or_complete_campaign(self):
         with patch('Logger.warn'):
             config = self.config(bsm_campaign=self.bsm_campaign, flights=(None, 100))
@@ -327,7 +389,7 @@ class AvailableHistogramPlotConfigTest(unittest.TestCase):
         }
         for campaign in (None, self.bsm_campaign):
             with self.subTest(campaign=campaign), patch('Logger.warn'):
-                config = self.config(bsm_campaign=campaign)
+                config = self.config(bsm_campaign=campaign, plot_groups={'plot_muons': True})
                 config.histograms = [histogram for histogram in config.histograms
                                      if histogram.name in labels]
                 config.output_path = str(self.base / 'plots')
@@ -470,7 +532,10 @@ class AvailableHistogramPlotConfigTest(unittest.TestCase):
         from Sample import Sample, SampleType
 
         with patch('Logger.warn'):
-            config = self.config()
+            config = self.config(
+                plot_groups={'plot_muons': True},
+                histogram_rebins={f'dimuon/ShiftDimuonVertex{category}_pt_variable': 1
+                                  for category in ('', 'Both-Both')})
         definitions = [histogram for histogram in config.histograms
                        if histogram.name.endswith('_variable')]
         self.assertEqual(len(definitions), 12)

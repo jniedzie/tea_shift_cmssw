@@ -43,6 +43,61 @@ class EfficiencySource:
 
 
 class ComparisonTests(unittest.TestCase):
+  def test_gaussian_core_fit_with_broad_tails(self):
+    histogram = ROOT.TH1D("gaussian_with_tails", "", 300, -3., 3.)
+    histogram.SetDirectory(0)
+    random = ROOT.TRandom3(721)
+    for _ in range(20000):
+      histogram.Fill(random.Gaus(.12, .2))
+    for _ in range(4000):
+      histogram.Fill(random.Uniform(-3., 3.))
+    histogram.Scale(1./histogram.Integral(), "width")
+    histogram.GetXaxis().SetRangeUser(-1., 1.)
+    fit = plotter.fit_response_core(histogram, "known_gaussian_core")
+    self.assertIsNotNone(fit)
+    self.assertAlmostEqual(fit.GetParameter(1), .12, delta=.015)
+    self.assertAlmostEqual(fit.GetParameter(2), .2, delta=.025)
+    self.assertGreater(fit.GetParError(2), 0.)
+
+  def test_gaussian_core_fit_rejects_sparse_sample(self):
+    histogram = ROOT.TH1D("sparse_core", "", 100, -1., 1.)
+    histogram.SetDirectory(0)
+    for value in (-.3, -.2, -.1, .1, .2, .3):
+      histogram.Fill(value)
+    self.assertIsNone(plotter.fit_response_core(histogram, "sparse_gaussian_core"))
+
+  def test_residual_panels_keep_distinct_processes_and_observables(self):
+    files = []
+    sources = []
+    for index, color in enumerate((ROOT.kGreen + 2, ROOT.kBlue + 1)):
+      source = ROOT.TMemFile(f"response_source_{index}.root", "RECREATE")
+      files.append(source)
+      source.mkdir("response").cd()
+      for variable, extent in (("pt", 1.), ("vz", 1000.)):
+        name = f"DimuonResponse_{variable}Vspt"
+        histogram = ROOT.TH2D(name, name, 2, 0., 2., 100, -extent, extent)
+        for _ in range(30 + index):
+          histogram.Fill(1., extent * (.1 + .2 * index))
+        histogram.Write()
+      sources.append((f"Process {index}", source, color))
+    canvas = ROOT.TCanvas("distinct_residuals", "", 800, 600)
+    canvas.Divide(1, 2)
+    settings = plotter.reconstruction_plot_settings()
+    first = plotter.draw_response_shape(
+        canvas.cd(1), sources, "Dimuon", "", "pt", settings, "")
+    second = plotter.draw_response_shape(
+        canvas.cd(2), sources, "Dimuon", "", "vz", settings, "")
+    histograms = first[:2] + second[:2]
+    self.assertEqual(len({ROOT.addressof(histogram) for histogram in histograms}), 4)
+    self.assertEqual(first[0].GetLineColor(), ROOT.kGreen + 2)
+    self.assertEqual(first[1].GetLineColor(), ROOT.kBlue + 1)
+    self.assertAlmostEqual(first[0].GetXaxis().GetXmax(), 1.)
+    self.assertAlmostEqual(second[0].GetXaxis().GetXmax(), 1000.)
+    self.assertLess(first[0].GetMean(), first[1].GetMean())
+    canvas.Close()
+    for source in files:
+      source.Close()
+
   def write_histogram_fixture(self, root, version, label, include_opening_angle=True):
     path = root / f"v{version}_abcdef123456_{label.replace(' ', '_')}" / "histograms.root"
     path.parent.mkdir()

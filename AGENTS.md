@@ -4,6 +4,19 @@
 The workspace `../AGENTS.md` applies here. Work directly on `main`; do not
 create task branches or Git worktrees.
 
+## Automatic commits
+
+- Always commit your own validated additions and changes to files labelled
+  `Code style: AI-code` before handing off, without asking again.
+- Leave human-code changes uncommitted for the user's review. This includes
+  existing analysis-facing files that default to human-code. Do not relabel
+  files to make them eligible for automatic commits.
+- Do not commit any changes in the separate `tea` repository below this
+  directory, regardless of code-style label. Leave those for the user's review.
+  Do not commit an updated `tea` submodule pointer without explicit instruction.
+- Stage only your own task changes and preserve unrelated working-tree and
+  staged changes. Do not push unless the user explicitly asks.
+
 ## Code readability labels
 
 Each maintained source, configuration, test, utility and local documentation

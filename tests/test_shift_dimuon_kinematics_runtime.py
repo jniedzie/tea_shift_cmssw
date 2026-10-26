@@ -163,6 +163,23 @@ class DimuonKinematicsRuntimeTest(unittest.TestCase):
         self.assertEqual(self.integral(self.histogram(root, "constrainedMass")), 0.0)
         self.assertEqual(root.Get("dimuon/ShiftDimuonVertex_massVsOpeningAngle").GetEntries(), 1.0)
 
+    def test_log_mass_categories_signed_weights_and_invalid_values(self):
+        events = [
+            {"weight": weight, "branches": {"ShiftDimuonVertex_mass": [mass]}}
+            for mass, weight in ((0.25, 2.5), (1., -1.), (100., 3.),
+                                 (0., 10.), (-1., 10.), (math.nan, 10.), (math.inf, 10.))
+        ]
+        root = self.run_histograms(events)
+        for category in ("", "Good", "Both-Both"):
+            histogram = self.histogram(root, "logMass", category)
+            self.assertEqual(histogram.GetEntries(), 3)
+            self.assertAlmostEqual(self.integral(histogram), 4.5)
+            for mass, weight in ((0.25, 2.5), (1., -1.), (100., 3.)):
+                index = histogram.FindBin(math.log10(mass))
+                self.assertAlmostEqual(histogram.GetBinContent(index), weight)
+                self.assertAlmostEqual(histogram.GetBinError(index), abs(weight))
+        self.assertEqual(self.integral(self.histogram(root, "logMass", "Other")), 0.)
+
     def test_parallel_antiparallel_phi_wrap_and_small_angle(self):
         root = self.run_histograms([
             {"branches": {"ShiftMuon_phi": [0.0, 0.0]}},

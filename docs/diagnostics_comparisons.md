@@ -8,11 +8,11 @@ python3 utils/shift_diagnostics_plotter.py --compare-versions v40 v41
 ```
 
 Numeric versions (`40 41`) also work. Each version must resolve to exactly one
-`plots/vN_<hash>[_<recoVariant>]/histograms.root`. Use `--histograms-dir` to
+`plots/reconstruction/versions/vN_<hash>[_<recoVariant>]/histograms.root`. Use `--histograms-dir` to
 search elsewhere. `--output-dir` changes the output parent directory.
 Comparison mode is exclusive with `--input` and `--version`.
 
-Outputs go to `plots/comparisons/v40_vs_v41/`:
+Outputs go to `plots/reconstruction/versions/comparisons/v40_vs_v41/`:
 
 - Four scale/resolution PDFs: muon and dimuon, each split into constrained and
   unconstrained. Colors identify versions. Points show `1 + mean`; bars show

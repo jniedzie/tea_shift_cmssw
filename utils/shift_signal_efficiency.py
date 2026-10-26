@@ -499,7 +499,7 @@ def write_tables(report, output):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--campaign", default=None, help="Defaults to shift_paths.bsm_campaign")
-    parser.add_argument("--output", type=Path, default=ANALYSIS / "plots/bsm_efficiency")
+    parser.add_argument("--output", type=Path, default=ANALYSIS / "plots/physics/bsm_efficiency")
     parser.add_argument("--relative-error", type=float, default=0.10)
     parser.add_argument("--core-fraction", type=float, default=0.90)
     parser.add_argument("--production-credit", type=Path)

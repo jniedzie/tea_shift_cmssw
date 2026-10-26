@@ -203,7 +203,7 @@ omitted; plotting continues with the available points.
 Unknown requested masses/lifetimes and inconsistent checksums, model labels
 or provenance remain errors. Unselected unfinished points produce no warning.
 
-Output is automatic too: `plots/SM_BSM/<bsm_campaign>/` in this repository.
+Output is automatic too: `plots/physics/SM_BSM/<bsm_campaign>/` in this repository.
 Set `bsm_campaign = None` for SM-only plots. The optional
 `histogram_cache_directory` stages content-verified local copies when ROOT
 cannot open mounted EOS inputs; it does not change the canonical files.
@@ -323,7 +323,7 @@ python submitter.py --app shift_histogrammer \
 
 Choose the MC campaign in `configs/shift_paths.py`. The files configuration
 writes to that campaign's `histograms/` directory. A direct histogrammer run
-without output overrides uses the versioned local `plots/vN_<hash>/` path.
+without output overrides uses the versioned local `plots/reconstruction/versions/vN_<hash>/` path.
 This is an MC diagnostics configuration, not an approved blinded-data workflow.
 
 ## Merged sample discovery

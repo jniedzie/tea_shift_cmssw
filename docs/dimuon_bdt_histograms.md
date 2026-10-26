@@ -104,7 +104,7 @@ maps; a lifetime study requires the corresponding signal MC and truth labels
 for evaluation.
 
 New plot exports are PDF only, as requested after the October 12 study.
-Project-accessible copies are in `plots/BDT_20261012/`; its index links directly
+Project-accessible copies are in `plots/vertex_classifier/BDT_20261012/`; its index links directly
 to PDFs. Original hash-locked validation archives retain their historical
 renderings for provenance.
 
@@ -222,7 +222,7 @@ models. Specialized score, ROC, category and signal-transfer diagnostics use
 deployed BDT are unchanged.
 
 Final PDF figures, numerical results, models and provenance are under
-[`plots/DNN_vertex_20261013/`](../plots/DNN_vertex_20261013/README.md), inside
+[`plots/vertex_classifier/DNN_vertex_20261013/`](../plots/vertex_classifier/DNN_vertex_20261013/README.md), inside
 this repository for direct access in VS Code. The reviewed six-model figures
 are in `dnn_comparison_reviewed/`, category figures in `dnn_categories/`, and
 the independent six-point signal comparison in
@@ -247,7 +247,7 @@ inside this repository.
 The subsequent one-hour information study adds 32 fits and 69 reconstructed
 inputs (associated muon quality/hits/timing and five event occupancy counts).
 Results are in
-[`plots/DNN_vertex_information_20261013/`](../plots/DNN_vertex_information_20261013/README.md).
+[`plots/vertex_classifier/DNN_vertex_information_20261013/`](../plots/vertex_classifier/DNN_vertex_information_20261013/README.md).
 Both rich pooled-model seeds pass the reconstructed development acceptance
 checks, rejecting 49.10/49.27% of fakes versus 40.95% for the earlier
 constrained DNN. They keep 90.80/89.93% of genuine SM pairs and 163/173 or
@@ -260,7 +260,7 @@ PDFs are in `dnn_comparison_reviewed/`, `categories_v2/` and
 
 The next response study separates classifier retention from the full generated
 event response. Its final PDF figures and numerical evidence are in
-[`plots/Vertex_efficiency_20261013/`](../plots/Vertex_efficiency_20261013/README.md).
+[`plots/vertex_classifier/Vertex_efficiency_20261013/`](../plots/vertex_classifier/Vertex_efficiency_20261013/README.md).
 The six complete points retain all 1,200 GEN parents and use proper lifetimes
 from timed GEN audits. Incomplete points remain unknown. The rich DNN retains
 163/173 or 152/173 genuine signal events, corresponding to 13.6% or 12.7% of
@@ -298,7 +298,7 @@ reused development events, not independent confirmation.
 
 Final PDF ROC, score, mass/position/category and learning-curve diagnostics
 are in
-[`plots/Vertex_complete_20261013/`](../plots/Vertex_complete_20261013/README.md),
+[`plots/vertex_classifier/Vertex_complete_20261013/`](../plots/vertex_classifier/Vertex_complete_20261013/README.md),
 with frozen sources, numerical evidence and independent hash/selection audits.
 Six Condor jobs, `12913514.0` through `.5`, were submitted for a separate
 81-fit current-domain comparison of moderate decorrelation and direct soft
@@ -314,7 +314,7 @@ development pairs and rejects52.04% of fakes;30 new signal points retain
 701/760 known genuine pairs. The selected score retains reconstructed
 category information through its existing topology inputs. See the single
 recommended model and final PDFs in
-[`plots/Vertex_best_20261014/`](../plots/Vertex_best_20261014/README.md).
+[`plots/vertex_classifier/Vertex_best_20261014/`](../plots/vertex_classifier/Vertex_best_20261014/README.md).
 Selection uses validation rejection, dependence and member-omission stability;
 the signal grid never changes the cut. Reconstructed proper length is a
 nominal-target proxy, with true mean proper lifetime shown separately from
