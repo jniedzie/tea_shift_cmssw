@@ -691,7 +691,7 @@ def latest_versioned_sample():
     version_pattern = re.compile(r"^v([0-9]+)_([^/_]+)(?:_([^/]+))?$")
     latest_version = 0
     existing_version_for_hash = None
-    for output_path in glob.glob(f"{project_dir}/plots/v*_*"):
+    for output_path in glob.glob(f"{project_dir}/plots/reconstruction/versions/v*_*"):
         if not os.path.isdir(output_path):
             continue
         dir_name = os.path.basename(output_path)
@@ -731,7 +731,7 @@ project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 inputFilePath = input_path
 histogramsOutputFilePath = (
-    f"{project_dir}/plots/v{sample_version}_{provenance_tag}/histograms.root"
+    f"{project_dir}/plots/reconstruction/versions/v{sample_version}_{provenance_tag}/histograms.root"
 )
 
 info(f"Selected sample v{sample_version}_{provenance_tag}: {inputFilePath}")

@@ -9,22 +9,22 @@ base_path = "/eos/home-j/jniedzie/shift_cmssw/"  # lxplus
 
 # None gives SM-only plots.
 # Each point's latest link keeps the newest ready sample with matching settings.
-# bsm_campaign = "latest"
-bsm_campaign = None
+bsm_campaign = "latest"
+# bsm_campaign = None
 
 
 # None selects all, [] selects none. None in the list of lifetimes means prompt.
 
 # Mass scan:
-# bsm_masses_to_plot = [2, 5, 10, 15, 40, 70]  # GeV
+# bsm_masses_to_plot = [0.22, 1.8, 5, 10, 15, 40, 70]  # GeV
 # bsm_mean_lab_flights_to_plot = [None]  # metres
 
 # Lifetime scan:
-bsm_masses_to_plot = [40]  # GeV
+bsm_masses_to_plot = [15]  # GeV
 bsm_mean_lab_flights_to_plot = [None, 5, 30, 100, 1000]  # metres
 
 # All signals:
-# bsm_masses_to_plot = [2, 5, 10, 12, 15, 20, 30, 40, 50, 70, 90]  # GeV
+# bsm_masses_to_plot = [0.22, 0.25, 0.3, 0.4, 0.5, 0.7, 0.9, 1.5, 1.8, 2, 5, 10, 12, 15, 20, 30, 40, 50, 70, 90]  # GeV
 # bsm_mean_lab_flights_to_plot = [None, 5, 30, 100, 1000]  # metres
 
 
@@ -38,6 +38,7 @@ histogram_cache_directory = None
 # ==========================
 
 # Mu-enriched QCD with the existing DY and J/psi references.
+# campaign = "20261023_sm_material_csc_v1"
 campaign = "20261016_mu_enriched_weekend_v1"
 # campaign = "shift_detector_representative_20261007_v10"
 # Optional single-sample GEN campaigns; the combined plotter uses campaign above.
@@ -116,6 +117,7 @@ limits_cut_output_path = "../plots/limits/both_both_cuts_20261015/"
 limits_pheno_comparison_output_path = "../plots/limits/pheno_comparison_20261016/"
 limits_resolution_output_path = "../plots/limits/resolution_20261016/"
 limits_book_match_output_path = "../plots/limits/book_match_20261016/"
+limits_current_output_path = "../plots/limits/current_20261021/"
 limits_combine_path = (
     "/eos/home-j/jniedzie/combine/CMSSW_16_0_0/src/HiggsAnalysis/CombinedLimit"
 )

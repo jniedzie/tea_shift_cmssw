@@ -6,6 +6,7 @@ import ast
 from array import array
 import glob
 import functools
+import json
 import math
 import os
 import re
@@ -1348,12 +1349,12 @@ def parse_arguments():
   )
   parser.add_argument(
       "--histograms-dir",
-      default=f"{PROJECT_DIR}/plots/",
+      default=f"{PROJECT_DIR}/plots/reconstruction/versions/",
       help="directory searched for vN_<hash>[_<recoVariant>]/histograms.root files",
   )
   parser.add_argument(
       "--output-dir",
-      default=f"{PROJECT_DIR}/plots",
+      default=f"{PROJECT_DIR}/plots/reconstruction/versions",
       help="parent directory for versioned plot directories",
   )
   parser.add_argument(
@@ -1365,6 +1366,12 @@ def parse_arguments():
   )
   parser.add_argument("--process-input", action="append", default=[], metavar="LABEL=ROOT",
                       help="compare truth-binned process response maps; repeat for each process")
+  parser.add_argument("--dimuon-review", action="store_true",
+                      help="with process inputs, make three concise free-fit dimuon PDFs")
+  parser.add_argument("--dimuon-review-linear", action="store_true",
+                      help="with process inputs, make only the linear-scale dimuon residual PDF")
+  parser.add_argument("--dimuon-review-constrained-linear", action="store_true",
+                      help="make the separate constrained linear-scale residual PDF")
   return parser.parse_args()
 
 
@@ -1439,8 +1446,9 @@ def reconstruction_plot_settings():
   names = ("reconstructionResponseAxes", "reconstructionResponseVariables",
            "reconstructionResponseMinimumEntries", "reconstructionDiagnosticVariables",
            "reconstructionResponseDisplayRanges", "reconstructionResponseLogY", "reconstructionDiagnosticLabels",
-           "reconstructionReportCategories", "reconstructionResponseOverview", "reconstructionResponseTitles")
-  path = os.path.join(PROJECT_DIR, "configs", "shift_plotter_config.py")
+           "reconstructionReportCategories", "reconstructionResponseOverview", "reconstructionResponseTitles",
+           "reconstructionReviewResidualRanges")
+  path = os.path.join(PROJECT_DIR, "configs", "shift_plot_style.py")
   with open(path) as source:
     definitions = ast.parse(source.read(), filename=path)
   settings = {}
@@ -1454,7 +1462,7 @@ def reconstruction_plot_settings():
   return settings
 
 
-def response_report_page(canvas, title, section, page, sources):
+def response_report_page(canvas, title, section, page, sources, note=None, show_legend=True, rows=3):
   """Six large panels, a shared legend, and a persistent section/page label."""
   canvas.cd()
   canvas.Clear()
@@ -1477,13 +1485,14 @@ def response_report_page(canvas, title, section, page, sources):
     graph.SetLineWidth(2)
     legend.AddEntry(graph, label, "lep")
     retained.append(graph)
-  legend.Draw()
+  if show_legend:
+    legend.Draw()
   text.SetTextSize(.017)
-  text.DrawLatex(.035, .018, "Unweighted shapes | response: 68% intervals + binning; shapes: Poisson errors | N#geq20 | lines guide the eye")
+  text.DrawLatex(.035, .018, note or "Unweighted shapes | response: 68% intervals + binning; shapes: Poisson errors | N#geq20 | lines guide the eye")
   text.DrawLatex(.93, .018, str(page))
   panels = ROOT.TPad("response_panels", "", 0., .047, 1., .902)
   panels.Draw()
-  panels.Divide(2, 3, .008, .012)
+  panels.Divide(2, rows, .008, .012)
   retained.append(panels)
   return panels, retained
 
@@ -1544,6 +1553,8 @@ def draw_response_panel(pad, sources, kind, category, state, variable, axis, sta
         multigraph.Add(graph, "LP")
         retained.append(graph)
       value, down, up = summary[statistic]
+      if variable == "vz":
+        value, down, up = value/100., down/100., up/100.
       point = graph.GetN()
       graph.SetPoint(point, x, value)
       graph.SetPointError(point, 0., 0., down, up)
@@ -1551,6 +1562,8 @@ def draw_response_panel(pad, sources, kind, category, state, variable, axis, sta
       bottoms.append(value-down)
       tops.append(value+up)
   variable_title = settings["reconstructionResponseTitles"][variable]
+  if variable == "vz":
+    variable_title = variable_title.replace("[cm]", "[m]")
   x_title = settings["reconstructionResponseAxes"][axis]
   fit = "Constrained" if state else "Unconstrained"
   y_title = ("#sigma_{68}" if statistic == "width" else "Median") + " (" + variable_title + ")"
@@ -1608,27 +1621,93 @@ def align_response_panels(panels, row):
     graph.GetXaxis().SetLimits(left, right)
     pad.Modified()
 
-def draw_response_shape(pad, sources, kind, category, variable, settings, state=None):
+def fit_response_core(histogram, name):
+  """Gaussian fit to the central visible peak, with bin-integrated predictions."""
+  axis = histogram.GetXaxis()
+  low = axis.GetBinLowEdge(axis.GetFirst())
+  high = axis.GetBinUpEdge(axis.GetLast())
+  # Work with counts when finding quantiles, even though the fit uses densities.
+  counts = histogram.Clone(name + "_counts")
+  counts.SetDirectory(0)
+  for index in range(counts.GetNbinsX()+2):
+    counts.SetBinContent(index, histogram.GetBinContent(index)*histogram.GetBinWidth(index))
+  quantiles = array("d", [0., 0., 0.])
+  counts.GetQuantiles(3, quantiles, array("d", [.158655, .5, .841345]))
+  median = quantiles[1]
+  width = .5*(quantiles[2]-quantiles[0])
+  bin_width = axis.GetBinWidth(axis.FindBin(median))
+  if width <= 0. or histogram.GetEntries() < 20:
+    return None
+  fit_low = max(low, median-2.*width)
+  fit_high = min(high, median+2.*width)
+  populated = sum(histogram.GetBinContent(index) > 0.
+                  for index in range(axis.GetFirst(), axis.GetLast()+1)
+                  if fit_low <= axis.GetBinCenter(index) <= fit_high)
+  if populated < 6:
+    return None
+  fit = ROOT.TF1(name, "gaus", fit_low, fit_high)
+  fit.SetParameters(histogram.GetMaximum(), median, width)
+  fit.SetParLimits(0, 0., 10.*histogram.GetMaximum())
+  fit.SetParLimits(1, fit_low, fit_high)
+  fit.SetParLimits(2, .2*bin_width, fit_high-fit_low)
+  result = histogram.Fit(fit, "QRS0NI")
+  # Refine around the peak: a broad initial window can follow asymmetric tails.
+  if fit_result_is_reliable(result):
+    core_low = max(low, fit.GetParameter(1)-fit.GetParameter(2))
+    core_high = min(high, fit.GetParameter(1)+fit.GetParameter(2))
+    core_bins = sum(histogram.GetBinContent(index) > 0.
+                    for index in range(axis.GetFirst(), axis.GetLast()+1)
+                    if core_low <= axis.GetBinCenter(index) <= core_high)
+    if core_bins >= 6:
+      fit.SetRange(core_low, core_high)
+      result = histogram.Fit(fit, "QRS0NI")
+  if not fit_result_is_reliable(result):
+    return None
+  sigma = fit.GetParameter(2)
+  error = fit.GetParError(2)
+  if (sigma <= .201*bin_width or sigma >= .999*(fit_high-fit_low)
+      or not math.isfinite(error) or error <= 0. or error >= sigma):
+    return None
+  return fit
+
+
+def draw_response_shape(pad, sources, kind, category, variable, settings, state=None, show_errors=True, log_y=True, fit_core=False):
   """Raw candidate or matched residual densities with Poisson error bars."""
   response_panel_style(pad)
   histograms, xs, ys = [], [], []
+  fit_histograms = {}
   for source_index, (label, source, color) in enumerate(sources):
+    # ProjectionY can reuse a named histogram already drawn in another pad.
+    # Each process and observable needs its own object until the page is saved.
+    shape_name = f"shape_{pad.GetName()}_{kind}_{category}_{state}_{variable}_{source_index}"
     if state is None:
       name = f"{kind.lower()}/Shift{kind}{'Vertex' if kind == 'Dimuon' else ''}{category}_{variable}"
       original = source.Get(name)
-      histogram = original.Clone("candidate_shape") if original else None
+      histogram = original.Clone(shape_name) if original else None
     else:
       name = f"response/{kind}Response{category}{state}_{variable}Vspt"
       original = source.Get(name)
-      histogram = original.ProjectionY("residual_shape", 0, original.GetNbinsX()+1) if original else None
+      histogram = original.ProjectionY(shape_name, 0, original.GetNbinsX()+1) if original else None
     if not histogram:
       raise RuntimeError("Missing diagnostic histogram: " + name)
     histogram.SetDirectory(0)
+    unit_scale = .01 if fit_core and variable == "vz" else 1.
+    if unit_scale != 1.:
+      axis = histogram.GetXaxis()
+      edges = array("d", [axis.GetBinLowEdge(i)*unit_scale
+                          for i in range(1, histogram.GetNbinsX()+2)])
+      axis.Set(histogram.GetNbinsX(), edges)
+    bounds = tuple(value*unit_scale for value in settings["reconstructionResponseDisplayRanges"].get(variable, (0., 1.)))
+    fine = histogram.Clone(shape_name+"_fine") if fit_core else None
+    if fine:
+      fine.SetDirectory(0)
     if state is not None:
-      histogram.GetXaxis().SetRangeUser(*settings["reconstructionResponseDisplayRanges"][variable])
+      histogram.GetXaxis().SetRangeUser(*bounds)
     visible_bins = histogram.GetXaxis().GetLast()-histogram.GetXaxis().GetFirst()+1
     factor = max(factor for factor in (1, 2, 4, 5, 10, 20)
                  if histogram.GetNbinsX() % factor == 0 and (factor == 1 or visible_bins/factor >= 40))
+    if fit_core:
+      factor = 1 if variable in ("vx", "vy") else 4
     if factor > 1:
       histogram.Rebin(factor)
     total = histogram.Integral(0, histogram.GetNbinsX()+1)
@@ -1638,13 +1717,19 @@ def draw_response_shape(pad, sources, kind, category, variable, settings, state=
     for bin_index in range(histogram.GetNbinsX()+2):
       histogram.SetBinError(bin_index, math.sqrt(histogram.GetBinContent(bin_index)))
     histogram.Scale(1./total, "width")
+    if fine:
+      for bin_index in range(fine.GetNbinsX()+2):
+        fine.SetBinError(bin_index, math.sqrt(fine.GetBinContent(bin_index)))
+      fine.Scale(1./total, "width")
+      fine.GetXaxis().SetRangeUser(*bounds)
+      fit_histograms[shape_name] = fine
     if state is not None:
-      histogram.GetXaxis().SetRangeUser(*settings["reconstructionResponseDisplayRanges"][variable])
+      histogram.GetXaxis().SetRangeUser(*bounds)
     histogram.SetLineColor(color)
     histogram.SetMarkerColor(color)
     histogram.SetMarkerStyle(20+source_index)
     histogram.SetMarkerSize(.45)
-    histogram.SetLineWidth(1)
+    histogram.SetLineWidth(1 if show_errors else 2)
     for bin_index in range(histogram.GetXaxis().GetFirst(), histogram.GetXaxis().GetLast()+1):
       if histogram.GetBinContent(bin_index) > 0.:
         xs.extend([histogram.GetXaxis().GetBinLowEdge(bin_index), histogram.GetXaxis().GetBinUpEdge(bin_index)])
@@ -1655,32 +1740,126 @@ def draw_response_shape(pad, sources, kind, category, variable, settings, state=
   text = ROOT.TLatex()
   text.SetNDC(True)
   text.SetTextSize(.036)
+  retained = []
+  legend = ROOT.TLegend(.60, .64, .95, .86)
+  legend.SetBorderSize(0)
+  legend.SetFillColor(ROOT.kWhite)
+  legend.SetFillStyle(1001)
+  legend.SetTextSize(.055)
   if histograms and ys:
-    pad.SetLogy(True)
+    pad.SetLogy(log_y)
     for index, (histogram, label, total, outside) in enumerate(histograms):
       x_title = settings["reconstructionDiagnosticLabels"].get(variable, variable) if state is None else settings["reconstructionResponseVariables"][variable]
+      if fit_core and variable == "vz":
+        x_title = x_title.replace("[cm]", "[m]")
       title = "Reconstructed candidates" if state is None else ("Constrained" if state else "Unconstrained")
       histogram.SetTitle(f"{title};{x_title};Fraction / variable unit")
-      histogram.SetMinimum(min(ys)*.03)
-      histogram.SetMaximum(max(ys)*8.)
+      vertex = fit_core and variable in ("vx", "vy", "vz")
+      histogram.SetMinimum(max(ys)*1.e-3 if log_y and vertex else (min(ys)*.03 if log_y else 0.))
+      histogram.SetMaximum(max(ys)*(1.5 if vertex else (8. if log_y else 2.)))
       if state is None and xs:
         histogram.GetXaxis().SetRangeUser(min(xs), max(xs))
       response_axis_style(histogram)
-      histogram.Draw("E1 LP" if index == 0 else "E1 LP SAME")
-      text.SetTextColor(histogram.GetLineColor())
-      text.DrawLatex(.2, .84-index*.065, f"{label}: N={int(round(total))}, outside={100.*outside:.1f}%")
+      option = "E1 P" if fit_core else ("E1 LP" if show_errors else "HIST")
+      histogram.Draw(option if index == 0 else option + " SAME")
+      if fit_core:
+        display_label = label.split(" (", 1)[0]
+        fit = fit_response_core(fit_histograms[histogram.GetName()], histogram.GetName()+"_gaussian")
+        if fit:
+          fit.SetLineColor(histogram.GetLineColor())
+          fit.SetLineWidth(2)
+          fit.Draw("SAME")
+          retained.append(fit)
+          sigma = fit.GetParameter(2)
+          value = (f"{100.*sigma:.1f}%" if variable in ("pt", "p", "mass")
+                   else f"{sigma:.2f} m" if variable == "vz"
+                   else f"{sigma/100.:.2f} m" if sigma >= 100.
+                   else f"{sigma:.1f} cm")
+          legend.AddEntry(histogram, f"{display_label}: #sigma = {value}", "pe")
+          print(f"Core fit {label} {variable}: sigma={sigma:.8g}, sigma_error={fit.GetParError(2):.8g}, mean={fit.GetParameter(1):.8g}, "
+                f"range=[{fit.GetXmin():.8g},{fit.GetXmax():.8g}], chi2/ndf={fit.GetChisquare():.6g}/{fit.GetNDF()}")
+        else:
+          legend.AddEntry(histogram, f"{display_label}: fit unavailable", "pe")
+          print(f"Core fit {label} {variable}: unavailable")
+      else:
+        text.SetTextColor(histogram.GetLineColor())
+        text.DrawLatex(.2, .84-index*.065, f"{label}: N={int(round(total))}, outside={100.*outside:.1f}%")
+    if fit_core:
+      legend.Draw()
+      retained.append(legend)
   else:
     text.DrawLatex(.15, .55, "No entries: " + variable)
-  return [histogram for histogram, _, _, _ in histograms] + [text]
+  return [histogram for histogram, _, _, _ in histograms] + [text] + retained + list(fit_histograms.values())
 
 
-def draw_process_responses(input_paths, output_dir):
+def draw_dimuon_review(sources, output_dir, settings, linear_only=False, constrained_only=False):
+  """Residual distributions first, then one readable page per truth coordinate."""
+  settings = dict(settings)
+  linear_only = linear_only or constrained_only
+  settings["reconstructionResponseDisplayRanges"] = settings["reconstructionReviewResidualRanges"]
+  if constrained_only:
+    settings["reconstructionResponseDisplayRanges"] = dict(settings["reconstructionReviewResidualRanges"])
+    settings["reconstructionResponseDisplayRanges"].update(vx=(-15., 15.), vy=(-15., 15.), vz=(-300., 300.))
+  # Left column: transverse and total momentum. Right: mass and longitudinal vertex.
+  variables = ("pt", "mass", "p", "vz")
+  reports = (
+      ("dimuon_residual_distributions.pdf", (None,)),
+      ("dimuon_kinematic_dependence.pdf", ("mass", "pt", "p")),
+      ("dimuon_geometry_dependence.pdf", ("vz", "decayR", "openingAngle")),
+  )
+  if linear_only:
+    reports = (("dimuon_residual_distributions_linear.pdf", (None,)),)
+  if constrained_only:
+    reports = (("dimuon_residual_distributions_constrained_linear.pdf", (None,)),)
+  state = "Constrained" if constrained_only else ""
+  canvas = ROOT.TCanvas("dimuon_review", "Dimuon reconstruction", 1500, 1040)
+  title = "Dimuon | free vertex fit"
+  if constrained_only:
+    title = "Dimuon | target-constrained fit"
+  record = sources[0][1].Get("ShiftReconstructionDiagnostics")
+  if record:
+    date = json.loads(record.GetString().Data()).get("date")
+    if date:
+      title += " | " + date
+  cache = {}
+  for filename, axes in reports:
+    output = os.path.join(output_dir, filename)
+    canvas.Print(output + "[")
+    for page, axis in enumerate(axes, 1):
+      if axis is None:
+        section = "Matched residual distributions"
+        if linear_only:
+          section += " (linear scale)"
+        note = "Unit-normalized unweighted points with Poisson errors | Gaussian core fits: #sigma describes the core, not the tails | shared-origin vertices"
+      else:
+        section = "Resolution vs " + settings["reconstructionResponseAxes"][axis]
+        note = "Unweighted entries | central-68% half-width | entry-level 68% intervals + binning | N#geq20 | gaps = unresolved bins"
+      panels, retained = response_report_page(
+          canvas, title, section, page, sources, note, show_legend=axis is not None, rows=2)
+      for index, variable in enumerate(variables):
+        pad = panels.cd(index + 1)
+        if axis is None:
+          retained.extend(draw_response_shape(
+              pad, sources, "Dimuon", "", variable, settings, state, show_errors=True,
+              log_y=not linear_only, fit_core=True))
+        else:
+          retained.extend(draw_response_panel(
+              pad, sources, "Dimuon", "", "", variable, axis, "width", settings, cache))
+      canvas.cd()
+      canvas.Print(output, "Title:" + section)
+    canvas.Print(output + "]")
+  canvas.Close()
+
+
+def draw_process_responses(input_paths, output_dir, dimuon_review=False, linear_only=False, constrained_only=False):
   """One category report with direct comparisons first and the full mixed grid."""
   settings = reconstruction_plot_settings()
   sources = []
   colors = [ROOT.kGreen+2, ROOT.kBlue+1, ROOT.kOrange+7, ROOT.kRed+1]
   for index, specification in enumerate(input_paths):
     label, path = specification.split("=", 1)
+    if label == "QCD":
+      continue
     source = ROOT.TFile.Open(path)
     if not source or source.IsZombie():
       raise RuntimeError("Cannot open process response: " + path)
@@ -1688,6 +1867,13 @@ def draw_process_responses(input_paths, output_dir):
   os.makedirs(output_dir, exist_ok=True)
   ROOT.gStyle.SetPaperSize(28., 19.5)
   ROOT.gStyle.SetTitleFontSize(.06)
+  if dimuon_review or linear_only or constrained_only:
+    try:
+      draw_dimuon_review(sources, output_dir, settings, linear_only, constrained_only)
+    finally:
+      for _, source, _ in sources:
+        source.Close()
+    return
   canvas = ROOT.TCanvas("process_response", "Process response", 1500, 1040)
   reports = {}
   for kind, categories in (("Muon", MUON_RESOLUTION_TYPES), ("Dimuon", DIMUON_RESOLUTION_TYPES)):
@@ -1782,11 +1968,14 @@ def main():
   ROOT.gROOT.SetBatch(True)
 
   args = parse_arguments()
+  if (args.dimuon_review or args.dimuon_review_linear or args.dimuon_review_constrained_linear) and not args.process_input:
+    raise SystemExit("error: dimuon review requires --process-input")
   if args.process_input:
     if args.input or args.version is not None or args.compare_versions or args.rebin_2d:
       raise SystemExit("error: process inputs cannot be combined with version or correlation options")
     try:
-      draw_process_responses(args.process_input, args.output_dir)
+      draw_process_responses(args.process_input, args.output_dir, args.dimuon_review,
+                             args.dimuon_review_linear, args.dimuon_review_constrained_linear)
     except (RuntimeError, ValueError) as error:
       raise SystemExit(f"error: {error}") from error
     return
