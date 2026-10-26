@@ -31,6 +31,19 @@ Don't put these labels in `tea` repo, only in the analysis repo `tes_shift_cmssw
 
 ## Extend the main SHIFT configs
 
+## Production statistics and recovery
+
+- Follow the workspace AGENTS.md section "Production lessons from the October
+  26 SM failure". Validate actual plotted dimuons and Both-Both tail precision,
+  not just GEN counts or a successful histogram job. Keep topology, charge and
+  vertex-quality requirements explicit when comparing efficiencies.
+- Report processed exposure and independent effective statistics per sample.
+  Do not confuse generator trials, saved GEN, admission, raw pair counts and
+  weighted precision. Preserve original exposure and sampling corrections.
+- Available completed histograms should remain usable through ordinary campaign
+  settings. Publish meaningful increments and verify their normalization;
+  incomplete unrelated bins must not block ready samples.
+
 ## Final analysis results and plots
 
 - Put every final, user-facing analysis result in this repository. Final
