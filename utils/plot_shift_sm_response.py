@@ -189,6 +189,7 @@ def plot_benchmark(summary, output):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
     import numpy as np
 
     report = summary['stratified_benchmark']
@@ -258,10 +259,49 @@ def plot_benchmark(summary, output):
     fig.text(.04, .075, 'Sampling differs between groups. Raw counts are not population efficiencies; zero controls still allow missed useful events.', fontsize=10)
     fig.text(.04, .03, 'Forecasts apply to the existing selected GEN census. Unknown pointing paths/models stay protected; the production default is unchanged.', fontsize=10)
     output.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output)
+    reserve = summary.get('reserve_opportunities')
+    with PdfPages(output) as pdf:
+        pdf.savefig(fig)
+        if reserve:
+            second, axes = plt.subplots(1, 2, figsize=(14, 5.7),
+                gridspec_kw={'width_ratios': [1.1, 1.]})
+            second.subplots_adjust(left=.04, right=.97, top=.82, bottom=.30, wspace=.20)
+            second.suptitle('Unused QCD GEN: a concrete starting point for rare-decay sampling',
+                            fontsize=16, y=.98)
+            second.text(.5, .91, 'Original pion parents before natural decay; no detector yield or tail improvement is inferred',
+                        ha='center', fontsize=11)
+            axes[0].axis('off')
+            table = axes[0].table(cellText=[[
+                row['stratum'].split('_')[1].replace('to', '–').replace('inf', '∞'),
+                str(row['original_events']), str(row['strict_parent_tail_events']),
+                str(row['unclassified_original_pions'])] for row in reserve['cohorts']],
+                colLabels=[r'$\hat p_T$ [GeV]', 'GEN events', 'Parent mass >20', 'Unclassified pions'],
+                loc='center', cellLoc='center', colWidths=[.18, .21, .29, .32])
+            table.auto_set_font_size(False)
+            table.set_fontsize(10)
+            table.scale(1., 2.2)
+            for (row, column), cell in table.get_celld().items():
+                cell.set_edgecolor('#c5cdd3')
+                if row == 0:
+                    cell.set_facecolor('#e3eaf0')
+                    cell.set_text_props(weight='bold')
+            axes[0].set_title('Independent original-event opportunities', fontsize=11)
+            masses = reserve['largest_strict_parent_pair_mass_per_original_GeV']
+            axes[1].hist(masses, bins=np.arange(20., 42., 2.), color='#256b9a', edgecolor='white')
+            axes[1].set_xlabel('Largest eligible pion-parent pair mass per original [GeV]')
+            axes[1].set_ylabel('Original GEN events, unweighted')
+            axes[1].set_title('One entry per original; parent mass differs from dimuon mass', fontsize=10)
+            axes[1].grid(axis='y', alpha=.2)
+            second.text(.04, .20, 'Both pion parents have OS charge and straight rays through ≥2 station envelopes in each endcap. No muon-pT cut.', fontsize=10)
+            second.text(.04, .15, 'Rare early decays could provide useful daughters. Physical parent absorption, energy loss and detector response must remain unchanged.', fontsize=10)
+            second.text(.04, .10, 'A biased lifetime draw needs its exact full-mixture correction once; repeated draws of one original are not independent events.', fontsize=10)
+            second.text(.04, .05, 'This is a lower-bound opportunity census. Unclassified pions are unknown, not zero; these counts are not a physical event rate.', fontsize=10)
+            pdf.savefig(second)
+            plt.close(second)
     plt.close(fig)
     return dict(raw_fixed_draw_counts=counts, forecast_scope=report['forecast_scope'],
-                physical_yield_estimate=False, production_policy_qualified=False)
+                physical_yield_estimate=False, production_policy_qualified=False,
+                reserve_opportunities_included=reserve is not None)
 
 
 def main():
