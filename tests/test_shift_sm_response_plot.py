@@ -57,6 +57,23 @@ class StratifiedPlotTest(unittest.TestCase):
         self.assertTrue(receipt['reserve_opportunities_included'])
         self.assertFalse(receipt['physical_yield_estimate'])
 
+    def test_decay_result_reports_weighted_limit_and_bad_momentum(self):
+        summary = self.summary()
+        summary['decay_pilot'] = dict(
+            arms={arm: dict(events=12, categories=dict(both_both_good=dict(
+                mass_gt20=dict(raw_pairs=count, effective_originals=effective))))
+                for arm, count, effective in [('ordinary', 0, 0.), ('mixture', 2, 1.002)]},
+            muons=dict(ordinary=0, mixture=10),
+            positive_pairs=[dict(mass_GeV=20.73, final_weight=7.16e-20),
+                            dict(mass_GeV=136.13, final_weight=8.49e-23)])
+        receipt, text = self.render(summary)
+        self.assertIn('1.002', text)
+        self.assertIn('inflated reconstructed momentum', text)
+        self.assertIn('No orders-of-magnitude gain is established', text)
+        self.assertIn('Zero ordinary pairs do not establish zero rate', text)
+        self.assertTrue(receipt['decay_pilot_included'])
+        self.assertFalse(receipt['production_policy_qualified'])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -298,10 +298,49 @@ def plot_benchmark(summary, output):
             second.text(.04, .05, 'This is a lower-bound opportunity census. Unclassified pions are unknown, not zero; these counts are not a physical event rate.', fontsize=10)
             pdf.savefig(second)
             plt.close(second)
+        decay = summary.get('decay_pilot')
+        if decay:
+            third, axes = plt.subplots(1, 2, figsize=(14, 5.7))
+            third.subplots_adjust(left=.06, right=.97, top=.79, bottom=.30, wspace=.35)
+            third.suptitle('Early-decay test: reconstructed pairs, limited weighted statistics',
+                           fontsize=16, y=.98)
+            third.text(.5, .91, f"{decay['arms']['ordinary']['events']} selected original QCD events, each reconstructed with ordinary and biased lifetimes",
+                       ha='center', fontsize=11)
+            axes[0].axis('off')
+            rows = []
+            for arm, label in [('ordinary', 'Ordinary'), ('mixture', 'Early-decay mixture')]:
+                stats = decay['arms'][arm]['categories']['both_both_good']['mass_gt20']
+                rows.append([label, str(decay['muons'][arm]), str(stats['raw_pairs']),
+                             f"{stats['effective_originals']:.3f}"])
+            table = axes[0].table(cellText=rows,
+                colLabels=['Lifetime draw', 'Reco muons', 'OS Both-Both\n+ Good, mass >20', 'Effective\ntail events'],
+                colWidths=[.32, .19, .27, .22], loc='center', cellLoc='center')
+            table.auto_set_font_size(False)
+            table.set_fontsize(10)
+            table.scale(1., 2.5)
+            for (row, column), cell in table.get_celld().items():
+                cell.set_edgecolor('#c5cdd3')
+                if row == 0:
+                    cell.set_facecolor('#e3eaf0')
+            pairs = decay['positive_pairs']
+            axes[1].scatter([p['mass_GeV'] for p in pairs], [p['final_weight'] for p in pairs],
+                            color='#256b9a', s=60)
+            axes[1].set_yscale('log')
+            axes[1].set_xlabel('Reconstructed dimuon mass [GeV]')
+            axes[1].set_ylabel('Native event weight × exact decay correction')
+            axes[1].set_title('Each point is one original collision', fontsize=11)
+            axes[1].grid(alpha=.2)
+            third.text(.04, .20, 'The 136 GeV entry has inflated reconstructed momentum and a weak second hit association.', fontsize=11)
+            third.text(.04, .15, 'Neither pair has two strict hit-to-GEN matches. Reconstructed mass is not evidence of a true 136 GeV pair.', fontsize=10)
+            third.text(.04, .10, 'The two weights differ greatly: effective tail statistics are about one event. No orders-of-magnitude gain is established.', fontsize=10)
+            third.text(.04, .05, 'Conditional mechanism test, not a physical yield prediction. Zero ordinary pairs do not establish zero rate.', fontsize=10)
+            pdf.savefig(third)
+            plt.close(third)
     plt.close(fig)
     return dict(raw_fixed_draw_counts=counts, forecast_scope=report['forecast_scope'],
                 physical_yield_estimate=False, production_policy_qualified=False,
-                reserve_opportunities_included=reserve is not None)
+                reserve_opportunities_included=reserve is not None,
+                decay_pilot_included=summary.get('decay_pilot') is not None)
 
 
 def main():
