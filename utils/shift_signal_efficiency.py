@@ -127,10 +127,13 @@ def weighted_response_statistics(probabilities, passed, full_gen_events, target=
             or not len(passed) <= full_gen_events or full_gen_events <= 0
             or type(target) is not int or target <= 0):
         raise ValueError('Require complete admitted events, valid probabilities and original GEN count')
-    weights = 1. / probabilities
-    selected = weights[passed]
-    sumw = float(selected.sum())
-    sumw2 = float(np.square(selected).sum())
+    with np.errstate(over='ignore', divide='ignore'):
+        weights = 1. / probabilities
+        selected = weights[passed]
+        sumw = float(selected.sum())
+        sumw2 = float(np.square(selected).sum())
+    if not np.isfinite(weights).all() or not math.isfinite(sumw + sumw2):
+        raise ValueError('Sampling weights overflow the response diagnostic')
     effective = sumw * sumw / sumw2 if sumw2 else 0.
     return dict(processed_events=len(passed), raw_passing_events=int(passed.sum()),
         original_gen_events=full_gen_events, passing_sumw=sumw, passing_sumw2=sumw2,
@@ -201,7 +204,9 @@ def measure_weighted_histogram(histogram_path, native=False, target=3000):
             hist = histograms.Get('event/Event_nShiftDimuonVertex' + category)
             if (not hist or hist.GetBinContent(0) != 0
                     or not math.isclose(hist.GetEntries(), len(probabilities))
-                    or not math.isclose(hist.Integral(2, hist.GetNbinsX()+1), counts['passing_sumw'], rel_tol=1.e-10, abs_tol=1.e-10)):
+                    or not math.isclose(hist.Integral(2, hist.GetNbinsX()+1), counts['passing_sumw'], rel_tol=1.e-10, abs_tol=1.e-10)
+                    or not math.isclose(sum(hist.GetBinError(i)**2 for i in range(2, hist.GetNbinsX()+2)),
+                                        counts['passing_sumw2'], rel_tol=1.e-10, abs_tol=1.e-10)):
                 raise ValueError('Grouped event response differs from published multiplicity histogram')
             result[name] = counts
         result['readiness'] = 'Response diagnostic; inspect tails, source correlations and costs before bulk allocation'

@@ -50,7 +50,7 @@ class EfficiencyDiagnosticTest(unittest.TestCase):
         self.assertEqual(stable['projected_total_gen_events'], 6000)
 
     def test_weighted_response_rejects_bad_probabilities_and_exposure(self):
-        for probability in (0., 1.1, float('nan')):
+        for probability in (0., 1.1, float('nan'), 1.e-309):
             with self.assertRaises(ValueError):
                 DIAGNOSTIC.weighted_response_statistics([probability], np.array([True]), 2)
         with self.assertRaises(ValueError):
