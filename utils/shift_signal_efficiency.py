@@ -112,6 +112,106 @@ def rounded_events(value):
     return int(math.ceil(value / 20.0) * 20)
 
 
+def weighted_response_statistics(probabilities, passed, full_gen_events, target=3000):
+    """Survey weights estimate original response; raw counts describe admission.
+
+    One boolean per simulated GEN event prevents multiple pairs from inflating
+    the passing statistics. The Poisson MC error is a sparse-count diagnostic,
+    not a confidence interval or a source-collision clustering calculation.
+    """
+    probabilities = np.asarray(probabilities, dtype=float)
+    passed = np.asarray(passed)
+    if (probabilities.ndim != 1 or passed.shape != probabilities.shape or passed.dtype.kind != 'b'
+            or not np.isfinite(probabilities).all() or np.any(probabilities <= 0)
+            or np.any(probabilities > 1) or type(full_gen_events) is not int
+            or not len(passed) <= full_gen_events or full_gen_events <= 0
+            or type(target) is not int or target <= 0):
+        raise ValueError('Require complete admitted events, valid probabilities and original GEN count')
+    weights = 1. / probabilities
+    selected = weights[passed]
+    sumw = float(selected.sum())
+    sumw2 = float(np.square(selected).sum())
+    effective = sumw * sumw / sumw2 if sumw2 else 0.
+    return dict(processed_events=len(passed), raw_passing_events=int(passed.sum()),
+        original_gen_events=full_gen_events, passing_sumw=sumw, passing_sumw2=sumw2,
+        effective_passing_events=effective, original_population_efficiency=sumw / full_gen_events,
+        poisson_mc_standard_error=math.sqrt(sumw2) / full_gen_events if sumw2 else None,
+        relative_mc_error=math.sqrt(sumw2) / sumw if sumw else None,
+        target_effective_passing_events=target,
+        projected_total_gen_events=rounded_events(full_gen_events * target / effective) if effective >= 30 else None,
+        status='provisional_projection' if effective >= 30 else 'bounded_followup_required',
+        uncertainty_scope='Poisson diagnostic only; source-collision correlations and physical rate uncertainty are not included',
+        zero_pass_interpretation='No finite efficiency forecast or zero-error claim follows from no observed passes')
+
+
+def measure_weighted_histogram(histogram_path, native=False, target=3000):
+    """Read one complete main-histogram cohort and its grouped, weighted Nano.
+
+    Cumulative histogram-only merges retain Nanos at their source locations;
+    evaluate those source cohorts individually with this diagnostic.
+    """
+    histogram_path = Path(histogram_path)
+    histograms = open_histograms(histogram_path, native)
+    nano = None
+    try:
+        marker = histograms.Get('ShiftFullGenNormalization')
+        if not marker:
+            raise ValueError('Weighted response needs embedded original GEN normalization')
+        normalization = json.loads(marker.GetString().Data())
+        if (normalization.get('denominator_kind') != 'conditional_signal_events'
+                or normalization.get('histogram_weight') != 'native_gen_weight/reco_inclusion_probability'):
+            raise ValueError('Weighted response currently requires unit-weight conditional signal GEN')
+        original = normalization['full_source_sumw']
+        if not math.isfinite(original) or int(original) != original or original <= 0:
+            raise ValueError('Invalid original GEN count')
+        original = int(original)
+        nano_path = histogram_path.parent.parent / 'nanoAOD_merged' / histogram_path.name
+        nano = open_histograms(nano_path, native)
+        tree = nano.Get('Events')
+        required = ['run', 'luminosityBlock', 'event', 'nShiftDimuonVertex',
+                    'ShiftDimuonVertex_topologyMin', 'ShiftDimuonVertex_topologyMax',
+                    'shiftOriginalGenWeight', 'shiftSamplingProbability', 'shiftSamplingGenWeight']
+        if not tree or any(not tree.GetBranch(name) for name in required):
+            raise ValueError('Grouped Nano lacks response or frozen sampling branches')
+        tree.SetBranchStatus('*', 0)
+        for name in required:
+            tree.SetBranchStatus(name, 1)
+        ids = set()
+        probabilities, inclusive, both = [], [], []
+        for event in tree:
+            identity = (int(event.run), int(event.luminosityBlock), int(event.event))
+            if identity in ids:
+                raise ValueError('Repeated original event in grouped Nano')
+            ids.add(identity)
+            if (len(event.ShiftDimuonVertex_topologyMin) != int(event.nShiftDimuonVertex)
+                    or len(event.ShiftDimuonVertex_topologyMax) != int(event.nShiftDimuonVertex)):
+                raise ValueError('Dimuon topology vectors differ from their event multiplicity')
+            probability = float(event.shiftSamplingProbability)
+            if (float(event.shiftOriginalGenWeight) != 1. or not 0 < probability <= 1
+                    or not math.isclose(float(event.shiftSamplingGenWeight), 1. / probability, rel_tol=1.e-10)):
+                raise ValueError('Grouped Nano changed the unit native weight or W/p')
+            probabilities.append(probability)
+            inclusive.append(int(event.nShiftDimuonVertex) > 0)
+            both.append(any(int(low) == 2 and int(high) == 2 for low, high in
+                            zip(event.ShiftDimuonVertex_topologyMin, event.ShiftDimuonVertex_topologyMax)))
+        result = dict(histogram_path=str(histogram_path), nano_path=str(nano_path),
+                      normalization=normalization, no_analysis_cuts_or_truth_matching=True)
+        for name, category, passed in [('inclusive', '', inclusive), ('both_both', 'Both-Both', both)]:
+            counts = weighted_response_statistics(probabilities, np.asarray(passed, dtype=bool), original, target)
+            hist = histograms.Get('event/Event_nShiftDimuonVertex' + category)
+            if (not hist or hist.GetBinContent(0) != 0
+                    or not math.isclose(hist.GetEntries(), len(probabilities))
+                    or not math.isclose(hist.Integral(2, hist.GetNbinsX()+1), counts['passing_sumw'], rel_tol=1.e-10, abs_tol=1.e-10)):
+                raise ValueError('Grouped event response differs from published multiplicity histogram')
+            result[name] = counts
+        result['readiness'] = 'Response diagnostic; inspect tails, source correlations and costs before bulk allocation'
+        return result
+    finally:
+        if nano:
+            nano.Close()
+        histograms.Close()
+
+
 def event_statistics_plan(counts, target=3000, first_stage_target=500):
     """Size independent GEN events for a common number of passing events.
 
@@ -509,6 +609,8 @@ def main():
     parser.add_argument("--storage-density-inventory", type=Path)
     parser.add_argument("--round-budget-gb", type=float, default=100., help="Decimal GB; requires a density inventory")
     parser.add_argument("--native-xrootd", action="store_true", help="Read ROOT objects through native EOS XRootD")
+    parser.add_argument('--weighted-histograms', nargs='+', type=Path,
+                        help='Measure complete W/p-weighted main histograms using their grouped Nano; write a response JSON')
     args = parser.parse_args()
     if not 0 < args.relative_error < 1 or not 0 < args.core_fraction < 1:
         parser.error("Relative error and core fraction must lie between zero and one")
@@ -516,6 +618,14 @@ def main():
         parser.error("Selected-event targets require 0 < first-stage <= final target")
     import ROOT
     ROOT.gROOT.SetBatch(True)
+    if args.weighted_histograms:
+        rows = [measure_weighted_histogram(path, args.native_xrootd, args.target_selected_events)
+                for path in args.weighted_histograms]
+        args.output.mkdir(parents=True, exist_ok=True)
+        report = dict(schema='shift-weighted-signal-response-v1', points=rows,
+                      source_code_sha256=digest(__file__), created_utc=datetime.now(timezone.utc).isoformat())
+        (args.output / 'weighted_efficiency.json').write_text(json.dumps(report, indent=2, allow_nan=False) + '\n')
+        return
     from shift_paths import base_path, bsm_campaign
     from shift_sample_paths import available_bsm_campaign_histograms
     campaign = args.campaign or bsm_campaign

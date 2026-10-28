@@ -2,8 +2,12 @@
 import importlib.util
 from pathlib import Path
 import unittest
+import tempfile
+import json
+from array import array
 
 import ROOT
+import numpy as np
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "utils/shift_signal_efficiency.py"
@@ -31,6 +35,65 @@ def histogram(name, values, lower=0, upper=None):
 
 
 class EfficiencyDiagnosticTest(unittest.TestCase):
+    def test_weighted_response_counts_events_and_preserves_full_gen(self):
+        result = DIAGNOSTIC.weighted_response_statistics([.5, .1, 1.], np.array([False, True, True]), 10)
+        self.assertEqual(result['raw_passing_events'], 2)
+        self.assertEqual(result['passing_sumw'], 11.)
+        self.assertEqual(result['passing_sumw2'], 101.)
+        self.assertAlmostEqual(result['effective_passing_events'], 121. / 101.)
+        self.assertEqual(result['original_population_efficiency'], 1.1)  # Do not clip a noisy HT estimate.
+        self.assertIsNone(result['projected_total_gen_events'])
+        zero = DIAGNOSTIC.weighted_response_statistics([.1, 1.], np.array([False, False]), 10)
+        self.assertIsNone(zero['poisson_mc_standard_error'])
+        self.assertEqual(zero['status'], 'bounded_followup_required')
+        stable = DIAGNOSTIC.weighted_response_statistics([1.] * 100, np.ones(100, dtype=bool), 200)
+        self.assertEqual(stable['projected_total_gen_events'], 6000)
+
+    def test_weighted_response_rejects_bad_probabilities_and_exposure(self):
+        for probability in (0., 1.1, float('nan')):
+            with self.assertRaises(ValueError):
+                DIAGNOSTIC.weighted_response_statistics([probability], np.array([True]), 2)
+        with self.assertRaises(ValueError):
+            DIAGNOSTIC.weighted_response_statistics([1., 1.], np.array([True, True]), 1)
+
+    def test_grouped_nano_response_agrees_with_weighted_histograms(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = Path(tmp)
+            (campaign / 'nanoAOD_merged').mkdir()
+            (campaign / 'histograms_merged').mkdir()
+            root = ROOT.TFile(str(campaign / 'nanoAOD_merged/ntuple_0.root'), 'RECREATE')
+            tree = ROOT.TTree('Events', '')
+            integers = {name: array('i', [1]) for name in ('run', 'luminosityBlock', 'event', 'nShiftDimuonVertex')}
+            doubles = {name: array('d', [1.]) for name in ('shiftOriginalGenWeight', 'shiftSamplingProbability', 'shiftSamplingGenWeight')}
+            vectors = {name: ROOT.std.vector('int')() for name in ('ShiftDimuonVertex_topologyMin', 'ShiftDimuonVertex_topologyMax')}
+            for name, value in integers.items(): tree.Branch(name, value, name + '/I')
+            for name, value in doubles.items(): tree.Branch(name, value, name + '/D')
+            for name, value in vectors.items(): tree.Branch(name, value)
+            for i, probability in enumerate((.5, 1.)):
+                integers['event'][0] = i + 1
+                integers['nShiftDimuonVertex'][0] = i + 1
+                doubles['shiftSamplingProbability'][0] = probability
+                doubles['shiftSamplingGenWeight'][0] = 1. / probability
+                for vector in vectors.values():
+                    vector.clear()
+                    for j in range(i + 1): vector.push_back(2)
+                tree.Fill()
+            tree.Write(); root.Close()
+            path = campaign / 'histograms_merged/ntuple_0.root'
+            root = ROOT.TFile(str(path), 'RECREATE')
+            ROOT.TObjString(json.dumps(dict(denominator_kind='conditional_signal_events', full_source_sumw=10,
+                histogram_weight='native_gen_weight/reco_inclusion_probability'))).Write('ShiftFullGenNormalization')
+            root.mkdir('event').cd()
+            for category in ('', 'Both-Both'):
+                hist = ROOT.TH1D('Event_nShiftDimuonVertex' + category, '', 10, 0, 10)
+                hist.Fill(1, 2.); hist.Fill(2, 1.); hist.Write()
+            root.Close()
+            result = DIAGNOSTIC.measure_weighted_histogram(path)
+            self.assertEqual(result['both_both']['raw_passing_events'], 2)
+            self.assertEqual(result['both_both']['passing_sumw'], 3.)
+            self.assertEqual(result['both_both']['passing_sumw2'], 5.)
+            self.assertEqual(result['both_both']['original_population_efficiency'], .3)
+
     def setUp(self):
         ROOT.gROOT.SetBatch(True)
         self.settings = dict(rebin=1, minimum_cm=0, maximum_cm=10)
