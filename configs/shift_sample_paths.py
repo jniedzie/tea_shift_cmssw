@@ -707,7 +707,9 @@ def available_bsm_campaign_histograms(base_path, campaign, masses=None, mean_lab
                 ctau = float(match.group(5).replace('em', 'e-').replace('ep', 'e+').replace('p', '.'))
             # This is optional sample parameter metadata, not a production-
             # validation dependency. LAB directories remain directly plottable.
-            metadata_path = directory / 'sample.json'
+            metadata_path = directory / campaign / 'sample_parameters.json'
+            if not metadata_path.is_file():
+                metadata_path = directory / 'sample.json'
             if metadata_path.is_file() or match.group(5):
                 try:
                     metadata = json.loads(metadata_path.read_text())

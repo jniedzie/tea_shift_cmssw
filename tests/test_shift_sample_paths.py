@@ -115,6 +115,16 @@ class StreamingHistogramInputsTest(unittest.TestCase):
 
 
 class AvailableBsmHistogramsTest(unittest.TestCase):
+    def test_campaign_parameters_override_the_historical_lab_calibration(self):
+        path=self.histogram('m15_lab_100m');point=path.parent.parent.parent
+        original=dict(schema='shift-dark-photon-sample-v1',point='m15_lab_100m',mass_gev=15.,
+                      proper_ctau_mm=5.,mean_lab_flight_m=100.,selector_kind='mean_lab_flight')
+        (point/'sample.json').write_text(json.dumps(original))
+        (path.parent.parent/'sample_parameters.json').write_text(json.dumps(dict(original,proper_ctau_mm=12.)))
+        rows=self.inputs([15],[100])
+        self.assertEqual(rows[0]['proper_ctau_mm'],12.)
+        self.assertEqual(rows[0]['mean_lab_flight_m'],100.)
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
