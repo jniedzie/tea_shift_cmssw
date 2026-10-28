@@ -42,6 +42,23 @@ class StratifiedPlotTest(unittest.TestCase):
         self.assertIn('Raw counts are not population efficiencies', text)
         self.assertIn('production default is unchanged', text)
         self.assertFalse(receipt['production_policy_qualified'])
+
+    def test_completed_larger_comparison_replaces_the_old_outlier_description(self):
+        summary = self.summary()
+        summary['decay_pilot'] = dict(
+            arms={arm: dict(events=78, categories=dict(both_both_good=dict(
+                mass_gt20=dict(raw_pairs=0, effective_originals=0.))))
+                for arm in ['ordinary', 'mixture']},
+            muons=dict(ordinary=0, mixture=34),
+            positive_pairs=[dict(mass_GeV=17.3, final_weight=2.3e-17)],
+            comparison_description='78 originals drawn from 572 saved events; 156 completed responses',
+            notes=['Three good pairs; no observed target tails.',
+                   'Zero observed tails do not establish zero rate.'])
+        receipt, text = self.render(summary)
+        self.assertIn('156 completed responses', text)
+        self.assertIn('no observed target tails', text)
+        self.assertNotIn('136 GeV entry', text)
+        self.assertFalse(receipt['production_policy_qualified'])
         self.assertFalse(receipt['physical_yield_estimate'])
 
     def test_parent_opportunity_page_is_not_a_daughter_yield_claim(self):

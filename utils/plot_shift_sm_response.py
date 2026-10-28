@@ -304,7 +304,9 @@ def plot_benchmark(summary, output):
             third.subplots_adjust(left=.06, right=.97, top=.79, bottom=.30, wspace=.35)
             third.suptitle('Early-decay test: reconstructed pairs, limited weighted statistics',
                            fontsize=16, y=.98)
-            third.text(.5, .91, f"{decay['arms']['ordinary']['events']} selected original QCD events, each reconstructed with ordinary and biased lifetimes",
+            description = decay.get('comparison_description',
+                f"{decay['arms']['ordinary']['events']} selected original QCD events, each reconstructed with ordinary and biased lifetimes")
+            third.text(.5, .91, description,
                        ha='center', fontsize=11)
             axes[0].axis('off')
             rows = []
@@ -327,13 +329,16 @@ def plot_benchmark(summary, output):
                             color='#256b9a', s=60)
             axes[1].set_yscale('log')
             axes[1].set_xlabel('Reconstructed dimuon mass [GeV]')
-            axes[1].set_ylabel('Native event weight × exact decay correction')
+            axes[1].set_ylabel('Final event weight (including sampling)')
             axes[1].set_title('Each point is one original collision', fontsize=11)
             axes[1].grid(alpha=.2)
-            third.text(.04, .20, 'The 136 GeV entry has inflated reconstructed momentum and a weak second hit association.', fontsize=11)
-            third.text(.04, .15, 'Neither pair has two strict hit-to-GEN matches. Reconstructed mass is not evidence of a true 136 GeV pair.', fontsize=10)
-            third.text(.04, .10, 'The two weights differ greatly: effective tail statistics are about one event. No orders-of-magnitude gain is established.', fontsize=10)
-            third.text(.04, .05, 'Conditional mechanism test, not a physical yield prediction. Zero ordinary pairs do not establish zero rate.', fontsize=10)
+            notes = decay.get('notes', [
+                'The 136 GeV entry has inflated reconstructed momentum and a weak second hit association.',
+                'Neither pair has two strict hit-to-GEN matches. Reconstructed mass is not evidence of a true 136 GeV pair.',
+                'The two weights differ greatly: effective tail statistics are about one event. No orders-of-magnitude gain is established.',
+                'Conditional mechanism test, not a physical yield prediction. Zero ordinary pairs do not establish zero rate.'])
+            for y, note in zip([.20, .15, .10, .05], notes):
+                third.text(.04, y, note, fontsize=10)
             pdf.savefig(third)
             plt.close(third)
     plt.close(fig)
