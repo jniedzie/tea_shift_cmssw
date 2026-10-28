@@ -16,6 +16,21 @@ from pathlib import Path
 
 
 FEATURE = 'min_parent_prefix_depth'
+FEATURE_LABELS = {
+    FEATURE: ('known parent material',
+              'Smallest known incoming OS-pair parent depth [interaction lengths]',
+              'Known prefixes only: zero does not establish complete zero material.'),
+    'best_pair_miss_cm': ('pointing', 'GEN pair miss distance [cm]',
+                         'Straight-line pointing is a predictor; transport can change directions.'),
+    'best_pair_min_energy_GeV': ('energy', 'Lower muon energy of the best-pointing OS pair [GeV]',
+                              'Total energy, with no muon-pT requirement.'),
+    'best_pair_max_column_loss_over_p': ('muon material and momentum',
+        'Larger estimated material energy loss / total momentum in the best-pointing pair',
+        'This material predictor is not a measured survival probability.'),
+    'best_pair_birth_z_min_cm': ('birth position',
+        'Smaller birth z of the best-pointing OS pair [cm]',
+        'Unavailable features are shown separately, never interpreted as zero material.'),
+}
 CATEGORIES = ('both_both', 'both_both_good')
 PROCESSES = ('qcd', 'dy', 'jpsi')
 PROCESS_LABELS = {'qcd': 'QCD', 'dy': 'DY', 'jpsi': r'J/$\psi$'}
@@ -37,7 +52,7 @@ def wilson_interval(passed, count):
     return low, high
 
 
-def pool_response(summary):
+def pool_response(summary, feature=FEATURE, split=None):
     """Conserve N and K in every group; never average bin efficiencies."""
     if summary.get('schema') != 'shift-sm-measured-response-summary-v1':
         raise ValueError('Require the measured response summary schema')
@@ -48,11 +63,14 @@ def pool_response(summary):
             category: dict(events=0, positive=0, pairs=0) for category in CATEGORIES}))
         for process in PROCESSES}
     edges = None
+    selected_events = 0
     for group in summary['groups']:
+        if split is not None and group['study_split'] != split:
+            continue
         process = group['stratum'].split('_', 1)[0]
         if process not in pooled:
             raise ValueError('Unexpected SM process: '+process)
-        axis = group['efficiency_maps'][FEATURE]
+        axis = group['efficiency_maps'][feature]
         if edges is None:
             edges = axis['edges']
         if axis['edges'] != edges:
@@ -68,14 +86,18 @@ def pool_response(summary):
             pooled[process]['categories'][category]['positive'] += totals['positive_originals']
             pooled[process]['categories'][category]['pairs'] += totals['pairs']
         pooled[process]['events'] += group['totals']['both_both']['events']
+        selected_events += group['totals']['both_both']['events']
         for key, cell in axis['cells'].items():
             for category in CATEGORIES:
                 result = pooled[process]['cells'][key][category]
                 result['events'] += cell[category]['events']
                 result['positive'] += cell[category]['positive_originals']
                 result['pairs'] += cell[category]['pairs']
-    if sum(row['events'] for row in pooled.values()) != summary['events']:
+    expected_events = summary['events'] if split is None else selected_events
+    if sum(row['events'] for row in pooled.values()) != expected_events:
         raise ValueError('Process totals do not cover the input response population')
+    if edges is None:
+        raise ValueError('No response groups match the requested split')
     for process in PROCESSES:
         pooled[process]['cells'] = dict(pooled[process]['cells'])
     return edges, pooled
@@ -85,7 +107,7 @@ def bin_labels(edges, keys):
     labels = {}
     for key in keys:
         if key == 'unknown':
-            labels[key] = 'No incoming\nOS pair'
+            labels[key] = 'Unavailable'
         elif key == 'underflow':
             labels[key] = '<'+format(edges[0], 'g')
         elif key == 'overflow':
@@ -96,14 +118,15 @@ def bin_labels(edges, keys):
     return labels
 
 
-def plot(summary, output):
+def plot(summary, output, feature=FEATURE, split=None, pdf=None):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     from matplotlib.lines import Line2D
     import numpy as np
 
-    edges, pooled = pool_response(summary)
+    edges, pooled = pool_response(summary, feature, split)
+    title, xlabel, note = FEATURE_LABELS[feature]
     keys = [str(i) for i in range(len(edges)-1)]+['overflow', 'unknown']
     if any('underflow' in row['cells'] for row in pooled.values()):
         keys.insert(0, 'underflow')
@@ -118,9 +141,12 @@ def plot(summary, output):
         gridspec_kw={'height_ratios': [2.2, 1.]})
     fig.subplots_adjust(left=.065, right=.985, top=.805, bottom=.205,
                         hspace=.065, wspace=.19)
-    fig.suptitle('Measured dimuon response versus known parent material',
+    fig.suptitle('Measured dimuon response versus '+title,
                  fontsize=17, y=.978)
-    fig.text(.5, .937, f'{summary["events"]:,} originals from completed source cohorts; development and validation pooled for description',
+    events = sum(row['events'] for row in pooled.values())
+    scope = split+' only' if split else 'development and validation pooled for description'
+    description = summary.get('sample_description', 'originals from completed source cohorts')
+    fig.text(.5, .937, f'{events:,} '+description+'; '+scope,
              ha='center', fontsize=11)
     handles = [Line2D([], [], color=colors[c], marker='o', linestyle='none', label=names[c])
                for c in CATEGORIES]
@@ -134,7 +160,11 @@ def plot(summary, output):
         total = row['events']
         both = row['categories']['both_both']['positive']
         good = row['categories']['both_both_good']['positive']
-        top.set_title(PROCESS_LABELS[process]+f'\nN = {total:,}; Both-Both = {both:,}; Good = {good:,}', pad=10)
+        sampling_note = summary.get('process_sampling_notes', {}).get(process)
+        title_text = PROCESS_LABELS[process]+f'\nN = {total:,}; Both-Both = {both:,}; Good = {good:,}'
+        if sampling_note:
+            title_text += '\n'+sampling_note
+        top.set_title(title_text, pad=10)
         for category in CATEGORIES:
             for i, key in enumerate(keys):
                 cell = row['cells'].get(key, {}).get(category, {})
@@ -159,7 +189,7 @@ def plot(summary, output):
         populations = [row['cells'].get(key, {}).get('both_both', {}).get('events', 0) for key in keys]
         bottom.bar(x, populations, color='#cad3da', edgecolor='#64717c', linewidth=.6)
         bottom.set_yscale('log')
-        bottom.set_ylim(.65, max(populations)*4.)
+        bottom.set_ylim(.65, max(max(populations), 1)*4.)
         bottom.grid(axis='y', color='#e7e7e7', linewidth=.6)
         bottom.set_axisbelow(True)
         for i, count in enumerate(populations):
@@ -172,14 +202,19 @@ def plot(summary, output):
         for ax in (top, bottom):
             ax.spines['top'].set_visible(False)
             ax.spines['right'].set_visible(False)
-    fig.text(.525, .112, 'Smallest summed known parent-path depth of an incoming OS pair [interaction-length units]',
+    fig.text(.525, .112, xlabel,
              ha='center', fontsize=10.5)
     fig.text(.065, .066, 'Intervals describe the observed GEN proposal mix in completed cohorts, not physical yields. Rate normalization and production selection remain provisional.',
              fontsize=9)
-    fig.text(.065, .039, 'Only known external parent-path prefixes are included; zero depth does not prove zero total material. Good = OS, valid DCA, 0 ≤ DCA ≤ 50 cm.',
+    fig.text(.065, .039, note+' Good = OS, valid DCA, 0 ≤ DCA ≤ 50 cm.',
              fontsize=9)
+    fig.text(.065, .014, 'These are one-variable profiles. A joint admission decision must evaluate direction, energy and material for the same pair.',
+             fontsize=8.5)
     output.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output)
+    if pdf is None:
+        fig.savefig(output)
+    else:
+        pdf.savefig(fig)
     plt.close(fig)
     return edges, pooled
 
@@ -354,9 +389,33 @@ def main():
     parser.add_argument('output', type=Path)
     parser.add_argument('--receipt', type=Path)
     parser.add_argument('--stratified', action='store_true')
+    parser.add_argument('--all-features', action='store_true',
+                        help='Write the measured direction, energy, material and birth profiles into one PDF')
+    parser.add_argument('--split', choices=('development', 'validation'))
     args = parser.parse_args()
     raw = args.summary.read_bytes()
     summary = json.loads(raw)
+    if args.all_features:
+        if args.stratified:
+            parser.error('--all-features and --stratified are separate report types')
+        from matplotlib.backends.backend_pdf import PdfPages
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        pages = {}
+        with PdfPages(args.output) as pdf:
+            for feature in FEATURE_LABELS:
+                edges, pooled = plot(summary, args.output, feature, args.split, pdf)
+                pages[feature] = dict(edges=edges, processes=pooled)
+        receipt = dict(schema='shift-sm-response-profiles-v1',
+            input=str(args.summary), input_sha256=hashlib.sha256(raw).hexdigest(),
+            output=str(args.output), output_sha256=hashlib.sha256(args.output.read_bytes()).hexdigest(),
+            study_split=args.split, pages=pages, physical_yield_estimate=False,
+            raw_proposal_mix_not_calibrated_population_efficiency=True,
+            production_policy_qualified=False)
+        if args.receipt:
+            args.receipt.parent.mkdir(parents=True, exist_ok=True)
+            args.receipt.write_text(json.dumps(receipt, indent=2, allow_nan=False)+'\n')
+        print('PDF SHA256', receipt['output_sha256'])
+        return
     if args.stratified:
         receipt = plot_benchmark(summary, args.output)
         receipt.update(input=str(args.summary), input_sha256=hashlib.sha256(raw).hexdigest(),
@@ -365,7 +424,7 @@ def main():
             args.receipt.write_text(json.dumps(receipt, indent=2)+'\n')
         print('PDF SHA256', receipt['output_sha256'])
         return
-    edges, pooled = plot(summary, args.output)
+    edges, pooled = plot(summary, args.output, split=args.split)
     receipt = dict(schema='shift-sm-response-plot-v1', input=str(args.summary),
         input_sha256=hashlib.sha256(raw).hexdigest(), output=str(args.output),
         output_sha256=hashlib.sha256(args.output.read_bytes()).hexdigest(),

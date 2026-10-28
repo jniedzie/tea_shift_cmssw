@@ -13,6 +13,43 @@ module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
 
+class ResponseProfileTest(unittest.TestCase):
+    def summary(self):
+        groups = []
+        for split, count, passed in [('development', 100, 90), ('validation', 20, 2)]:
+            stats = dict(events=count, positive_originals=passed, pairs=passed)
+            groups.append(dict(stratum='qcd_20toinf', study_split=split,
+                totals={c: dict(stats) for c in module.CATEGORIES},
+                efficiency_maps={f: dict(edges=[0., 10.], cells={
+                    '0': {c: dict(stats) for c in module.CATEGORIES}})
+                    for f in module.FEATURE_LABELS}))
+        return dict(schema='shift-sm-measured-response-summary-v1', events=120,
+                    original_event_is_error_unit=True, groups=groups)
+
+    def test_validation_profiles_do_not_include_development_successes(self):
+        for feature in module.FEATURE_LABELS:
+            edges, pooled = module.pool_response(self.summary(), feature, 'validation')
+            self.assertEqual(pooled['qcd']['events'], 20)
+            self.assertEqual(pooled['qcd']['categories']['both_both_good']['positive'], 2)
+
+    def test_missing_feature_population_cannot_disappear_from_a_map(self):
+        summary = self.summary()
+        summary['groups'][1]['efficiency_maps']['best_pair_miss_cm']['cells'] = {}
+        with self.assertRaisesRegex(ValueError, 'cover group totals'):
+            module.pool_response(summary, 'best_pair_miss_cm', 'validation')
+
+    @unittest.skipUnless(shutil.which('pdftotext'), 'Requires PDF text readback')
+    def test_energy_render_uses_requested_axis_and_split(self):
+        with tempfile.TemporaryDirectory(prefix='sm-response-profile-') as directory:
+            path = Path(directory)/'energy.pdf'
+            module.plot(self.summary(), path, 'best_pair_min_energy_GeV', 'validation')
+            text = subprocess.check_output(['pdftotext', '-layout', str(path), '-'], text=True)
+        self.assertIn('20 originals', text)
+        self.assertIn('validation only', text)
+        self.assertIn('Lower muon energy', text)
+        self.assertNotIn('Smallest known incoming', text)
+
+
 @unittest.skipUnless(shutil.which('pdftotext'), 'Requires PDF text readback')
 class StratifiedPlotTest(unittest.TestCase):
     def summary(self):
