@@ -112,6 +112,145 @@ def rounded_events(value):
     return int(math.ceil(value / 20.0) * 20)
 
 
+def effective_statistics_plan(original, processed, effective, target, first_stage):
+    """Credit the completed cohort and forecast independent, identical repeats.
+
+    This is a nominal cost estimate, including for sparse positive samples;
+    it is not an efficiency confidence bound or authorization to submit.
+    """
+    if (not 0 < processed <= original or not math.isfinite(effective)
+            or not 0 <= effective <= processed + 1.e-6 or not 0 < first_stage <= target):
+        raise ValueError('Invalid completed cohort or effective-statistics target')
+    result = dict(target_effective_events=target, first_stage_effective_events=first_stage,
+                  status='sparse_nominal_forecast' if effective < 30 else 'nominal_forecast')
+    for name, goal in [('first_stage', first_stage), ('final', target)]:
+        scale = max(0., goal / effective - 1.) if effective else None
+        result[name + '_additional_gen_events'] = math.ceil(original * scale) if scale is not None else None
+        result[name + '_additional_sim_events'] = math.ceil(processed * scale) if scale is not None else None
+    if not effective:
+        result['status'] = 'zero_pass_followup_required'
+    return result
+
+
+def published_weighted_counts(hist, original, processed):
+    """The event multiplicity histogram retains one W/p entry per event.
+
+    Its nonzero bins give event-level sums and variances, even if several
+    dimuons were reconstructed. Raw passing counts cannot be recovered here.
+    """
+    if (not hist or hist.GetXaxis().GetBinLowEdge(1) != 0 or hist.GetXaxis().GetBinUpEdge(1) != 1
+            or hist.GetBinContent(0) != 0
+            or not math.isclose(hist.GetEntries(), processed, abs_tol=1.e-6)
+            or hist.GetSumw2N() == 0):
+        raise ValueError('Multiplicity histogram does not cover the complete weighted cohort')
+    bins = range(2, hist.GetNbinsX() + 2)
+    values = [hist.GetBinContent(i) for i in bins]
+    variances = [hist.GetBinError(i)**2 for i in bins]
+    if any(not math.isfinite(v) or v < 0 for v in values + variances):
+        raise ValueError('Require finite positive-weight event statistics')
+    sumw, sumw2 = sum(values), sum(variances)
+    if (sumw > 0) != (sumw2 > 0):
+        raise ValueError('Passing weights and variances disagree')
+    return dict(passing_sumw=sumw, passing_sumw2=sumw2, raw_passing_events=None,
+                effective_passing_events=sumw**2 / sumw2 if sumw2 else 0.,
+                original_population_efficiency=sumw / original,
+                poisson_mc_standard_error=math.sqrt(sumw2) / original if sumw2 else None,
+                relative_mc_error=math.sqrt(sumw2) / sumw if sumw else None)
+
+
+def measure_published_cohort(point, native, target, first_stage):
+    """Audit complete published weighted cohorts, including histogram-only unions.
+
+    These completion checks belong to this production diagnostic. Ordinary
+    plotting continues to accept partial inputs without any such dependency.
+    """
+    path = Path(point['histogram_path']).resolve()
+    directory = path.parent.parent
+    rate_path = directory / 'cross_sections.json'
+    receipt_path = directory / 'metadata/point_receipt.json'
+    if not receipt_path.exists():
+        receipt_path = directory / 'metadata/grouping/point_complete.json'
+    rate = json.loads(rate_path.read_text())
+    receipt = json.loads(receipt_path.read_text())
+    original, processed = rate['full_gen']['accepted_events'], receipt['events']
+    if (receipt.get('complete') is not True or type(original) is not int
+            or type(processed) is not int or not 0 < processed <= original
+            or original != receipt['full_gen_events']
+            or not math.isclose(rate['full_gen']['sum_weights'], original)
+            or not math.isclose(rate['full_gen']['sum_weights_squared'], original)):
+        raise ValueError('Require a complete response and unit native GEN exposure')
+    union = receipt.get('union', receipt)
+    identities = [tuple(identity) for identity in union.get('event_ids', [])]
+    if identities and (len(identities) != processed or len(set(identities)) != processed):
+        raise ValueError('Repeated or missing original event in completion receipt')
+    root = open_histograms(path, native)
+    try:
+        raw = root.Get('rawEventsCutFlow')
+        if not raw or not math.isclose(raw.GetBinContent(1), processed, abs_tol=1.e-6):
+            raise ValueError('Published response count differs from completed cohort')
+        counts = published_weighted_counts(root.Get('event/Event_nShiftDimuonVertexBoth-Both'), original, processed)
+    finally:
+        root.Close()
+    groups = union.get('groups', receipt.get('groups', []))
+    nano_objects = {group['grouped']['path']: group['grouped'] for group in groups if 'grouped' in group}
+    nano_bytes = sum(item['bytes'] for item in nano_objects.values()) if nano_objects else None
+    plan = effective_statistics_plan(original, processed, counts['effective_passing_events'], target, first_stage)
+    if nano_bytes is not None:
+        # One retained Nano copy only: GEN, scoring, merges and safety margin are extra.
+        plan['final_additional_nano_bytes_lower_bound'] = math.ceil(nano_bytes / processed * plan['final_additional_sim_events']) if counts['effective_passing_events'] else None
+    return dict(point=point['name'], mass_gev=point['mass_gev'],
+                mean_lab_flight_m=point['mean_lab_flight_m'], histogram_path=str(path),
+                original_gen_events=original, processed_events=processed, category='Both-Both',
+                mechanism=rate.get('mechanism'), rate_normalization_ready=rate.get('normalization_ready'),
+                native_rate_record=str(rate_path), native_rate_sha256=digest(rate_path),
+                completion_receipt=str(receipt_path), completion_receipt_sha256=digest(receipt_path),
+                grouped_nano_bytes=nano_bytes, allocation=plan, **counts)
+
+
+def write_published_map(rows, output):
+    """One compact delivery: weighted efficiencies, precision and existing credit."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import LogNorm
+    output.mkdir(parents=True, exist_ok=True)
+    columns = ['point', 'original_gen_events', 'processed_events', 'original_population_efficiency',
+               'poisson_mc_standard_error', 'effective_passing_events', 'relative_mc_error',
+               'first_stage_additional_gen_events', 'first_stage_additional_sim_events',
+               'final_additional_gen_events', 'final_additional_sim_events',
+               'final_additional_nano_bytes_lower_bound', 'status']
+    with (output / 'published_efficiency_allocation.csv').open('w', newline='') as stream:
+        writer = csv.DictWriter(stream, fieldnames=columns, extrasaction='ignore')
+        writer.writeheader()
+        writer.writerows(dict(row, **row['allocation']) for row in rows)
+    masses = sorted({row['mass_gev'] for row in rows})
+    indexed = {(row['mass_gev'], row['mean_lab_flight_m']): row for row in rows}
+    figure, axes = plt.subplots(1, 2, figsize=(13, 5.5), constrained_layout=True)
+    for axis, field, title, bounds in [
+            (axes[0], 'original_population_efficiency', 'Both-Both event efficiency', (.001, .3)),
+            (axes[1], 'effective_passing_events', 'Existing effective Both-Both events', (1, 1000))]:
+        values = np.full((len(FLIGHTS), len(masses)), np.nan)
+        for iy, flight in enumerate(FLIGHTS):
+            for ix, mass in enumerate(masses):
+                row = indexed.get((mass, flight))
+                if row is None:
+                    continue
+                value = row[field]
+                values[iy, ix] = value if value else np.nan
+                text = f'{100*value:.2f}%' if field == 'original_population_efficiency' else f'{value:.1f}'
+                color = 'black' if value > math.sqrt(bounds[0] * bounds[1]) else 'white'
+                axis.text(ix, iy, text, ha='center', va='center', color=color, fontsize=9)
+        mesh = axis.imshow(np.ma.masked_invalid(values), norm=LogNorm(*bounds), cmap='viridis', aspect='auto')
+        axis.set(xticks=range(len(masses)), xticklabels=[f'{m:g}' for m in masses],
+                 yticks=range(len(FLIGHTS)), yticklabels=['prompt', '5 m', '30 m', '100 m', '1 km'],
+                 xlabel='Dark-photon mass [GeV]', ylabel='Reference mean LAB flight', title=title)
+        figure.colorbar(mesh, ax=axis)
+    figure.suptitle('Completed published samples; full original GEN denominator and frozen sampling weights')
+    figure.supxlabel('At least one Both-Both candidate per event; no BDT or truth matching. Low-mass source tests are separate.\nNominal allocation credits existing events; errors omit source-collision correlations and rate uncertainty.', fontsize=9)
+    figure.savefig(output / 'published_efficiency_map.pdf')
+    plt.close(figure)
+
+
 def weighted_response_statistics(probabilities, passed, full_gen_events, target=3000):
     """Survey weights estimate original response; raw counts describe admission.
 
@@ -616,6 +755,8 @@ def main():
     parser.add_argument("--native-xrootd", action="store_true", help="Read ROOT objects through native EOS XRootD")
     parser.add_argument('--weighted-histograms', nargs='+', type=Path,
                         help='Measure complete W/p-weighted main histograms using their grouped Nano; write a response JSON')
+    parser.add_argument('--published-weighted', action='store_true',
+                        help='Audit complete published W/p cohorts; map efficiencies and credit existing effective statistics')
     args = parser.parse_args()
     if not 0 < args.relative_error < 1 or not 0 < args.core_fraction < 1:
         parser.error("Relative error and core fraction must lie between zero and one")
@@ -637,8 +778,24 @@ def main():
     points = available_bsm_campaign_histograms(base_path, campaign, args.masses, FLIGHTS, epsilons=[])
     if not points:
         raise ValueError("No ready points are available for efficiency measurement")
-    settings = plot_settings()
     rows = []
+    if args.published_weighted:
+        rows = [measure_published_cohort(point, args.native_xrootd, args.target_selected_events,
+                                        args.first_stage_selected_events) for point in points]
+        write_published_map(rows, args.output)
+        report = dict(schema='shift-published-weighted-response-plan-v1', campaign=campaign, points=rows,
+                      created_utc=datetime.now(timezone.utc).isoformat(), source_code_sha256=digest(__file__),
+                      assumptions='Nominal linear repeats of each measured prescription; no rate qualification, source-collision covariance, guaranteed bin precision or bulk submission implied.')
+        report['totals'] = {key: sum(row['allocation'].get(key, 0) or 0 for row in rows) for key in
+                            ['first_stage_additional_gen_events', 'first_stage_additional_sim_events',
+                             'final_additional_gen_events', 'final_additional_sim_events',
+                             'final_additional_nano_bytes_lower_bound']}
+        report['totals'].update(original_gen_events=sum(row['original_gen_events'] for row in rows),
+                                processed_events=sum(row['processed_events'] for row in rows),
+                                effective_passing_events=sum(row['effective_passing_events'] for row in rows))
+        (args.output / 'published_efficiency_allocation.json').write_text(json.dumps(report, indent=2, allow_nan=False) + '\n')
+        return
+    settings = plot_settings()
     for point in points:
         row = measure(point, settings, args)
         rows.append(row)

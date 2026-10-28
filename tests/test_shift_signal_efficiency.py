@@ -35,6 +35,73 @@ def histogram(name, values, lower=0, upper=None):
 
 
 class EfficiencyDiagnosticTest(unittest.TestCase):
+    def test_published_weighted_counts_use_events_and_overflow(self):
+        hist = ROOT.TH1D('published_counts', '', 3, 0, 3)
+        hist.SetDirectory(0)
+        hist.Sumw2()
+        hist.Fill(0, 1.)
+        hist.Fill(1, 2.)
+        hist.Fill(4, 10.)  # Several pairs still contribute only one event weight.
+        counts = DIAGNOSTIC.published_weighted_counts(hist, 10, 3)
+        self.assertEqual(counts['passing_sumw'], 12.)
+        self.assertAlmostEqual(counts['passing_sumw2'], 104.)
+        self.assertAlmostEqual(counts['effective_passing_events'], 144. / 104.)
+        self.assertIsNone(counts['raw_passing_events'])
+        with self.assertRaisesRegex(ValueError, 'complete weighted cohort'):
+            DIAGNOSTIC.published_weighted_counts(hist, 10, 4)
+        hist.Rebin(3)  # Merging the zero-pair bin with passing events loses this information.
+        with self.assertRaisesRegex(ValueError, 'complete weighted cohort'):
+            DIAGNOSTIC.published_weighted_counts(hist, 10, 3)
+
+    def test_effective_allocation_credits_existing_statistics(self):
+        result = DIAGNOSTIC.effective_statistics_plan(1000, 200, 100., 3000, 500)
+        self.assertEqual(result['final_additional_gen_events'], 29000)
+        self.assertEqual(result['final_additional_sim_events'], 5800)
+        self.assertEqual(result['first_stage_additional_gen_events'], 4000)
+        enough = DIAGNOSTIC.effective_statistics_plan(10000, 4000, 3200., 3000, 500)
+        self.assertEqual(enough['final_additional_gen_events'], 0)
+        zero = DIAGNOSTIC.effective_statistics_plan(1000, 200, 0., 3000, 500)
+        self.assertIsNone(zero['final_additional_gen_events'])
+        self.assertEqual(zero['status'], 'zero_pass_followup_required')
+
+    def test_published_cohort_supports_both_receipts_and_rejects_missing_responses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            campaign = Path(tmp)
+            (campaign / 'histograms_merged').mkdir()
+            path = campaign / 'histograms_merged/ntuple_0.root'
+            root = ROOT.TFile(str(path), 'RECREATE')
+            raw = ROOT.TH1D('rawEventsCutFlow', '', 1, 0, 1)
+            raw.SetBinContent(1, 3)
+            raw.Write()
+            root.mkdir('event').cd()
+            hist = ROOT.TH1D('Event_nShiftDimuonVertexBoth-Both', '', 3, 0, 3)
+            hist.Sumw2()
+            hist.Fill(0, 1.); hist.Fill(1, 2.); hist.Fill(2, 10.)
+            hist.Write(); root.Close()
+            rate = dict(full_gen=dict(accepted_events=10, sum_weights=10., sum_weights_squared=10.))
+            (campaign / 'cross_sections.json').write_text(json.dumps(rate))
+            receipt = dict(complete=True, events=3, full_gen_events=10,
+                           event_ids=[[1, 1, i] for i in range(3)])
+            point = dict(name='test', histogram_path=str(path), mass_gev=15., mean_lab_flight_m=None)
+            for location in ('metadata/point_receipt.json', 'metadata/grouping/point_complete.json'):
+                with self.subTest(location=location):
+                    completion = campaign / location
+                    completion.parent.mkdir(parents=True, exist_ok=True)
+                    completion.write_text(json.dumps(receipt))
+                    row = DIAGNOSTIC.measure_published_cohort(point, False, 3000, 500)
+                    self.assertEqual(row['original_gen_events'], 10)
+                    self.assertEqual(row['processed_events'], 3)
+                    self.assertEqual(row['passing_sumw'], 12.)
+                    bad = dict(receipt, events=4)
+                    completion.write_text(json.dumps(bad))
+                    with self.assertRaises(ValueError):
+                        DIAGNOSTIC.measure_published_cohort(point, False, 3000, 500)
+                    bad = dict(receipt, event_ids=[[1, 1, 0]] * 3)
+                    completion.write_text(json.dumps(bad))
+                    with self.assertRaisesRegex(ValueError, 'Repeated or missing'):
+                        DIAGNOSTIC.measure_published_cohort(point, False, 3000, 500)
+                    completion.unlink()
+
     def test_weighted_response_counts_events_and_preserves_full_gen(self):
         result = DIAGNOSTIC.weighted_response_statistics([.5, .1, 1.], np.array([False, True, True]), 10)
         self.assertEqual(result['raw_passing_events'], 2)
