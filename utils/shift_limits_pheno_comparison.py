@@ -176,7 +176,27 @@ def main():
     parser.add_argument('--darkcast-path',type=Path)
     parser.add_argument('--darkcast-receipt',type=Path)
     parser.add_argument('--meson-model',type=Path)
+    parser.add_argument('--source-grid',type=Path,help='Plot the bounded low-mass source-bank grid')
+    parser.add_argument('--matched-benchmark',type=Path,
+                        help='Compare paired original GEN and published RECO at fixed rates')
+    parser.add_argument('--workflow-root',type=Path)
+    parser.add_argument('--production-root',type=Path)
+    parser.add_argument('--benchmark-events',type=int,default=1000)
+    parser.add_argument('--benchmark-read',action='store_true',
+                        help='Read the paired GEN/Nano cache in a CMSSW FWLite environment')
     args=parser.parse_args()
+    if args.source_grid is not None:
+        plot_source_grid(args.source_grid)
+        return
+    if args.matched_benchmark is not None:
+        if args.benchmark_read:
+            if args.workflow_root is None or args.production_root is None:
+                parser.error('Reading the benchmark requires workflow and production roots')
+            read_matched_benchmark(args.matched_benchmark,args.workflow_root,
+                                   args.production_root,args.benchmark_events)
+        else:
+            matched_benchmark(args.matched_benchmark)
+        return
     if args.current_study is not None:
         if any(value is None for value in (args.darkcast_path,args.darkcast_receipt,args.meson_model)):
             parser.error('Current-study diagnostics require the pinned width provider and meson model')
@@ -442,6 +462,321 @@ def current_shape_diagnostics(study,darkcast_path,receipt_path,meson_model):
         fig.text(.025,.02,'All counterfactuals use the unchanged 0.3 fb^-1 likelihood and 30% proxy nuisances; MC-stat uncertainty is absent.\nTail omission/fixed shapes are diagnostics, not new selections or published limits. More GEN alone cannot repair a sparse mass grid or authenticate the reference.',fontsize=9)
         fig.tight_layout(rect=(0,.07,1,.95));pdf.savefig(fig);plt.close(fig)
     print('Saved',path,flush=True)
+
+
+def ideal_pair_pointing(muons, energy_min=0., plane_m=160., inner_m=1., outer_m=7.5):
+    """Straight GEN rays from a common point source; no transport or magnetic field.
+
+    Rows contain [px,py,pz,E] in GeV, with CMS in the negative-z direction.
+    This is an explicitly simplified geometry diagnostic, not a RECO selection.
+    """
+    values=np.asarray(muons,dtype=float)
+    if (values.shape[-2:]!=(2,4) or not np.all(np.isfinite(values))
+            or not 0<=inner_m<outer_m or plane_m<=0 or energy_min<0):
+        raise ValueError('Two finite muon momenta and a valid forward annulus are required')
+    forward=values[...,2]<0
+    radii=plane_m*np.hypot(values[...,0],values[...,1])/np.where(forward,-values[...,2],1.)
+    return np.all(forward & (radii>inner_m) & (radii<outer_m) & (values[...,3]>energy_min),axis=-1)
+
+
+def weighted_response_summary(contributions):
+    """Full-original-event mean, including zero contributions from unsampled IDs."""
+    values=np.asarray(contributions,dtype=float)
+    if values.ndim!=1 or len(values)<2 or not np.all(np.isfinite(values)):
+        raise ValueError('A finite original-event response vector is required')
+    total=float(values.sum());squared=float(values@values);count=len(values)
+    return dict(original_events=count,sumw=total,sumw2=squared,efficiency=total/count,
+                standard_error=math.sqrt(max(0.,squared-total**2/count)/(count*(count-1))),
+                effective_events=total**2/squared if squared else None,
+                zero_observed_response_unknown=not bool(np.any(values)))
+
+
+def reference_counting_thresholds(mass,luminosity_pb):
+    """Keep two different statistical prescriptions explicitly separate.
+
+    The public notebook hardcodes 3000/750; extending it linearly in exposure
+    is a declared diagnostic assumption, not recovered metadata of its cache.
+    """
+    if mass<=0 or luminosity_pb<=0:raise ValueError('Positive mass and luminosity required')
+    background=luminosity_pb/750.*10**(6.1*math.exp(-.06*mass)+2.8*mass**(-.2))
+    return dict(smooth_background_events=background,
+        exact_zero_observation_Poisson90=math.log(10),
+        SensCalc_style_one_sided_Gaussian90_proxy=1.28*math.sqrt(background))
+
+
+def fixed_response_coupling(required,luminosity_pb,sigma_over_epsilon2,efficiency):
+    if (not all(math.isfinite(v) for v in (required,luminosity_pb,sigma_over_epsilon2,efficiency))
+            or min(required,luminosity_pb,sigma_over_epsilon2)<=0 or efficiency<0):
+        raise ValueError('Positive count, exposure and physical selected rate required')
+    return math.sqrt(required/(luminosity_pb*sigma_over_epsilon2*efficiency)) if efficiency>0 else None
+
+
+def benchmark_admission_probabilities(selection,original_ids):
+    indices=selection['selected_indices'];probabilities=selection['sampling_probabilities']
+    if (len(indices)!=len(probabilities) or len(set(indices))!=len(indices)
+            or any(type(i) is not int or not 0<=i<len(original_ids) for i in indices)
+            or any(not math.isfinite(p) or not 0<p<=1 for p in probabilities)):
+        raise ValueError('Invalid frozen full-GEN admission indices or probabilities')
+    return {tuple(original_ids[i]):p for i,p in zip(indices,probabilities)}
+
+
+def read_matched_benchmark(study,workflow,production,events):
+    """Read one fixed original prefix and its complete existing Nano response."""
+    import sys
+    import gzip
+    import hashlib
+    import ROOT
+    from DataFormats.FWLite import Events
+    sys.path.insert(0,str(workflow.resolve()/'scripts'))
+    from audit_dark_photon_gen import objects,read_product
+    ROOT.gSystem.Load('libFWCoreFWLite');ROOT.FWLiteEnabler.enable()
+    study=study.resolve();output=study/'shape_diagnostics';baseline=output/'ideal_gen_pointing.json'
+    points=json.loads(baseline.read_text())['points'];results=[]
+    target=output/'matched_benchmark_events.json.gz'
+    if target.exists():raise FileExistsError('Reuse the frozen paired benchmark cache')
+    for point in points:
+        if events!=point['events']:
+            raise ValueError('Benchmark prefix must match the existing frozen ideal-pointing test')
+        wave=point['path'].split('/GEN/')[0].rsplit('-w',1)[1]
+        deployment=production.resolve()/'direct/waves'/('w'+wave)/'production'
+        plan=json.loads((deployment/'plan.json').read_text());row=plan['points'][0]
+        if row['mass_gev']!=point['mass_gev']:raise ValueError('Paired physical point differs')
+        source_path=Path('/eos/'+point['path'].split('/eos/',1)[1])
+        source_hash=hashlib.sha256()
+        with source_path.open('rb') as stream:
+            for block in iter(lambda:stream.read(1024*1024),b''):source_hash.update(block)
+        if source_hash.hexdigest()!=point['original_gen_sha256']:raise ValueError('Original GEN hash changed')
+        validation=Path(point['membership_audit']['path'])
+        if digest(validation)!=point['membership_audit']['sha256']:raise ValueError('GEN identity audit changed')
+        original_ids=json.loads(validation.read_text())['event_ids'];ids=original_ids[:events];records=[]
+        for event in Events(point['path']):
+            if len(records)==events:break
+            aux=event.eventAuxiliary();identity=[int(aux.run()),int(aux.luminosityBlock()),int(aux.event())]
+            if identity!=ids[len(records)]:raise ValueError('Original GEN ordering changed')
+            hep=read_product(event,'generatorSmeared','edm::HepMCProduct').GetEvent()
+            candidates=[]
+            for particle in objects(hep.particles_begin(),hep.particles_end()):
+                if abs(int(particle.pdg_id()))!=32 or not particle.end_vertex():continue
+                daughters=list(objects(particle.end_vertex().particles_out_const_begin(),
+                                       particle.end_vertex().particles_out_const_end()))
+                if len(daughters)==2 and all(abs(int(d.pdg_id()))==13 for d in daughters):
+                    candidates.append((particle,daughters))
+            if len(candidates)!=1:raise ValueError('GEN event needs one DP with two direct muons')
+            parent,daughters=candidates[0]
+            p4=lambda particle:[float(getattr(particle.momentum(),key)()) for key in ('px','py','pz','e')]
+            weight=float(read_product(event,'generator','GenEventInfoProduct').weight())
+            if weight!=1.:raise ValueError('This fixed-prefix binomial benchmark requires unit native GEN weights')
+            records.append(dict(identity=identity,parent=p4(parent),muons=[p4(d) for d in daughters],
+                                native_weight=weight,reco=None))
+        if len(records)!=events:raise ValueError('Incomplete original GEN prefix')
+        report_path=deployment/'completed_points'/(row['point']+'.json')
+        report=json.loads(report_path.read_text())
+        if report.get('complete') is not True:raise ValueError('Paired reconstruction has not completed')
+        marker=report['main_histograms'];nano=marker['published']['merged_nano']
+        by_id={tuple(record['identity']):record for record in records}
+        selection=row['material_selection']
+        probabilities=benchmark_admission_probabilities(selection,original_ids)
+        selected_ids={tuple(identity) for identity in ids if tuple(identity) in probabilities}
+        f=ROOT.TFile.Open('root://eosuser.cern.ch/'+nano['path']);tree=f.Get('Events')
+        names=['run','luminosityBlock','event','genWeight','shiftSamplingProbability','shiftSamplingGenWeight',
+               'nShiftDimuonVertex','ShiftDimuonVertex_topologyMin','ShiftDimuonVertex_topologyMax','ShiftDimuonVertex_mass']
+        tree.SetBranchStatus('*',0)
+        for name in names:
+            if not tree.GetBranch(name):raise ValueError('Missing paired Nano branch: '+name)
+            tree.SetBranchStatus(name,1)
+        seen=set();full_sum=0.;full_sum2=0.
+        for index in range(tree.GetEntries()):
+            tree.GetEntry(index);value=lambda name,i=0:float(tree.GetLeaf(name).GetValue(i))
+            identity=tuple(int(value(name)) for name in ['run','luminosityBlock','event'])
+            probability=value('shiftSamplingProbability');weight=value('shiftSamplingGenWeight')
+            if not math.isclose(weight,value('genWeight')/probability,rel_tol=2e-12):
+                raise ValueError('Nano does not contain native W/p exactly once')
+            masses=[value('ShiftDimuonVertex_mass',i) for i in range(int(value('nShiftDimuonVertex')))
+                    if value('ShiftDimuonVertex_topologyMin',i)==2 and value('ShiftDimuonVertex_topologyMax',i)==2]
+            if len(masses)>1:raise ValueError('Benchmark assumes at most one Both-Both dimuon per original event')
+            if masses:full_sum+=weight;full_sum2+=weight**2
+            if identity not in by_id:continue
+            if identity in seen or identity not in selected_ids:raise ValueError('Unexpected or duplicate paired Nano ID')
+            seen.add(identity)
+            if not math.isclose(probability,probabilities[identity],rel_tol=2e-12):
+                raise ValueError('Frozen admission probability changed')
+            by_id[identity]['reco']=dict(probability=probability,weight=weight,masses=masses)
+        f.Close()
+        if seen!=selected_ids:raise ValueError('Missing detector responses are not physical rejection')
+        histogram=marker['published']['merged_histogram'];f=ROOT.TFile.Open('root://eosuser.cern.ch/'+histogram['path'])
+        h=f.Get('dimuon/ShiftDimuonVertexBoth-Both_mass')
+        if not math.isclose(h.Integral(0,h.GetNbinsX()+1),full_sum,rel_tol=2e-6):
+            raise ValueError('Nano Both-Both selection differs from the ordinary main histogrammer')
+        f.Close()
+        muons=np.asarray([record['muons'] for record in records])
+        for label,cut in [('geometry',0.),('geometry_E20',20.),('geometry_E30',30.)]:
+            if int(ideal_pair_pointing(muons,cut).sum())!=point['counts'][label]:
+                raise ValueError('Paired GEN reader does not reproduce the frozen ideal control')
+        results.append(dict(mass_gev=point['mass_gev'],source=point,
+            production_plan=dict(path=str(deployment/'plan.json'),sha256=digest(deployment/'plan.json')),
+            completed_report=dict(path=str(report_path),sha256=digest(report_path)),nano=nano,
+            matched_original_events=events,matched_processed_events=len(seen),full_cohort_BothBoth_sumw=full_sum,
+            full_cohort_BothBoth_sumw2=full_sum2,missing_selected_responses=0,records=records))
+        print('Read paired',point['mass_gev'],'GeV:',len(seen),'processed responses',flush=True)
+    payload=dict(schema='shift-matched-GEN-RECO-benchmark-events-v1',complete=True,
+        ideal_control=dict(path=str(baseline),sha256=digest(baseline)),reader=dict(path=str(Path(__file__).resolve()),
+        sha256=digest(__file__)),points=results)
+    with gzip.open(target,'wt') as stream:json.dump(payload,stream,separators=(',',':'),allow_nan=False)
+    save_json(output/'matched_benchmark_events_receipt.json',dict(path=str(target),sha256=digest(target)))
+
+
+def matched_benchmark(study):
+    """Publish the same-event acceptance/rate/background budget, not a new limit."""
+    import gzip
+    import csv
+    from shift_limits_lifetime import plotting
+    study=study.resolve();output=study/'shape_diagnostics';receipt_path=output/'matched_benchmark_events_receipt.json'
+    receipt=json.loads(receipt_path.read_text())
+    if digest(receipt['path'])!=receipt['sha256']:raise ValueError('Paired event cache changed')
+    with gzip.open(receipt['path'],'rt') as stream:cache=json.load(stream)
+    snapshot=json.loads((study/'snapshot.json').read_text());rows=[];points=[]
+    for point in cache['points']:
+        mass=point['mass_gev'];source=next(r for r in snapshot['signals'] if r['mass_gev']==mass and r['prompt'])
+        if digest(source['rate_authority'])!=source['rate_authority_sha256']:raise ValueError('Frozen physical rate changed')
+        records=point['records'];muons=np.asarray([r['muons'] for r in records])
+        actual=np.asarray([r['reco']['weight'] if r['reco'] and r['reco']['masses'] else 0. for r in records])
+        variants={label:ideal_pair_pointing(muons,cut).astype(float)
+                  for label,cut in [('ideal_annulus',0.),('ideal_annulus_E20',20.),('ideal_annulus_E30',30.)]}
+        variants['actual_BothBoth']=actual
+        coefficient=source['cross_section_pb']/source['epsilon']**2
+        thresholds=reference_counting_thresholds(mass,300.);responses={}
+        for label,values in variants.items():
+            summary=weighted_response_summary(values);responses[label]=summary
+            for method in ['exact_zero_observation_Poisson90','SensCalc_style_one_sided_Gaussian90_proxy']:
+                required=thresholds[method]
+                rows.append(dict(mass_gev=mass,response=label,method=method,luminosity_pb=300.,
+                    sigma_over_epsilon2_pb=coefficient,efficiency=summary['efficiency'],efficiency_SE=summary['standard_error'],
+                    effective_events=summary['effective_events'],signal_at_epsilon_0p001=300.*coefficient*1e-6*summary['efficiency'],
+                    required_signal_events=required,epsilon_fixed_prompt_response=fixed_response_coupling(
+                        required,300.,coefficient,summary['efficiency'])))
+        points.append(dict(mass_gev=mass,physical_selected_rate=source,
+            matched_original_events=len(records),matched_processed_events=point['matched_processed_events'],
+            missing_selected_responses=point['missing_selected_responses'],responses=responses,thresholds=thresholds,
+            weighted_reco_inside_ideal=float(actual[variants['ideal_annulus']>0].sum()),
+            weighted_reco_outside_ideal=float(actual[variants['ideal_annulus']==0].sum())))
+    table=output/'matched_acceptance_background.csv'
+    with table.open('w',newline='') as stream:
+        writer=csv.DictWriter(stream,fieldnames=list(rows[0]));writer.writeheader();writer.writerows(rows)
+    result=dict(schema='shift-matched-acceptance-background-benchmark-v1',complete=True,luminosity_pb=300.,
+        original_prefix_events=cache['points'][0]['matched_original_events'],event_cache=receipt,
+        snapshot=dict(path=str(study/'snapshot.json'),sha256=digest(study/'snapshot.json')),points=points,table=rows,
+        definitions=dict(ideal='Both direct GEN daughter muons: negative pz, straight rays from reset source to160m plane,1<r<7.5m; no field/material/transport/reconstruction.',
+            actual='Ordinary unmodified Both-Both topologyMin=topologyMax=2; no added charge, vertex-quality or energy selection; native W/p once.',
+            denominator='The exact same first1000 original pre-admission GEN identities; all planned selected IDs have a completed Nano response.',
+            rates='Frozen snapshot physical selected sigma/epsilon², including dimuon BR once, identical for all response/background variants.',
+            background='Explicit diagnostic linear exposure extension B(m,L)=(L/750pb^-1)*10^[6.1exp(-.06m)+2.8m^(-.2)]; cached source hardcodes3000/750 and does not establish run luminosity.',
+            statistics='Zero observed known background: exact Poisson90% ln10. SensCalc-style proxy:1.28sqrtB (one-sided Gaussian90%), not90% CLs; not equivalent to current profiled30% nuisance limits.',
+            uncertainty='Event-level MC standard errors for the mean of W/p contributions; binomial ideal controls. No claim of independent validation beyond these fixed prefixes.'),
+        limitations=['This is a simplified geometric benchmark, not full SensCalc reproduction: no magnetic bending, decay-angle reweighting, nuclear material or acceptance-table integration.',
+            'GEN decay positions are reset to the source only for the ideal prompt geometry diagnostic. Real reconstruction remains unchanged.',
+            'A reconstructed event may lie outside the simplified annulus; the two selections are not nested detector-efficiency stages.',
+            'All coupling values assume fixed prompt response as epsilon changes; no lifetime-dependent exclusion contour is inferred.',
+            'Physical rates remain provisional; trigger and scale-factor assumptions are unchanged.'],
+        statistical_sources=['https://pdg.lbl.gov/2024/reviews/rpp2024-rev-statistics.pdf',
+                             'https://arxiv.org/abs/1007.1727'],
+        table_file=dict(path=str(table),sha256=digest(table)))
+    save_json(output/'matched_acceptance_background.json',result)
+    plt=plotting();fig,axes=plt.subplots(1,2,figsize=(12.5,5.8));labels=['ideal_annulus','ideal_annulus_E20','ideal_annulus_E30','actual_BothBoth']
+    names=['Ideal annulus','Ideal + E>20GeV','Ideal + E>30GeV','Actual Both-Both']
+    for index,point in enumerate(points):
+        x=np.arange(4)+(index-.5)*.2;y=[point['responses'][label]['efficiency'] for label in labels]
+        error=[point['responses'][label]['standard_error'] for label in labels]
+        axes[0].errorbar(x,y,yerr=error,fmt='o',capsize=3,label=f"{point['mass_gev']:g}GeV")
+    axes[0].set_xticks(range(4),names,rotation=15);axes[0].set(ylabel='Per original GEN event',title='Paired1000-event prefixes: response stage');axes[0].legend()
+    for mass,color in [(2.,'tab:blue'),(5.,'tab:orange')]:
+        for method,style in [('exact_zero_observation_Poisson90','--'),('SensCalc_style_one_sided_Gaussian90_proxy','-')]:
+            data=[next(r for r in rows if r['mass_gev']==mass and r['method']==method and r['response']==label) for label in labels]
+            axes[1].plot(range(4),[r['epsilon_fixed_prompt_response'] for r in data],ls=style,marker='o',color=color,
+                label=f"{mass:g}GeV: "+('Poisson0B90%' if style=='--' else 'SC-style smooth-B proxy'))
+    axes[1].set_xticks(range(4),names,rotation=15);axes[1].set(yscale='log',ylabel='Mixing epsilon',title='Same0.3fb^-1, rate and fixed prompt response');axes[1].legend(fontsize=7)
+    fig.suptitle('Separate geometry, reconstruction and background/statistical assumptions')
+    fig.text(.03,.02,'Ideal rays ignore field/material; E thresholds are explicit diagnostic variants. Actual Both-Both includes all frozen simulation/reconstruction losses.\nThese fixed-response count comparisons are not equivalent CLs prescriptions or validated SensCalc contours. MC errors are shown only in the response panel.',fontsize=8)
+    fig.tight_layout(rect=(0,.1,1,.94));path=output/'matched_acceptance_background.pdf';fig.savefig(path);plt.close(fig)
+    print('Saved matched benchmark:',path,flush=True)
+
+
+def source_grid_rows(data):
+    """Require inclusive channel closure and dimuon BR exactly once."""
+    rows=data['masses']
+    if not rows or any(a['mass_gev']>=b['mass_gev'] for a,b in zip(rows,rows[1:])):
+        raise ValueError('Source-grid masses must be nonempty and strictly increasing')
+    for row in rows:
+        channels=row['meson_fragmentation']['channels']
+        mesons=math.fsum(value['sigma_over_epsilon_squared_pb'] for value in channels.values())
+        inclusive=row['inclusive_sigma_over_epsilon_squared_pb'];branch=row['BR_mumu']
+        values=[row['mass_gev'],inclusive,row['FR_sigma_over_epsilon_squared_pb'],mesons,
+                row['dimuon_sigma_over_epsilon_squared_pb'],branch]
+        if not all(math.isfinite(value) and value>=0 for value in values) or not 0<branch<=1:
+            raise ValueError('Nonphysical source-grid rate or branching fraction')
+        if not math.isclose(mesons+row['FR_sigma_over_epsilon_squared_pb'],inclusive,rel_tol=1.e-10):
+            raise ValueError('Source-grid inclusive production channels do not close')
+        if not math.isclose(inclusive*branch,row['dimuon_sigma_over_epsilon_squared_pb'],rel_tol=1.e-12):
+            raise ValueError('Source-grid dimuon branching must be applied exactly once')
+    return rows
+
+
+def plot_source_grid(source):
+    """Show source physics and reference LAB anchors, without inventing RECO."""
+    import csv
+    from shift_limits_lifetime import plotting
+    source=source.resolve();data=json.loads(source.read_text());rows=source_grid_rows(data)
+    output=source.parent;mass=np.array([row['mass_gev'] for row in rows])
+    plt=plotting();fig,axes=plt.subplots(2,2,figsize=(13,10))
+    axis=axes[0,0]
+    groups=[('eta-decay','Eta','tab:orange'),('eta-prime-decay','Eta prime','tab:green'),
+            ('fragmentation','rho/omega/phi fragmentation','tab:purple'),
+            ('FR','Primary-proton FR','tab:red')]
+    for key,label,color in groups:
+        values=[]
+        for row in rows:
+            channels=row['meson_fragmentation']['channels']
+            if key=='FR':value=row['FR_sigma_over_epsilon_squared_pb']
+            elif key=='fragmentation':value=sum(v['sigma_over_epsilon_squared_pb'] for k,v in channels.items() if k.endswith('fragmentation'))
+            else:value=channels.get(key,{}).get('sigma_over_epsilon_squared_pb',0.)
+            values.append(value*row['BR_mumu'])
+        axis.plot(mass,np.where(np.array(values)>0,values,np.nan),'.-',label=label,color=color,lw=1)
+    axis.errorbar(mass,[r['dimuon_sigma_over_epsilon_squared_pb'] for r in rows],
+                  yerr=[r['dimuon_sigma_statistical_error_over_epsilon_squared_pb'] for r in rows],
+                  fmt='ko',ms=3,capsize=2,label='Total; source MC error only')
+    axis.set(yscale='log',xlim=(.205,2),xlabel='Dark-photon mass [GeV]',
+             ylabel='sigma times BR / epsilon squared [pb]',title='Threshold, meson endpoints and vector peaks are present')
+    for x in [.547862,.95778]:axis.axvline(x,color='.7',ls=':',lw=.8)
+    axis.legend(fontsize=7)
+    axis=axes[0,1];axis.plot(mass,[r['BR_mumu'] for r in rows],'o-',ms=3)
+    axis.axvline(.21132,color='.5',ls=':',label='Pinned dimuon threshold')
+    for x,label in [(.25,'Current 0.25'),(.7,'Current 0.7')]:axis.axvline(x,color='.7',ls='--',label=label)
+    axis.set(xlim=(.205,2),ylim=(0,.5),xlabel='Dark-photon mass [GeV]',ylabel='BR to dimuons',
+             title='A decay-model feature is not a measured limit feature');axis.legend(fontsize=7)
+    axis=axes[1,0]
+    for lab,label in [('0.01','Mean LAB 1 cm'),('1.0','Mean LAB 1 m'),('5.0','Mean LAB 5 m'),('1000.0','Mean LAB 1 km')]:
+        values=np.array([r['epsilon_for_reference_mean_lab_m'][lab] for r in rows])
+        errors=values*np.array([r['epsilon_reference_statistical_relative_error'] for r in rows])
+        axis.errorbar(mass,values,yerr=errors,fmt='.-',ms=3,capsize=2,label=label)
+    axis.set(yscale='log',xlim=(.205,2),xlabel='Dark-photon mass [GeV]',ylabel='Physical epsilon',
+             title='Reference LAB distance uses the measured source boost');axis.legend(fontsize=7)
+    axis=axes[1,1];axis.plot(mass,[r['expected_unweighted_GEN_per_50000_source_collisions'] for r in rows],'o-',ms=3)
+    axis.set(yscale='log',xlim=(.205,2),xlabel='Dark-photon mass [GeV]',ylabel='Expected unweighted GEN / 50k source collisions',
+             title='Source yield helps size pilots; RECO efficiency is still unknown')
+    candidates=data['next_detector_mass_candidates_gev']
+    axis.text(.03,.97,'Suggested new response masses [GeV]:\n'+', '.join(f'{value:g}' for value in candidates),
+              transform=axis.transAxes,va='top',fontsize=8,bbox={'facecolor':'white','alpha':.85,'edgecolor':'none'})
+    fig.suptitle('Bounded low-mass source pilot: 15 masses, 20,000 collisions each')
+    fig.text(.025,.02,'Pinned SensCalc-compatible mesons/fragmentation + central FR; DY is excluded. No detector efficiency. Lines guide the eye between source points.\nErrors show source-collision statistics only; production-model, form-factor and width uncertainties are not included. Existing 0.25/0.7 GeV detector work continues.',fontsize=8)
+    fig.tight_layout(rect=(0,.075,1,.95));path=output/'low_mass_source_grid.pdf';fig.savefig(path);plt.close(fig)
+    fields=['mass_gev','inclusive_sigma_over_epsilon_squared_pb','BR_mumu','dimuon_sigma_over_epsilon_squared_pb',
+            'dimuon_sigma_statistical_error_over_epsilon_squared_pb','combined_mean_beta_gamma',
+            'combined_mean_beta_gamma_statistical_error','expected_unweighted_GEN_per_50000_source_collisions']
+    with (output/'low_mass_source_grid.csv').open('w',newline='') as stream:
+        writer=csv.DictWriter(stream,fieldnames=fields);writer.writeheader()
+        writer.writerows({key:row[key] for key in fields} for row in rows)
+    save_json(output/'low_mass_source_grid_receipt.json',dict(input_path=str(source),input_sha256=digest(source),
+        figure=dict(path=str(path),sha256=digest(path)),no_detector_production=True))
+    print('Saved source-grid diagnostic:',path,flush=True)
 
 
 if __name__=='__main__':main()
