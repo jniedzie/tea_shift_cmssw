@@ -247,3 +247,155 @@ def annotate_proposal_weights(path, rows, source_exposures=None, *, expected_nan
     finally:
         root_file.Close()
     return metadata
+
+
+RESPONSE_BRANCHES = ("shiftResponseSamplingProbability", "shiftResponseSamplingWeight",
+                     "shiftResponseGenWeight")
+RESPONSE_METADATA_KEY = "ShiftResponseSamplingWeights"
+RESPONSE_WEIGHT_POLICY = "native_gen_weight/(reco_inclusion_probability*response_sampling_probability)"
+
+
+def validate_response_sampling_rows(rows, source_exposures):
+    """Bind a diagnostic candidate/control draw without reinterpreting it as decay.
+
+    The detector probability p remains unchanged. Each response cell records its
+    complete population N and selected count n, giving q=n/N. Source exposure
+    comes from the original GEN authority, never selected Nano entries.
+    """
+    if not isinstance(source_exposures, (list,tuple)) or not source_exposures:
+        raise ValueError('Require explicit full original source exposure')
+    ordinary = []
+    for row in rows:
+        native = finite_number(row['native_weight'], 'native GEN weight')
+        probability = finite_number(row['sampling_probability'], 'detector probability')
+        if not 0. < probability <= 1.:
+            raise ValueError('Detector probability must be in (0,1]')
+        draw = row['response_draw_id']
+        if (not isinstance(draw, str) or len(draw) != 64
+                or any(c not in '0123456789abcdef' for c in draw)):
+            raise ValueError('Response draw must bind its frozen plan SHA-256')
+        ordinary.append(dict(row, proposal_draw_id='response:'+draw, proposal_kind='ordinary',
+            proposal_density_ratio=1., proposal_correction=1.,
+            sampling_gen_weight=native/probability, proposal_gen_weight=native/probability))
+    base = validate_proposal_rows(ordinary, source_exposures)
+    result = []
+    for row, original in zip(rows, base):
+        population, selected = row['response_population_events'], row['response_selected_events']
+        if (type(population) is not int or type(selected) is not int
+                or not 1 <= selected <= population):
+            raise ValueError('Response cell needs complete positive population and selected counts')
+        q = finite_number(row['response_sampling_probability'], 'response probability')
+        if not 0. < q <= 1.:
+            raise ValueError('Response probability must be in (0,1]')
+        require_close(q, selected/population, 'response q=n/N')
+        inverse, final = 1./q, original['shiftSamplingGenWeight']/q
+        if (not math.isfinite(inverse) or not math.isfinite(final)
+                or original['shiftOriginalGenWeight'] != 0. and final == 0.):
+            raise ValueError('Response-corrected weight exceeds Double support')
+        record = {key: original[key] for key in
+            ('event_id','source_id','original_source_sha256')+DETECTOR_BRANCHES}
+        record.update(response_draw_id=row['response_draw_id'],
+            shiftResponseSamplingProbability=q, shiftResponseSamplingWeight=inverse,
+            shiftResponseGenWeight=final)
+        result.append(record)
+    return result
+
+
+def annotate_response_sampling_weights(path, rows, source_exposures, *, expected_nano_sha256):
+    """Append q and W/(p*q) to an owned merged Nano; preserve native W and p.
+
+    The caller first merges the original files and verifies every old branch.
+    This annotation replaces the histogram weight branch with the final weight;
+    consumers must not multiply it by genWeight or another 1/q. No physical
+    branching or material-survival correction is introduced.
+    """
+    records = validate_response_sampling_rows(rows, source_exposures)
+    if (not isinstance(expected_nano_sha256, str) or len(expected_nano_sha256) != 64
+            or any(c not in '0123456789abcdef' for c in expected_nano_sha256)):
+        raise ValueError('The exact merged input Nano SHA-256 is required')
+    digest = hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        for block in iter(lambda: stream.read(1 << 20), b''):
+            digest.update(block)
+    if digest.hexdigest() != expected_nano_sha256:
+        raise ValueError('Merged Nano differs from its checked input SHA-256')
+    import ROOT
+    root_file = ROOT.TFile.Open(str(path), 'UPDATE')
+    if not root_file or root_file.IsZombie() or root_file.TestBit(ROOT.TFile.kRecovered):
+        raise ValueError('Cannot annotate an invalid merged Nano')
+    try:
+        tree = root_file.Get('Events')
+        if not tree or int(tree.GetEntries()) != len(records):
+            raise ValueError('Merged Nano count differs from complete response authority')
+        if root_file.Get(RESPONSE_METADATA_KEY) or any(tree.GetBranch(name) for name in RESPONSE_BRANCHES):
+            raise ValueError('Response sampling fields already exist; refusing a second correction')
+        if root_file.Get(METADATA_KEY) or any(tree.GetBranch(name) for name in PROPOSAL_BRANCHES):
+            raise ValueError('Response annotation does not silently combine a decay proposal')
+        for name in DETECTOR_BRANCHES:
+            if not tree.GetLeaf(name) or tree.GetLeaf(name).GetTypeName() != 'Double_t':
+                raise ValueError('Exact existing detector Double weight fields are required: '+name)
+        native_leaf = tree.GetLeaf('genWeight')
+        if not native_leaf or native_leaf.GetTypeName() not in ('Float_t','Double_t'):
+            raise ValueError('Native genWeight must remain a Float or Double scalar')
+        selected = {tuple(row['event_id']): row for row in records}
+        ordered, seen, native_values = [], set(), []
+        for event in tree:
+            identity = tuple(int(getattr(event, name)) for name in ('run','luminosityBlock','event'))
+            if identity not in selected or identity in seen:
+                raise ValueError('Merged Nano identities differ from response authority')
+            seen.add(identity)
+            record = selected[identity]
+            native = record['shiftOriginalGenWeight']
+            expected_native = (struct.unpack('f', struct.pack('f',native))[0]
+                               if native_leaf.GetTypeName() == 'Float_t' else native)
+            require_close(float(event.genWeight), expected_native, 'unchanged native genWeight')
+            native_values.append(float(event.genWeight))
+            for name in DETECTOR_BRANCHES:
+                require_close(float(getattr(event,name)),record[name],'unchanged '+name)
+            ordered.append(record)
+        if seen != set(selected):
+            raise ValueError('Merged Nano omits an original response event')
+        untouched = _key_payloads(path, root_file)
+        buffers = {name:array('d',[0.]) for name in RESPONSE_BRANCHES}
+        branches = {name:tree.Branch(name,buffers[name],name+'/D') for name in RESPONSE_BRANCHES}
+        for record in ordered:
+            for name in RESPONSE_BRANCHES:
+                buffers[name][0] = record[name]
+                if branches[name].Fill() < 0:
+                    raise ValueError('Could not append response weight '+name)
+        root_file.cd()
+        if tree.Write('',ROOT.TObject.kOverwrite) <= 0:
+            raise ValueError('Could not persist response weights')
+        metadata = dict(schema='shift-response-sampling-weight-annotation-v1',
+            events=len(records),weight_policy=RESPONSE_WEIGHT_POLICY,weight_branch='shiftResponseGenWeight',
+            input_nano_sha256=expected_nano_sha256,source_exposures=source_exposures,
+            event_authority_sha256=hashlib.sha256(json.dumps(rows,sort_keys=True,
+                separators=(',',':'),allow_nan=False).encode()).hexdigest(),
+            original_event_ids=[row['event_id'] for row in ordered],
+            response_draw_sha256s=sorted({row['response_draw_id'] for row in ordered}),
+            native_weights_unchanged=True,detector_probability_unchanged=True,
+            response_correction_application_count=1,material_survival_correction_applied=False,
+            normalization_ready=False)
+        ROOT.TObjString(json.dumps(metadata,sort_keys=True,allow_nan=False)).Write(RESPONSE_METADATA_KEY)
+    finally:
+        root_file.Close()
+    root_file = ROOT.TFile.Open(str(path),'READ')
+    if not root_file or root_file.IsZombie():
+        raise ValueError('Cannot read back response weights')
+    try:
+        current = {key:digest for key,digest in _key_payloads(path,root_file).items()
+                   if key[0] != RESPONSE_METADATA_KEY}
+        if current != untouched:
+            raise ValueError('Response annotation changed native Run/Lumi or EDM metadata')
+        tree = root_file.Get('Events')
+        for name in DETECTOR_BRANCHES+RESPONSE_BRANCHES:
+            if tree.GetLeaf(name).GetTypeName() != 'Double_t':
+                raise ValueError('Response and detector weights must remain Double')
+        for index,event in enumerate(tree):
+            if float(event.genWeight) != native_values[index]:
+                raise ValueError('Response annotation changed native genWeight')
+            for name in DETECTOR_BRANCHES+RESPONSE_BRANCHES:
+                require_close(float(getattr(event,name)),ordered[index][name],'persisted '+name)
+    finally:
+        root_file.Close()
+    return metadata

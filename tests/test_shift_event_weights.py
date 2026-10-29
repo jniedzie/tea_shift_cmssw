@@ -251,5 +251,96 @@ class ProposalNanoTests(unittest.TestCase):
         self.assertFalse(result["normalization_ready"])
 
 
+def response_row(event=1, native=2., probability=.25, q=.1, population=10, selected=1):
+    return dict(row(event,native,probability,correction=1.), response_draw_id='d'*64,
+        response_sampling_probability=q,response_population_events=population,
+        response_selected_events=selected)
+
+
+class ResponseWeightTests(unittest.TestCase):
+    def test_p_and_q_enter_once_and_native_detector_weights_stay_separate(self):
+        result = weights.validate_response_sampling_rows([response_row()],[EXPOSURE])[0]
+        self.assertEqual(result['shiftOriginalGenWeight'],2.)
+        self.assertEqual(result['shiftSamplingGenWeight'],8.)
+        self.assertEqual(result['shiftResponseSamplingWeight'],10.)
+        self.assertEqual(result['shiftResponseGenWeight'],80.)
+        self.assertNotIn('shiftDecayProposalWeight',result)
+
+    def test_response_cell_probability_must_match_complete_population(self):
+        for bad in [dict(response_row(),response_sampling_probability=.2),
+                    dict(response_row(),response_population_events=0),
+                    dict(response_row(),response_selected_events=11),
+                    dict(response_row(),response_draw_id='unfrozen')]:
+            with self.assertRaises(ValueError):
+                weights.validate_response_sampling_rows([bad],[EXPOSURE])
+
+    def test_missing_or_repeated_full_exposure_and_originals_are_rejected(self):
+        for exposures in (None,[],[EXPOSURE,EXPOSURE]):
+            with self.assertRaises(ValueError):
+                weights.validate_response_sampling_rows([response_row()],exposures)
+        with self.assertRaisesRegex(ValueError,'Repeated original'):
+            weights.validate_response_sampling_rows([response_row(),response_row()],[EXPOSURE])
+
+    def test_signed_tiny_zero_and_double_overflow(self):
+        rows = [response_row(1,0.),response_row(2,-2.),response_row(3,1.e-100)]
+        actual = weights.validate_response_sampling_rows(rows,[EXPOSURE])
+        self.assertEqual(actual[0]['shiftResponseGenWeight'],0.)
+        self.assertEqual(actual[1]['shiftResponseGenWeight'],-80.)
+        self.assertTrue(math.isclose(actual[2]['shiftResponseGenWeight'],4.e-99,rel_tol=1.e-14))
+        with self.assertRaisesRegex(ValueError,'Double support'):
+            weights.validate_response_sampling_rows([response_row(native=1.e307)],[EXPOSURE])
+
+
+@unittest.skipUnless(ROOT is not None, 'Run inside the native ROOT runtime')
+class ResponseNanoTests(unittest.TestCase):
+    setUp = ProposalNanoTests.setUp
+    fixture = ProposalNanoTests.fixture
+
+    def annotate(self, rows, expected=None):
+        return weights.annotate_response_sampling_weights(self.path,rows,[EXPOSURE],
+            expected_nano_sha256=expected or hashlib.sha256(self.path.read_bytes()).hexdigest())
+
+    def test_appended_double_response_weights_preserve_detector_and_native_run_data(self):
+        rows = [response_row(1),response_row(2,native=1.e-100,q=1.,population=1)]
+        self.fixture(rows,'D')
+        original = ROOT.TFile.Open(str(self.path))
+        untouched = weights._key_payloads(self.path,original)
+        original.Close()
+        annotation = self.annotate(rows)
+        self.assertEqual(annotation['response_correction_application_count'],1)
+        self.assertEqual(annotation['source_exposures'],[EXPOSURE])
+        output = ROOT.TFile.Open(str(self.path))
+        self.assertEqual({k:v for k,v in weights._key_payloads(self.path,output).items()
+            if k[0]!=weights.RESPONSE_METADATA_KEY},untouched)
+        tree = output.Get('Events')
+        for name in weights.RESPONSE_BRANCHES:
+            self.assertEqual(tree.GetLeaf(name).GetTypeName(),'Double_t')
+        for event,expected in zip(tree,weights.validate_response_sampling_rows(rows,[EXPOSURE])):
+            for name in weights.DETECTOR_BRANCHES+weights.RESPONSE_BRANCHES:
+                self.assertEqual(float(getattr(event,name)),expected[name])
+        output.Close()
+
+    def test_second_response_correction_and_unbound_input_are_rejected(self):
+        rows = [response_row()]
+        self.fixture(rows,'D')
+        before = hashlib.sha256(self.path.read_bytes()).hexdigest()
+        with self.assertRaisesRegex(ValueError,'SHA-256'):
+            self.annotate(rows,expected='0'*64)
+        self.assertEqual(hashlib.sha256(self.path.read_bytes()).hexdigest(),before)
+        self.annotate(rows)
+        with self.assertRaisesRegex(ValueError,'second correction'):
+            self.annotate(rows)
+
+    def test_wrong_old_p_or_missing_double_contract_cannot_be_hidden(self):
+        rows = [response_row()]
+        self.fixture(rows,'D')
+        with self.assertRaisesRegex(ValueError,'unchanged shiftSampling'):
+            self.annotate([dict(response_row(),sampling_probability=.5)])
+        self.path.unlink()
+        self.fixture(rows)
+        with self.assertRaisesRegex(ValueError,'existing detector Double'):
+            self.annotate(rows)
+
+
 if __name__ == "__main__":
     unittest.main()
