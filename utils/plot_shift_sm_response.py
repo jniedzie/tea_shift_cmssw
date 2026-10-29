@@ -444,6 +444,32 @@ def pooled_candidate_histograms(report):
     return result
 
 
+def partial_both_both_pairs(report):
+    """Keep partial observations descriptive; require their explicit raw census."""
+    pairs, originals = [], set()
+    for row in report.get('partial_positive_originals', []):
+        key = row['gen_sha256'], tuple(row['event_id'])
+        if key in originals or row.get('rates_and_intervals_withheld') is not True:
+            raise ValueError('Partial pairs require unique originals and no efficiency estimate')
+        originals.add(key)
+        count = 0
+        for pair in row['retained_pairs']:
+            if pair['topologyMin'] != 2 or pair['topologyMax'] != 2:
+                continue
+            count += 1
+            good = (pair['isOS'] == 1 and pair['dcaValid'] == 1
+                    and pair['dca'] is not None and math.isfinite(pair['dca'])
+                    and 0. <= pair['dca'] <= 50.)
+            pairs.append(dict(source_id=row['source_id'], event_id=row['event_id'],
+                region_group=row['region_group'], pair=pair, good=good))
+        if count != row['pair_counts']['both_both']:
+            raise ValueError('Partial Both-Both pair payload differs from its count')
+    totals = [row for row in report.get('partial_groups', []) if row['stratum'] == 'all_qcd']
+    if sum(row['targets']['both_both']['pairs'] for row in totals) != len(pairs):
+        raise ValueError('Partial pair payload does not cover the raw observed count')
+    return pairs
+
+
 def plot_candidate_comparison(report, output):
     """Show response and actual pair kinematics, without physical-yield claims."""
     import matplotlib
@@ -454,6 +480,7 @@ def plot_candidate_comparison(report, output):
 
     scope, groups = candidate_comparison_input(report)
     histograms = pooled_candidate_histograms(report)
+    partial_pairs = partial_both_both_pairs(report)
     for name, group in groups.items():
         for category in CATEGORIES:
             for field in ('mass', 'pt'):
@@ -557,7 +584,7 @@ def plot_candidate_comparison(report, output):
         from matplotlib.ticker import MaxNLocator
         fig.subplots_adjust(left=.075, right=.98, top=.78, bottom=.47, wspace=.24)
         fig.suptitle('Actual Both-Both pair kinematics and tail statistics', fontsize=18, y=.975)
-        fig.text(.5, .925, 'Raw pair counts; several pairs from one collision are not independent observations.',
+        fig.text(.5, .925, 'Complete source cohorts only. Several pairs from one collision are not independent observations.',
                  ha='center', fontsize=11)
         fig.text(.5, .878, 'Solid: Both-Both + Good; dotted: all Both-Both vertices.', ha='center', fontsize=11)
         flow_notes = []
@@ -666,7 +693,64 @@ def plot_candidate_comparison(report, output):
             fig.text(.04, .155, 'Completion conditioning and limited positive statistics still apply. No full-production gain is inferred.', fontsize=10)
         pdf.savefig(fig)
         plt.close(fig)
-    return dict(schema='shift-sm-candidate-response-plot-v1', pages=3,
+        pages = 3
+        if partial_pairs:
+            fig, axes = plt.subplots(1, 2, figsize=(14, 8.5))
+            fig.subplots_adjust(left=.075, right=.97, top=.79, bottom=.38, wspace=.24)
+            fig.suptitle('First Both-Both pairs from partial source cohorts', fontsize=18, y=.975)
+            fig.text(.5, .922, f'{len(partial_pairs)} observed pairs; raw case diagnostics only. No efficiency or normalized rate.',
+                     ha='center', fontsize=11)
+            shown = [row for row in partial_pairs if row['pair']['dcaValid'] == 1
+                and row['pair']['dca'] is not None and math.isfinite(row['pair']['dca'])
+                and row['pair']['dca'] >= 0.]
+            maximum_dca = max([row['pair']['dca'] for row in shown]+[70.])*1.22
+            for axis, field, xlabel in zip(axes, ('mass', 'pt'),
+                    ('Reconstructed dimuon mass [GeV]', 'Reconstructed dimuon pT [GeV]')):
+                axis.axhspan(0., 50., color='#64834a', alpha=.12)
+                axis.axhline(50., color='#64834a', linestyle='--', label='Good DCA limit: 50 cm')
+                axis.scatter([], [], s=65, color='#2468a0', label='Observed Both-Both pair')
+                for row in shown:
+                    pair = row['pair']
+                    if pair[field] is None or not math.isfinite(pair[field]):
+                        continue
+                    axis.scatter(pair[field], pair['dca'], s=65, color='#2468a0', zorder=3)
+                    axis.annotate(str(row['event_id'][-1]), (pair[field], pair['dca']),
+                        xytext=(7, 5), textcoords='offset points', fontsize=10)
+                axis.set_ylim(0., maximum_dca)
+                values = [row['pair'][field] for row in shown if row['pair'][field] is not None
+                          and math.isfinite(row['pair'][field])]
+                axis.set_xlim(0., max([5.]+values)*1.15)
+                axis.set_xlabel(xlabel)
+                axis.set_ylabel('Dimuon distance of closest approach [cm]')
+                axis.grid(alpha=.2)
+                axis.legend(frameon=False, fontsize=10, loc='upper right')
+            table_axis = fig.add_axes([.04, .15, .92, .16])
+            table_axis.axis('off')
+            def number(value):
+                return 'Unavailable' if value is None or not math.isfinite(value) else f'{value:.3f}'
+            table = table_axis.table(cellText=[[
+                row['source_id'].removeprefix('supply_qcd_'), str(row['event_id'][-1]),
+                number(row['pair']['mass']), number(row['pair']['pt']), number(row['pair']['dca']),
+                str(row['pair']['isOS']), str(row['pair']['dcaValid']), 'Yes' if row['good'] else 'No']
+                for row in partial_pairs],
+                colLabels=['Source', 'Event', 'Mass [GeV]', 'pT [GeV]', 'DCA [cm]', 'OS', 'Valid DCA', 'Good'],
+                loc='center', cellLoc='center', colWidths=[.22, .08, .13, .13, .13, .07, .13, .09])
+            table.auto_set_font_size(False)
+            table.set_fontsize(10)
+            table.scale(1., 1.7)
+            for (row, _), cell in table.get_celld().items():
+                cell.set_edgecolor('#c5cdd3')
+                if row == 0:
+                    cell.set_facecolor('#e3eaf0')
+            good = sum(row['good'] for row in partial_pairs)
+            fig.text(.04, .088, f'Good pairs in these observations: {good}/{len(partial_pairs)}. '
+                     'Good requires OS, valid DCA and 0 ≤ DCA ≤ 50 cm.', fontsize=11)
+            fig.text(.04, .045, f'{len(partial_pairs)-len(shown)} pairs have no usable DCA coordinate. '
+                     'Partial-cohort completion can bias these observations; they are excluded from the efficiency plots.', fontsize=9)
+            pdf.savefig(fig)
+            plt.close(fig)
+            pages += 1
+    return dict(schema='shift-sm-candidate-response-plot-v1', pages=pages,
         complete_sources=scope['complete_sources'], complete_events=scope['complete_events'],
         completion_conditioned=True, physical_yield_estimate=False,
         production_policy_qualified=False)
