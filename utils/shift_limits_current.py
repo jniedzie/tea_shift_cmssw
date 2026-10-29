@@ -36,16 +36,42 @@ def histogram_array(file, name, edges):
     return np.asarray(rebin(values[1:1001],edges)), np.asarray(rebin(variances[1:1001],edges))
 
 
+def signal_normalization(authority, preserved=None):
+    """Keep original GEN exposure; sampled cutflows already contain W/p."""
+    sigma=math.fsum(row['value_pb'] for row in authority['physical_selected_cross_sections_pb'])
+    denominator=float(authority['full_gen']['sum_weights'])
+    if preserved is not None:
+        if (not math.isclose(sigma,preserved['cross_section_pb'],rel_tol=2e-6)
+                or not math.isclose(denominator,preserved['initial_weight_sum'],rel_tol=2e-6)):
+            raise ValueError('Histogram and rate sidecar disagree on original normalization')
+        sigma=preserved['cross_section_pb'];denominator=preserved['initial_weight_sum']
+    if not math.isfinite(sigma+denominator) or sigma<=0 or denominator<=0:
+        raise ValueError('Invalid original signal cross section or GEN exposure')
+    return sigma,denominator
+
+
+def signal_inputs(config):
+    from shift_sample_paths import available_bsm_campaign_histograms
+    inventory=getattr(config,'signal_input_inventory',None)
+    if inventory:
+        rows=json.loads(Path(inventory).read_text())['signals']
+        if len({row['name'] for row in rows})!=len(rows):
+            raise ValueError('Signal inventory repeats a physical lifetime point')
+        return rows
+    return available_bsm_campaign_histograms(config.base_path,config.signal_campaign,
+        config.signal_masses,config.signal_flights,epsilons=config.signal_epsilons)
+
+
 def snapshot(config):
     import ROOT
     from shift_plot_samples import prepare_plot_samples
-    from shift_sample_paths import available_bsm_campaign_histograms
+    from shift_sample_paths import histogram_gen_normalization
     ROOT.gROOT.SetBatch(True)
     output=Path(config.output_path).resolve();output.mkdir(parents=True,exist_ok=True)
     if (output/'snapshot.json').exists():
         raise ValueError('A frozen snapshot already exists; reuse it instead of repeating input reads')
     backgrounds,_=prepare_plot_samples(config.base_path,config.cross_sections,config.campaign,None,None,None,None,None)
-    points=available_bsm_campaign_histograms(config.base_path,config.signal_campaign,config.signal_masses,config.signal_flights,epsilons=config.signal_epsilons)
+    points=signal_inputs(config)
     edges=resolution_boundaries(config.mass_resolution_fraction,config.mass_minimum_bin_gev)
     arrays={};records={'backgrounds':[],'signals':[]}
     for kind,items in [('backgrounds',backgrounds),('signals',points)]:
@@ -62,12 +88,14 @@ def snapshot(config):
                     # metadata already includes BR(mu mu), including meson sources.
                     authority_path=path.parent.parent/'cross_sections.json'
                     authority=json.loads(authority_path.read_text())
-                    sigma=sum(row['value_pb'] for row in authority['physical_selected_cross_sections_pb'])
-                    denominator=authority['full_gen']['sum_weights']
-                    if not math.isclose(initial,denominator,rel_tol=2e-6):raise ValueError('Published GEN denominator mismatch: '+name)
+                    preserved=histogram_gen_normalization(str(path),'darkphoton_'+name)
+                    sigma,denominator=signal_normalization(authority,preserved)
                     source.update(mass_gev=authority['mass_gev'],epsilon=authority['epsilon'],proper_ctau_mm=authority['proper_ctau_mm'],
                         mechanism=authority['mechanism'],prompt=name.endswith('_prompt'),rate_authority=str(authority_path),rate_authority_sha256=digest(authority_path),
-                        physics_valid=authority.get('physics_valid'),normalization_ready=authority.get('normalization_ready'))
+                        physics_valid=authority.get('physics_valid'),normalization_ready=authority.get('normalization_ready'),
+                        normalization_source='histogram_full_GEN' if preserved else 'published_full_GEN_sidecar',
+                        mean_lab_flight_m=item.get('mean_lab_flight_m'),input_role=item.get('input_role','current'),
+                        production_rate_validated=authority.get('production_rate_validated'))
                 else:
                     sigma=item.cross_section;denominator=item.initial_weight_sum if item.initial_weight_sum>0 else initial
                 if not sigma>0 or not denominator>0:raise ValueError('Invalid normalization: '+name)
@@ -109,9 +137,20 @@ class Model:
             self.background+=value;self.processes[row['name'].split('_')[0]]+=value
         self.unused_signals=[]
         for row in self.snapshot['signals']:
-            if any(row['name'].endswith('_'+anchor) for anchor in config.response_anchors):self.signals.setdefault(row['mass_gev'],[]).append(row)
-            else:self.unused_signals.append(row)
+            if not any(row['name'].endswith('_'+anchor) for anchor in config.response_anchors):
+                self.unused_signals.append(dict(row,unused_reason='Not a configured lifetime anchor'))
+                continue
+            channel=getattr(config,'primary_channel','Both-Both')
+            values=self.arrays[row['array_key']]
+            selected=values.sum() if channel=='combined' else values[config.categories.index(channel)].sum()
+            if selected<=0:
+                self.unused_signals.append(dict(row,unused_reason='Zero observed selected MC; response remains unknown'))
+                continue
+            self.signals.setdefault(row['mass_gev'],[]).append(row)
         for rows in self.signals.values():rows.sort(key=lambda r:r['epsilon'])
+        for mass,rows in self.signals.items():
+            if len({row['mechanism'] for row in rows})!=1:
+                raise ValueError('Different signal production prescriptions at one mass: '+str(mass))
 
     def signal(self,mass,epsilon):
         rows=self.signals[mass]
@@ -212,6 +251,8 @@ def native(config,canary=False):
     queue=[]
     for row in scan_rows:
         if row['channel']!=config.primary_channel or row['confidence_level'] not in config.native_confidence_levels:continue
+        if (getattr(config,'native_validation_masses',None) is not None
+                and row['mass_gev'] not in config.native_validation_masses):continue
         if canary and row['mass_gev']!=2.:continue
         for edge,epsilon in enumerate(row['roots']):queue.append((row,edge,epsilon))
     queue.sort(key=lambda entry:(entry[0]['channel']!='combined',entry[0]['confidence_level']!=.95,entry[0]['mass_gev'],entry[0]['mode']))
@@ -326,8 +367,10 @@ def native(config,canary=False):
         if not validated:raise RuntimeError('Native boundary failed independent validation; inspect saved output before proceeding')
     print('Native stage complete:',len(results),'saved boundary fits.',flush=True)
     if not canary:
-        subprocess.run(['python3','-u','-m','shift_limits_current_plots'],check=True)
-        (model.output/'all_native.complete').write_text('Both-Both 95% Asimov CLs crossings completed using native TEA/Combine.\n')
+        subprocess.run(['python3','-u','-m','shift_limits_current_plots','--output',str(model.output),
+                        '--luminosity-pb',str(config.luminosity)],check=True)
+        name='native_validation.complete' if getattr(config,'native_validation_masses',None) else 'all_native.complete'
+        (model.output/name).write_text('Selected Both-Both Asimov CLs crossings checked using native TEA/Combine; see native_results.json.\n')
 
 
 def projection_inventory(config):
@@ -360,7 +403,17 @@ def projection_inventory(config):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--stage',choices=['snapshot','scan','native_canary','native','projections'],required=True);parser.add_argument('--config',default='shift_limits_current_config')
+    parser.add_argument('--output',type=Path)
+    parser.add_argument('--luminosity-pb',type=float)
+    parser.add_argument('--signal-inventory',type=Path)
+    parser.add_argument('--channel',choices=['Both-Both','combined'])
+    parser.add_argument('--native-masses',nargs='+',type=float)
     args=parser.parse_args();config=importlib.import_module(args.config)
+    if args.output is not None:config.output_path=str(args.output.resolve())
+    if args.luminosity_pb is not None:config.luminosity=args.luminosity_pb
+    if args.signal_inventory is not None:config.signal_input_inventory=str(args.signal_inventory.resolve())
+    if args.channel is not None:config.channel_names=(args.channel,);config.primary_channel=args.channel
+    if args.native_masses is not None:config.native_validation_masses=args.native_masses
     {'snapshot':snapshot,'scan':scan,'native_canary':lambda c:native(c,True),'native':native,'projections':projection_inventory}[args.stage](config)
 
 if __name__=='__main__':main()

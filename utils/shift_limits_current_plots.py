@@ -39,7 +39,7 @@ def boundaries(model,level,channel,omitted_masses=()):
     return result
 
 
-def draw_regions(axis,rows,mode,color,label,fill=True,linewidth=2):
+def draw_regions(axis,rows,mode,color,label,fill=True,linewidth=2,linestyle=None):
     nodes=sorted((r for r in rows if r['mode']==mode),key=lambda r:r['mass_gev']);labelled=False
     # Requested presentation: connect every available mass boundary, including
     # across gaps in generated response coverage. This is plot interpolation.
@@ -47,21 +47,34 @@ def draw_regions(axis,rows,mode,color,label,fill=True,linewidth=2):
     for row in nodes:
         if not row['excluded_intervals']:continue
         row=copy.deepcopy(row)
-        row['excluded_intervals']=[[min(a for a,b in row['excluded_intervals']),max(b for a,b in row['excluded_intervals'])]]
+        # Extra islands have no established correspondence at neighbouring
+        # masses. Draw them at the simulated mass; never fill a nonexcluded gap.
+        for low,high in row['excluded_intervals'][:-1]:
+            axis.plot([row['mass_gev']]*2,[low,high],color=color,lw=linewidth,
+                      ls='-' if mode=='background' else '--',marker='o',ms=3)
+        row['excluded_intervals']=[row['excluded_intervals'][-1]]
         run.append(row)
     runs=[run] if run else []
     for run in runs:
         masses=[r['mass_gev'] for r in run]
         for index in range(len(run[0]['excluded_intervals'])):
             low=[r['excluded_intervals'][index][0] for r in run];high=[r['excluded_intervals'][index][1] for r in run]
-            style='-' if mode=='background' else '--'
+            style=linestyle or ('-' if mode=='background' else '--')
             if len(run)==1:
                 axis.plot([masses[0]]*2,[low[0],high[0]],color=color,ls=style,lw=linewidth)
                 axis.scatter(masses,low,color=color,s=22,marker='o',label=label if not labelled else None);labelled=True
                 continue
             axis.plot(masses,low,color=color,ls=style,lw=linewidth,label=label if not labelled else None);labelled=True
             axis.scatter(masses,low,color=color,s=12,zorder=6)
-            if any(e<.999 for e in high):axis.plot(masses,high,color=color,ls=style,lw=linewidth)
+            for i,row in enumerate(run):
+                if not any(math.isclose(low[i],root,rel_tol=1e-7) for root in row['roots']):
+                    axis.scatter([masses[i]],[low[i]],facecolors='white',edgecolors=color,s=25,zorder=7)
+            for left,right in zip(range(len(run)-1),range(1,len(run))):
+                if all(any(math.isclose(high[i],root,rel_tol=1e-7) for root in run[i]['roots']) for i in [left,right]):
+                    axis.plot(masses[left:right+1],high[left:right+1],color=color,ls=style,lw=linewidth)
+            for i,row in enumerate(run):
+                if not row['upper_prompt_continuation'] and math.isclose(high[i],row['epsilon_support'][1],rel_tol=1e-7):
+                    axis.scatter([masses[i]],[high[i]],facecolors='white',edgecolors=color,s=25,zorder=7)
             if fill:axis.fill_between(masses,low,high,color=color,alpha=.13)
             # Close only at the support edge. The first vertical segment starts
             # at the top rather than cutting diagonally through later masses.
@@ -108,7 +121,7 @@ def draw_comparisons(config,model):
             note='Existing mass templates; no classifier or added kinematic selection. Trigger/SFs = 1; independent 30% signal/background normalization uncertainties.\n'
             checked=sum(source=='native_tea_AsymptoticLimits' for row in rows for source in row['boundary_sources']);total=sum(len(row['roots']) for row in rows)
             note+=f'Published QCD + DY + J/psi only; empty MC bins stay empty. Asimov profile; {checked}/{total} boundaries checked with native TEA/Combine.\n'
-            note+=('External curves: briefing-book Fig. 8.15; mostly 90% CL, FCC curves 95% CL. Production/response remain provisional.' if external else 'Shading marks interpolated expected exclusion. All available mass boundaries are connected; sparse MC and missing background tails remain provisional.')
+            note+=('External curves: briefing-book Fig. 8.15; mostly 90% CL, FCC curves 95% CL. Production/response remain provisional.' if external else 'Open upper endpoints mark missing lifetime coverage, not physical exclusion edges. Sparse MC and missing background tails remain provisional.')
             name=f'limits_current_cl{round(100*level)}'+('_comparison' if external else '')+'.pdf';finish(fig,output/name,note,plt)
 
 
@@ -139,7 +152,7 @@ def draw_original_comparisons(config,model):
     clean=fitz.open(stream=vector.convert_to_pdf(),filetype='pdf');vector.close()
     width,height=original.rect.width,original.rect.height;offset=25
     drawings=original.get_drawings()
-    omitted_masses=config.plot_omitted_masses_gev
+    omitted_masses=tuple(mass for mass in config.plot_omitted_masses_gev if mass in model.signals)
     footer_extra=13 if omitted_masses else 0
     # Copy retained legend rows directly from the original PDF, preserving fonts
     # and styles. Keep the original SHIFT curve as an explicitly named reference.
@@ -189,6 +202,10 @@ def draw_original_comparisons(config,model):
                                         ('zero_background',(102/255,166/255,30/255),': zero background',True)]:
             nodes=sorted((r for r in rows if r['mode']==mode and r['excluded_intervals']),key=lambda r:r['mass_gev'])
             if not nodes:continue
+            for row in nodes:
+                for low,high in row['excluded_intervals'][:-1]:
+                    page.draw_line(point(row['mass_gev'],low),point(row['mass_gev'],high),color=color,width=2.5)
+            nodes=[dict(row,excluded_intervals=[row['excluded_intervals'][-1]]) for row in nodes]
             lower=[point(r['mass_gev'],min(a for a,b in r['excluded_intervals'])) for r in nodes]
             upper=[point(r['mass_gev'],max(b for a,b in r['excluded_intervals'])) for r in nodes]
             polygon=lower+upper[::-1]
@@ -200,7 +217,7 @@ def draw_original_comparisons(config,model):
             shape.finish(color=color,width=2.5,dashes='[6 3] 0' if dashed else None,closePath=False);shape.commit()
             finite=[]
             for row,xy in zip(nodes,upper):
-                if max(b for a,b in row['excluded_intervals'])<.999:
+                if any(math.isclose(max(b for a,b in row['excluded_intervals']),root,rel_tol=1e-7) for root in row['roots']):
                     finite.append(xy)
                 elif finite:
                     if len(finite)>1:
@@ -214,12 +231,12 @@ def draw_original_comparisons(config,model):
             for xy in lower:page.draw_circle(xy,2.2,color=color,fill=color)
             y=shift_legend_y+(40 if dashed else 20)
             page.draw_line((640,y),(665,y),color=color,width=2.5,dashes='[6 3] 0' if dashed else None)
-            luminosity_label(page,(672,y+4),'SHIFT, 3 fb',label,color)
+            luminosity_label(page,(672,y+4),f'SHIFT, {config.luminosity/1000:g} fb',label,color)
             counts.append({'mode':mode,'connected_mass_points':[r['mass_gev'] for r in nodes]})
         page.draw_rect(fitz.Rect(638.3,shift_legend_y+60,width,height+offset),color=None,fill=(1,1,1))
-        luminosity_label(page,(84,17),'SHIFT Both-Both, 3 fb',f': expected {round(100*level)}% CLs',(0,0,0),fontsize=13)
+        luminosity_label(page,(84,17),f'SHIFT Both-Both, {config.luminosity/1000:g} fb',f': expected {round(100*level)}% CLs',(0,0,0),fontsize=13)
         notes=[
-            'Effective halo luminosity: 3 fb^-1, assuming 1% of the base collision exposure contains halo interactions.',
+            f'Effective halo luminosity: {config.luminosity/1000:g} fb^-1 (assumed exposure; 3 fb^-1 is the optimistic ceiling).',
             'Trigger efficiency: 100%.',
             'MC is assumed to match data; all scale factors are 1.',
             'Both-Both dimuons only.',
@@ -229,9 +246,9 @@ def draw_original_comparisons(config,model):
             'Zero-background curve: background is set to zero as an idealized benchmark.',
             'Independent 30% signal and background normalization uncertainties.',
             'MC statistical uncertainties are omitted.',
-            'Lifetime-dependent efficiencies and mass shapes use the available DP samples, including meson decays.',
+            'Sub-GeV signals: SensCalc-compatible mesons + fragmentation + proton radiation; sparse MC and rates are provisional.',
             'Mass bins use the saved 0.1 GeV grid and a provisional 2% resolution scale.',
-            'All available mass boundaries are connected in log mass / log epsilon; gaps and sparse MC remain provisional.',
+            'Mass boundaries are interpolated; lifetime coverage ends are not physical exclusion edges. Empty signal controls are omitted.',
             'Epsilon above 0.1 is a formal model extrapolation.',
             f'Current SHIFT: expected {round(100*level)}% CLs. Most source projections: 90% CL; FCC: 95% CL.']
         if omitted_masses:notes.append('Temporarily omitted pending review: '+', '.join(f'{m:g} GeV' for m in omitted_masses)+'. Neighbouring points are connected.')
@@ -259,20 +276,47 @@ def draw_inputs(config,model):
             values=model.processes[process].sum(axis=0) if category=='combined' else model.processes[process][config.categories.index(category)]
             ax.stairs(np.where(values>0,values,np.nan),edges,label=process.upper(),color=color)
         ax.set(xscale='log',yscale='log',xlim=(.1,100),xlabel='Reconstructed dimuon mass [GeV]',ylabel='Expected events / likelihood bin',title=category);ax.legend()
-    finish(fig,model.output/'background_mass_templates.pdf','3 fb^-1. Rates use each published file\'s full source/GEN exposure and weights once; no additional filtering efficiency or scale factor.\nBin widths follow the saved 0.1 GeV grid and a provisional 2% scale. There is no MC-population-driven bin merging or background-tail interpolation.',plt)
+    finish(fig,model.output/'background_mass_templates.pdf',f'{config.luminosity/1000:g} fb^-1. Rates use each published file\'s full source/GEN exposure and weights once; no additional filtering efficiency or scale factor.\nBin widths follow the saved 0.1 GeV grid and a provisional 2% scale. There is no MC-population-driven bin merging or background-tail interpolation.',plt)
     fig,ax=plt.subplots(figsize=(11,6.5));fig.suptitle('Published signal coverage used in this update')
     xx=[];yy=[];counts=[];mechanisms=set();unused=[]
     used={r['name'] for rows in model.signals.values() for r in rows}
     for row in model.snapshot['signals']:
         if row['name'] not in used:unused.append(row);continue
-        xx.append(row['mass_gev']);yy.append(row['epsilon']);counts.append(row['counts'][config.primary_channel]['sumw']);mechanisms.add(row['mechanism'])
+        stats=row['counts'][config.primary_channel]
+        xx.append(row['mass_gev']);yy.append(row['epsilon']);counts.append(stats['sumw']**2/stats['sumw2'] if stats['sumw2'] else 0.);mechanisms.add(row['mechanism'])
     from matplotlib.colors import LogNorm
     obj=ax.scatter(xx,yy,c=np.maximum(counts,1),s=35,norm=LogNorm(),cmap='viridis',edgecolor='black',linewidth=.25)
     if unused:
-        ax.scatter([r['mass_gev'] for r in unused],[r['epsilon'] for r in unused],marker='x',s=18,color='gray',label='Legacy epsilon canaries: not used');ax.legend(fontsize=8)
-    fig.colorbar(obj,ax=ax,label='Selected Both-Both signal MC events (zero shown at color minimum)')
+        ax.scatter([r['mass_gev'] for r in unused],[r['epsilon'] for r in unused],marker='x',s=18,color='gray',label='Zero selected MC: response unknown');ax.legend(fontsize=8)
+    fig.colorbar(obj,ax=ax,label='Effective Both-Both signal MC events')
     ax.set(xscale='log',yscale='log',xlim=(.2,100),ylim=(1e-9,1.5),xlabel='Mass [GeV]',ylabel='Generated physical epsilon')
     finish(fig,model.output/'signal_coverage.pdf',f'{len(xx)} response anchors from {len(model.snapshot["signals"])} frozen published files; full GEN denominators include zero-dimuon events.\nMeson and DY rates include BR(mu mu) once. Tiny legacy epsilon canaries do not override the larger prompt response. No new events were generated.',plt)
+
+
+def draw_luminosity_scenarios(config,model):
+    scenarios=getattr(config,'luminosity_scenarios',())
+    if not scenarios:return
+    plt=plotting()
+    for level in config.confidence_levels:
+        fig,axis=plt.subplots(figsize=(10.5,7))
+        for (luminosity,directory),style in zip(scenarios,(':','-','--')):
+            current=SimpleNamespace(**vars(config));current.luminosity=luminosity
+            current.output_path=str(model.output/directory)
+            if not (Path(current.output_path)/'scan.json').exists():continue
+            rows=boundaries(Model(current),level,config.primary_channel,config.plot_omitted_masses_gev)
+            for mode in config.background_modes:
+                label=('QCD + DY + J/psi' if mode=='background' else 'Zero background')+f', {luminosity/1000:g} fb$^{{-1}}$'
+                draw_regions(axis,rows,mode,MODE_COLORS[mode],label,fill=False,
+                    linewidth=2.6 if luminosity==config.luminosity else 1.4,linestyle=style)
+        axis.axhspan(.1,1,facecolor='gray',alpha=.07,hatch='///')
+        axis.set(xscale='log',yscale='log',xlim=(.2,100),ylim=(1.e-7,1),
+                 xlabel=r'$m_{A\prime}$ [GeV]',ylabel=r'Mixing $\epsilon$',
+                 title=f'SHIFT Both-Both: expected {round(100*level)}% CLs, luminosity scenarios')
+        axis.legend(fontsize=8,loc='lower right',ncol=2)
+        finish(fig,model.output/f'limits_luminosity_cl{round(100*level)}.pdf',
+            'MC benchmark sensitivity: 0.3 fb$^{-1}$ baseline, 0.03 fb$^{-1}$ degraded, 3 fb$^{-1}$ optimistic ceiling.\n'
+            'Open endpoints mark missing lifetime coverage; disconnected islands are not filled across gaps.\n'
+            '30% normalization nuisances; finite-MC uncertainty omitted. Sub-GeV controls have very low effective statistics.',plt)
 
 
 def brazil(config,model):
@@ -309,9 +353,14 @@ def qa(output):
 
 def main():
     import shift_limits_current_config as config
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--original-only',action='store_true');args=parser.parse_args()
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--original-only',action='store_true')
+    parser.add_argument('--output',type=Path)
+    parser.add_argument('--luminosity-pb',type=float)
+    args=parser.parse_args()
+    if args.output is not None:config.output_path=str(args.output.resolve())
+    if args.luminosity_pb is not None:config.luminosity=args.luminosity_pb
     model=Model(config)
-    if not args.original_only:draw_comparisons(config,model);draw_inputs(config,model);brazil(config,model)
+    if not args.original_only:draw_comparisons(config,model);draw_inputs(config,model);draw_luminosity_scenarios(config,model);brazil(config,model)
     draw_original_comparisons(config,model);qa(model.output)
 
 if __name__=='__main__':main()
