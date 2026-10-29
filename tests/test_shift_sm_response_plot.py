@@ -250,6 +250,56 @@ class CandidateComparisonTest(unittest.TestCase):
         self.assertIn('No complete current source draws yet', text)
         self.assertIn('No reconstruction efficiency is estimated', text)
 
+    @unittest.skipUnless(shutil.which('pdftotext'), 'Requires PDF text readback')
+    def test_mixed_policies_render_separately_and_pending_policy_has_no_zero_efficiency(self):
+        first = self.summary()
+        first['selection_policy_version'] = 'v1'
+        empty = copy.deepcopy(first)
+        empty['selection_policy_version'] = 'v2'
+        empty['scope'].update(complete_events=0,complete_sources=0,pending_events=100)
+        for group in empty['pooled_groups']+empty['groups']:
+            group.update(rows=0,muon_events=0)
+            group['targets'] = {category:self.statistics(0,0) for category in ('inclusive',*module.CATEGORIES)}
+            group['tails'] = {category:{tail:self.statistics(0,0) for tail in
+                ('mass_gt_20','mass_gt_50','pt_gt_10','pt_gt_20')} for category in module.CATEGORIES}
+        empty['histograms'] = []
+        report = dict(policy_groups=[first,empty],mixed_policy_efficiencies_withheld=True,
+                      pooled_groups=[],groups=[],histograms=[])
+        with tempfile.TemporaryDirectory(prefix='sm-policy-response-') as directory:
+            path = Path(directory)/'response.pdf'
+            receipt = module.plot_candidate_comparison(report,path)
+            text = subprocess.check_output(['pdftotext','-layout',str(path),'-'],text=True)
+        self.assertEqual(receipt['pages'],4)
+        self.assertEqual(receipt['complete_events'],30)
+        self.assertIn('(selection v1)',text)
+        self.assertIn('(selection v2)',text)
+        self.assertIn('No reconstruction efficiency is estimated',text)
+        self.assertTrue(receipt['mixed_policy_efficiencies_withheld'])
+        report['pooled_groups'] = first['pooled_groups']
+        with self.assertRaisesRegex(ValueError,'separately reported'):
+            module.plot_candidate_comparison(report,Path('/tmp/unused-response.pdf'))
+
+    @unittest.skipUnless(shutil.which('pdftotext'), 'Requires PDF text readback')
+    def test_same_pair_profiles_cover_candidates_and_never_claim_survival(self):
+        report = self.summary()
+        features = ('min_muon_p_GeV','max_muon_column_loss_over_p',
+                    'two_station_miss_cm','known_union_parent_depth')
+        report['energy_material_profiles'] = [dict(stratum='all_qcd',region_group='candidate',
+            feature=feature,edges=[0.,1.,10.],same_pair_components=True,
+            physical_survival_model=False,cells=[dict(bin='0',rows=10,muon_events=4,
+                targets=dict(both_both_good=dict(positive_originals=2)))]) for feature in features]
+        with tempfile.TemporaryDirectory(prefix='sm-same-pair-response-') as directory:
+            path = Path(directory)/'response.pdf'
+            receipt = module.plot_candidate_comparison(report,path)
+            text = subprocess.check_output(['pdftotext','-layout',str(path),'-'],text=True)
+            self.assertEqual(receipt['pages'],4)
+            self.assertIn('Lower total muon momentum',text)
+            self.assertIn('Every predictor uses one frozen GEN pair',text)
+            self.assertIn('No survival probability',text)
+            report['energy_material_profiles'][0]['cells'][0]['rows'] -= 1
+            with self.assertRaisesRegex(ValueError,'cover complete candidates'):
+                module.plot_candidate_comparison(report,path)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -9,6 +9,7 @@ not a cross-section-weighted mixture or a qualified production selection.
 """
 import argparse
 from collections import defaultdict
+from contextlib import nullcontext
 import hashlib
 import json
 import math
@@ -470,7 +471,97 @@ def partial_both_both_pairs(report):
     return pairs
 
 
+def plot_candidate_profiles(report, pdf):
+    """Keep the same GEN pair's predictors together and exclude partial sources."""
+    import matplotlib.pyplot as plt
+
+    features = {
+        'min_muon_p_GeV': 'Lower total muon momentum [GeV]',
+        'max_muon_column_loss_over_p': 'Larger column-ionization / total momentum',
+        'two_station_miss_cm': 'Larger two-station miss [cm]',
+        'known_union_parent_depth': 'Known parent material [interaction lengths]',
+    }
+    profiles = {row['feature']:row for row in report.get('energy_material_profiles', [])
+                if row['stratum']=='all_qcd' and row['region_group']=='candidate'}
+    if not profiles or not report['scope']['complete_events']:
+        return 0
+    count = next(row['rows'] for row in report['pooled_groups'] if row['region_group']=='candidate')
+    if not count:
+        return 0
+    fig, axes = plt.subplots(2,2,figsize=(14,9.2))
+    fig.subplots_adjust(left=.075,right=.975,top=.80,bottom=.27,hspace=.66,wspace=.24)
+    policy = report.get('selection_policy_version', 'unspecified')
+    fig.suptitle(f'Energy, direction and material response (selection {policy})',fontsize=18,y=.975)
+    fig.text(.5,.92,f'{count} candidates from complete source cohorts only; 95% raw-sample intervals.',
+             ha='center',fontsize=11)
+    fig.text(.5,.875,'Every predictor uses one frozen GEN pair. No reconstructed result chooses the pair.',
+             ha='center',fontsize=11)
+    for axis,(feature,label) in zip(axes.flat,features.items()):
+        profile = profiles[feature]
+        cells = profile['cells']
+        if (sum(cell['rows'] for cell in cells)!=count
+                or profile.get('same_pair_components') is not True
+                or profile.get('physical_survival_model') is not False):
+            raise ValueError('Same-pair profiles must cover complete candidates without a survival claim')
+        edges = profile['edges']
+        def order(cell):
+            return {'underflow':-1,'overflow':len(edges),'unknown':len(edges)+1}.get(
+                cell['bin'],int(cell['bin']) if cell['bin'].isdigit() else len(edges)+2)
+        cells = sorted(cells,key=order)
+        ticklabels = []
+        for index,cell in enumerate(cells):
+            n = cell['rows']
+            for offset,passed,color,name in ((-.08,cell['muon_events'],'#2468a0','≥1 reco muon'),
+                    (.08,cell['targets']['both_both_good']['positive_originals'],'#64834a','Good Both-Both')):
+                low,high = wilson_interval(passed,n)
+                axis.errorbar(index+offset,passed/n,yerr=[[passed/n-low],[high-passed/n]],fmt='o',
+                              color=color,capsize=3,label=name if index==0 else None)
+            key = cell['bin']
+            interval = f'{edges[int(key)]:g}–{edges[int(key)+1]:g}' if key.isdigit() else key
+            ticklabels.append(f'{interval}\nN={n}')
+        axis.set_xticks(range(len(cells)))
+        axis.set_xticklabels(ticklabels,rotation=25,ha='right',fontsize=9)
+        axis.set_xlabel(label)
+        axis.set_ylabel('Raw sample fraction')
+        axis.set_ylim(-.04,1.04)
+        axis.grid(axis='y',alpha=.25)
+    handles,labels = axes.flat[0].get_legend_handles_labels()
+    fig.legend(handles,labels,loc='upper center',bbox_to_anchor=(.5,.86),ncol=2,frameon=False,fontsize=10)
+    fig.text(.04,.135,'Unknown material and censored pair lists stay unknown. These small marginal profiles are not calibrated efficiencies.',fontsize=10)
+    fig.text(.04,.09,'The column predictor covers external material with minimum ionization; radiative losses and central CMS material are omitted.',fontsize=10)
+    fig.text(.04,.045,'No survival probability, fitted threshold, new selection cut or full-production improvement is claimed.',fontsize=10)
+    pdf.savefig(fig)
+    plt.close(fig)
+    return 1
+
+
 def plot_candidate_comparison(report, output):
+    """Keep different frozen selection policies in separate parts of one PDF."""
+    policies = report.get('policy_groups')
+    if not policies:
+        return _plot_candidate_comparison(report,output)
+    versions = [row['selection_policy_version'] for row in policies]
+    if (len(versions)!=len(set(versions)) or not report.get('mixed_policy_efficiencies_withheld')
+            or report['pooled_groups'] or report['groups'] or report['histograms']):
+        raise ValueError('Mixed policies need unique versions and separately reported response statistics')
+    from matplotlib.backends.backend_pdf import PdfPages
+    output.parent.mkdir(parents=True,exist_ok=True)
+    receipts = []
+    with PdfPages(output) as pdf:
+        for index,child in enumerate(policies):
+            child = dict(child)
+            if index==0 and 'historical_baseline' in report:
+                child['historical_baseline'] = report['historical_baseline']
+            receipt = _plot_candidate_comparison(child,output,_pdf=pdf)
+            receipts.append(dict(receipt,selection_policy_version=child['selection_policy_version']))
+    return dict(schema='shift-sm-candidate-response-plot-v1',pages=sum(r['pages'] for r in receipts),
+        complete_sources=sum(r['complete_sources'] for r in receipts),
+        complete_events=sum(r['complete_events'] for r in receipts),policy_groups=receipts,
+        completion_conditioned=True,mixed_policy_efficiencies_withheld=True,
+        physical_yield_estimate=False,production_policy_qualified=False)
+
+
+def _plot_candidate_comparison(report, output, *, _pdf=None):
     """Show response and actual pair kinematics, without physical-yield claims."""
     import matplotlib
     matplotlib.use('Agg')
@@ -494,7 +585,9 @@ def plot_candidate_comparison(report, output):
     plt.rcParams.update({'font.size': 11, 'axes.titlesize': 12, 'pdf.fonttype': 42})
     fig, axes = plt.subplots(1, 2, figsize=(14, 7.7), gridspec_kw={'width_ratios': [1.15, 1.]})
     fig.subplots_adjust(left=.04, right=.98, top=.77, bottom=.27, wspace=.17)
-    fig.suptitle('QCD candidate selection: reconstructed results', fontsize=18, y=.975)
+    policy = report.get('selection_policy_version')
+    suffix = f' (selection {policy})' if policy else ''
+    fig.suptitle('QCD candidate selection: reconstructed results'+suffix, fontsize=18, y=.975)
     fig.text(.5, .925,
         f"{scope['complete_events']:,} originals from {scope['complete_sources']:,} complete source cohorts"
         f" / {scope['total_sources']:,} planned cohorts", ha='center', fontsize=12)
@@ -576,14 +669,21 @@ def plot_candidate_comparison(report, output):
     fig.text(.04, .16, 'Good = opposite sign, valid closest approach, and 0 ≤ DCA ≤ 50 cm.', fontsize=11)
     fig.text(.04, .105, 'Candidates and controls have different sampling probabilities. These raw fractions are not population efficiencies.', fontsize=10)
     fig.text(.04, .055, 'Completed cohorts can differ from unfinished cohorts. No full-campaign gain or physical event yield is claimed.', fontsize=10)
+    if scope.get('blocked_sources'):
+        fig.text(.04,.022,f"{scope['blocked_selected_events']} pending responses belong to {scope['blocked_sources']} sources blocked by full-GEN preflight; these are missing responses, not rejections.",fontsize=9)
     output.parent.mkdir(parents=True, exist_ok=True)
-    with PdfPages(output) as pdf:
+    with (nullcontext(_pdf) if _pdf is not None else PdfPages(output)) as pdf:
         pdf.savefig(fig)
         plt.close(fig)
+        if not scope['complete_events'] and not scope.get('partial_completed_events',0):
+            return dict(schema='shift-sm-candidate-response-plot-v1',pages=1,
+                complete_sources=scope['complete_sources'],complete_events=0,
+                completion_conditioned=True,physical_yield_estimate=False,
+                production_policy_qualified=False)
         fig, axes = plt.subplots(1, 2, figsize=(14, 8.7))
         from matplotlib.ticker import MaxNLocator
         fig.subplots_adjust(left=.075, right=.98, top=.78, bottom=.47, wspace=.24)
-        fig.suptitle('Actual Both-Both pair kinematics and tail statistics', fontsize=18, y=.975)
+        fig.suptitle('Actual Both-Both pair kinematics and tail statistics'+suffix, fontsize=18, y=.975)
         fig.text(.5, .925, 'Complete source cohorts only. Several pairs from one collision are not independent observations.',
                  ha='center', fontsize=11)
         fig.text(.5, .878, 'Solid: Both-Both + Good; dotted: all Both-Both vertices.', ha='center', fontsize=11)
@@ -606,6 +706,8 @@ def plot_candidate_comparison(report, output):
             axis.set_xlabel(xlabel)
             axis.set_ylabel('Reconstructed pairs, unweighted')
             axis.set_ylim(bottom=0)
+            if axis.get_ylim()[1] < 1.:
+                axis.set_ylim(top=1.)
             axis.yaxis.set_major_locator(MaxNLocator(integer=True))
             axis.grid(axis='y', color='#dddddd')
             if histograms:
@@ -644,7 +746,7 @@ def plot_candidate_comparison(report, output):
         plt.close(fig)
         fig, axis = plt.subplots(figsize=(14, 8.7))
         fig.subplots_adjust(left=.035, right=.97, top=.79, bottom=.34)
-        fig.suptitle('Useful weighted statistics within each QCD generator bin', fontsize=18, y=.975)
+        fig.suptitle('Useful weighted statistics within each QCD generator bin'+suffix, fontsize=18, y=.975)
         fig.text(.5, .918, 'Both-Both + Good; completed source draws only. No weighted spectrum is pooled across bins.',
                  ha='center', fontsize=11)
         axis.axis('off')
@@ -697,7 +799,7 @@ def plot_candidate_comparison(report, output):
         if partial_pairs:
             fig, axes = plt.subplots(1, 2, figsize=(14, 8.5))
             fig.subplots_adjust(left=.075, right=.97, top=.79, bottom=.38, wspace=.24)
-            fig.suptitle('First Both-Both pairs from partial source cohorts', fontsize=18, y=.975)
+            fig.suptitle('First Both-Both pairs from partial source cohorts'+suffix, fontsize=18, y=.975)
             fig.text(.5, .922, f'{len(partial_pairs)} observed pairs; raw case diagnostics only. No efficiency or normalized rate.',
                      ha='center', fontsize=11)
             shown = [row for row in partial_pairs if row['pair']['dcaValid'] == 1
@@ -709,11 +811,15 @@ def plot_candidate_comparison(report, output):
                 axis.axhspan(0., 50., color='#64834a', alpha=.12)
                 axis.axhline(50., color='#64834a', linestyle='--', label='Good DCA limit: 50 cm')
                 axis.scatter([], [], s=65, color='#2468a0', label='Observed Both-Both pair')
+                if any(row['good'] for row in shown):
+                    axis.scatter([],[],s=100,color='#64834a',marker='*',label='Good Both-Both pair')
                 for row in shown:
                     pair = row['pair']
                     if pair[field] is None or not math.isfinite(pair[field]):
                         continue
-                    axis.scatter(pair[field], pair['dca'], s=65, color='#2468a0', zorder=3)
+                    axis.scatter(pair[field],pair['dca'],s=100 if row['good'] else 65,
+                                 color='#64834a' if row['good'] else '#2468a0',
+                                 marker='*' if row['good'] else 'o',zorder=3)
                     axis.annotate(str(row['event_id'][-1]), (pair[field], pair['dca']),
                         xytext=(7, 5), textcoords='offset points', fontsize=10)
                 axis.set_ylim(0., maximum_dca)
@@ -743,6 +849,10 @@ def plot_candidate_comparison(report, output):
                 if row == 0:
                     cell.set_facecolor('#e3eaf0')
             good = sum(row['good'] for row in partial_pairs)
+            if good:
+                observed = '; '.join(f"event {row['event_id'][-1]}: pT {row['pair']['pt']:.2f} GeV, mass {row['pair']['mass']:.2f} GeV"
+                                     for row in partial_pairs if row['good'])
+                fig.text(.04,.118,'Observed Good Both-Both '+observed,fontsize=11,color='#46602f')
             fig.text(.04, .088, f'Good pairs in these observations: {good}/{len(partial_pairs)}. '
                      'Good requires OS, valid DCA and 0 ≤ DCA ≤ 50 cm.', fontsize=11)
             fig.text(.04, .045, f'{len(partial_pairs)-len(shown)} pairs have no usable DCA coordinate. '
@@ -750,6 +860,7 @@ def plot_candidate_comparison(report, output):
             pdf.savefig(fig)
             plt.close(fig)
             pages += 1
+        pages += plot_candidate_profiles(report,pdf)
     return dict(schema='shift-sm-candidate-response-plot-v1', pages=pages,
         complete_sources=scope['complete_sources'], complete_events=scope['complete_events'],
         completion_conditioned=True, physical_yield_estimate=False,
