@@ -594,7 +594,7 @@ def _plot_candidate_comparison(report, output, *, _pdf=None):
     fig.text(.5, .925,
         f"{scope['complete_events']:,} originals from {scope['complete_sources']:,} complete source cohorts"
         f" / {scope['total_sources']:,} planned cohorts", ha='center', fontsize=12)
-    fig.text(.5, .878, 'Partial campaign: only complete source draws enter these comparisons.',
+    fig.text(.5, .878, 'Study progress: only complete source draws enter these comparisons.',
              ha='center', fontsize=11)
     if 'pending_events' in scope:
         coverage = (f"{scope['frozen_draw_sources']:,}/{scope['total_sources']:,} source draws frozen; "
