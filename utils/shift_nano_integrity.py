@@ -95,10 +95,41 @@ def semantic_inventory(paths):
     return inventory
 
 
+
+def inventory_difference_summary(expected, actual, limit=8):
+    """Bound error details while keeping the complete equality test unchanged."""
+    digest = lambda value: hashlib.sha256(json.dumps(value,sort_keys=True,
+        separators=(",", ":")).encode()).hexdigest()
+    differences=[]
+    for name in sorted(set(expected)|set(actual)):
+        left,right=expected.get(name),actual.get(name)
+        if left==right:
+            continue
+        if (not isinstance(left,dict) or not isinstance(right,dict)
+                or left.get("classname")!="TTree" or right.get("classname")!="TTree"):
+            differences.append(dict(object=name,expected_sha256=digest(left),actual_sha256=digest(right)))
+        else:
+            for field in ("classname","entries"):
+                if left.get(field)!=right.get(field):
+                    differences.append(dict(field=name+"."+field,expected=left.get(field),actual=right.get(field)))
+            for branch in sorted(set(left["branches"])|set(right["branches"])):
+                a,b=left["branches"].get(branch),right["branches"].get(branch)
+                if a!=b:
+                    differences.append(dict(field=name+"."+branch,expected=a,actual=b))
+                if len(differences)>=limit:
+                    break
+        if len(differences)>=limit:
+            break
+    return dict(expected_inventory_sha256=digest(expected),actual_inventory_sha256=digest(actual),
+        first_differences=differences[:limit])
+
+
 def compare_all_branches(inputs, merged):
     """Return a compact proof tied to the exact input and replacement bytes."""
     expected, actual = semantic_inventory(inputs), semantic_inventory([merged])
-    require(expected == actual, "Merged Nano changed branch values, rows, schema or EDM metadata baskets")
+    if expected != actual:
+        raise ValueError("Merged Nano changed branch values, rows, schema or EDM metadata baskets: "
+                         +json.dumps(inventory_difference_summary(expected,actual),sort_keys=True))
     compact = json.dumps(actual, sort_keys=True, separators=(",", ":")).encode()
     return dict(schema="shift-nano-all-branch-equivalence-v1", complete=True,
         events=actual["Events"]["entries"],

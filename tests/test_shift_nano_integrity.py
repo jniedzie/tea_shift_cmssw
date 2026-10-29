@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "utils"))
@@ -58,6 +59,23 @@ class RetirementProofTest(unittest.TestCase):
         bad["merged_nano_integrity"]["trees"]["Events"]["branches"] = 2
         with self.assertRaisesRegex(ValueError, "inconsistent Events"):
             integrity.validate_retirement_proof(bad)
+
+
+class MergeFailureDetailTest(unittest.TestCase):
+    def test_exact_branch_failure_is_still_rejected_with_bounded_details(self):
+        expected=dict(Events=dict(classname="TTree",entries=2,branches={
+            "pt":dict(typename="float",mode="ordered-values",sha256="a"*64)}))
+        actual=copy.deepcopy(expected);actual["Events"]["branches"]["pt"]["sha256"]="b"*64
+        with patch.object(integrity,"semantic_inventory",side_effect=[expected,actual]):
+            with self.assertRaisesRegex(ValueError,"Events.pt"):
+                integrity.compare_all_branches(["original"],"merged")
+        detail=integrity.inventory_difference_summary(expected,actual)
+        self.assertNotEqual(detail["expected_inventory_sha256"],detail["actual_inventory_sha256"])
+        self.assertEqual(detail["first_differences"][0]["expected"],expected["Events"]["branches"]["pt"])
+        many=dict(expected,**{f"missing{i}":dict(classname="TObjString",value="private"*1000) for i in range(20)})
+        limited=integrity.inventory_difference_summary(many,{},limit=3)
+        self.assertEqual(len(limited["first_differences"]),3)
+        self.assertNotIn("private",json.dumps(limited))
 
 
 @unittest.skipUnless(importlib.util.find_spec("uproot") and importlib.util.find_spec("ROOT"),
