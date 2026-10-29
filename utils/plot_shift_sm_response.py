@@ -383,18 +383,320 @@ def plot_benchmark(summary, output):
                 decay_pilot_included=summary.get('decay_pilot') is not None)
 
 
+def candidate_comparison_input(report):
+    """Validate disjoint completed-source results before displaying fractions."""
+    if report.get('schema') != 'shift-sm-candidate-response-analysis-v1':
+        raise ValueError('Require the candidate response analysis schema')
+    scope = report['scope']
+    if scope.get('completion_conditioned') is not True:
+        raise ValueError('Candidate comparison must declare its completed-source scope')
+    groups = {row['region_group']: row for row in report['pooled_groups']}
+    if set(groups) != {'candidate', 'controls'}:
+        raise ValueError('Require separate candidate and random-control groups')
+    for group in groups.values():
+        count = group['rows']
+        if type(count) is not int or not 0 <= group['muon_events'] <= count:
+            raise ValueError('Muon successes exceed the completed original-event count')
+        for name in ('inclusive', 'both_both', 'both_both_good'):
+            stats = group['targets'][name]
+            if (stats['events'] != count or not 0 <= stats['positive_originals'] <= count
+                    or stats['pairs'] < stats['positive_originals']):
+                raise ValueError('Response counts do not describe the completed originals')
+    if sum(group['rows'] for group in groups.values()) != scope['complete_events']:
+        raise ValueError('Candidate and control counts do not cover completed events')
+    for name, group in groups.items():
+        bins = [row for row in report['groups'] if row['region_group'] == name]
+        if sum(row['rows'] for row in bins) != group['rows']:
+            raise ValueError('Generator-bin counts do not cover the pooled group')
+        for category in ('inclusive', *CATEGORIES):
+            for field in ('positive_originals', 'pairs'):
+                if sum(row['targets'][category][field] for row in bins) != group['targets'][category][field]:
+                    raise ValueError('Generator-bin successes do not cover the pooled group')
+    return scope, groups
+
+
+def pooled_candidate_histograms(report):
+    """Add disjoint original-event histogram contributions, keeping flow bins."""
+    result = {}
+    for row in report['histograms']:
+        if row.get('stratum') == 'all_qcd':
+            # Per-bin rows below are the nonoverlapping authority.
+            continue
+        if row['category'] not in CATEGORIES or row['field'] not in ('mass', 'pt'):
+            continue
+        key = row['region_group'], row['category'], row['field']
+        edges = row['edges']
+        if (len(edges) < 2 or any(not math.isfinite(x) for x in edges)
+                or any(a >= b for a, b in zip(edges, edges[1:]))):
+            raise ValueError('Require finite increasing candidate histogram edges')
+        if len(row['raw_counts']) != len(edges)+1:
+            raise ValueError('Candidate histograms must retain underflow and overflow')
+        if any(type(value) is not int or value < 0 for value in row['raw_counts']):
+            raise ValueError('Raw histogram counts must be nonnegative integers')
+        if key not in result:
+            result[key] = dict(edges=list(edges), raw_counts=[0]*(len(edges)+1), nonfinite=0)
+        if result[key]['edges'] != edges:
+            raise ValueError('Cannot pool candidate histograms with different axes')
+        target = result[key]['raw_counts']
+        for index, value in enumerate(row['raw_counts']):
+            target[index] += value
+        result[key]['nonfinite'] += row.get('nonfinite', 0)
+    return result
+
+
+def plot_candidate_comparison(report, output):
+    """Show response and actual pair kinematics, without physical-yield claims."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+    import numpy as np
+
+    scope, groups = candidate_comparison_input(report)
+    histograms = pooled_candidate_histograms(report)
+    for name, group in groups.items():
+        for category in CATEGORIES:
+            for field in ('mass', 'pt'):
+                histogram = histograms.get((name, category, field), dict(raw_counts=[], nonfinite=0))
+                if sum(histogram['raw_counts'])+histogram['nonfinite'] != group['targets'][category]['pairs']:
+                    raise ValueError('Kinematic histogram counts do not cover retained pairs')
+    labels = {'candidate': 'Pointing + shallow parent', 'controls': 'Random controls'}
+    colors = {'candidate': '#2468a0', 'controls': '#c47b29'}
+    stages = [('muons', '≥1 reco muon'), ('inclusive', 'Any dimuon'),
+              ('both_both', 'Both-Both'), ('both_both_good', 'Both-Both + Good')]
+    plt.rcParams.update({'font.size': 11, 'axes.titlesize': 12, 'pdf.fonttype': 42})
+    fig, axes = plt.subplots(1, 2, figsize=(14, 7.7), gridspec_kw={'width_ratios': [1.15, 1.]})
+    fig.subplots_adjust(left=.04, right=.98, top=.77, bottom=.27, wspace=.17)
+    fig.suptitle('QCD candidate selection: reconstructed results', fontsize=18, y=.975)
+    fig.text(.5, .925,
+        f"{scope['complete_events']:,} originals from {scope['complete_sources']:,} complete source cohorts"
+        f" / {scope['total_sources']:,} planned cohorts", ha='center', fontsize=12)
+    fig.text(.5, .878, 'Partial campaign: only complete source draws enter these comparisons.',
+             ha='center', fontsize=11)
+    if 'pending_events' in scope:
+        coverage = (f"{scope['frozen_draw_sources']:,}/{scope['total_sources']:,} source draws frozen; "
+                    if 'frozen_draw_sources' in scope else '')
+        fig.text(.5, .835,
+            coverage+f"{scope['pending_events']:,} individual responses pending. Pending outcomes are not physics zeros.",
+            ha='center', fontsize=10)
+    left, right = axes
+    left.axis('off')
+    rows = []
+    for group_name in ('candidate', 'controls'):
+        group = groups[group_name]
+        values = [group['muon_events'], group['targets']['inclusive']['positive_originals'],
+                  group['targets']['both_both']['positive_originals'],
+                  group['targets']['both_both_good']['positive_originals']]
+        rows.append([labels[group_name], str(group['rows']),
+                     *(str(value) if group['rows'] else '—' for value in values)])
+    table = left.table(cellText=rows,
+        colLabels=['GEN group', 'Tested', '≥1 muon', 'Dimuon', 'Both-Both', '+ Good'],
+        colWidths=[.36, .11, .13, .12, .15, .13], loc='center', cellLoc='center')
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)
+    table.scale(1., 2.45)
+    for (row, column), cell in table.get_celld().items():
+        cell.set_edgecolor('#c5cdd3')
+        if row == 0:
+            cell.set_facecolor('#e3eaf0')
+            cell.set_text_props(weight='bold')
+        elif column == 0:
+            cell.set_text_props(ha='left')
+    left.set_title('Independent original events with at least one success', pad=12)
+    partial = [row for row in report.get('partial_groups', []) if row['stratum'] == 'all_qcd']
+    if partial:
+        left.text(.5, .22, 'Partial-source responses: counts only', transform=left.transAxes,
+                  ha='center', fontsize=10)
+        table = left.table(cellText=[[labels[row['region_group']], str(row['rows']),
+            str(row['muon_events']), str(row['targets']['inclusive']['positive_originals'])]
+            for row in partial], colLabels=['GEN group', 'Finished', '≥1 muon', 'Dimuon'],
+            colWidths=[.50, .17, .17, .16], cellLoc='center', bbox=[0., -.025, 1., .18])
+        table.auto_set_font_size(False)
+        table.set_fontsize(9)
+        for (row, _), cell in table.get_celld().items():
+            cell.set_edgecolor('#c5cdd3')
+            if row == 0:
+                cell.set_facecolor('#e3eaf0')
+    x = np.arange(len(stages), dtype=float)
+    largest_upper = 0.
+    for offset, group_name in ((-.10, 'candidate'), (.10, 'controls')):
+        group = groups[group_name]
+        n = group['rows']
+        first = True
+        for index, (key, _) in enumerate(stages):
+            passed = group['muon_events'] if key == 'muons' else group['targets'][key]['positive_originals']
+            if not n:
+                continue
+            low, high = wilson_interval(passed, n)
+            largest_upper = max(largest_upper, high)
+            rate = passed/n
+            right.errorbar(index+offset, rate,
+                yerr=[[rate-low], [high-rate]], fmt='o', color=colors[group_name],
+                capsize=4, markersize=6, label=labels[group_name] if first else None)
+            first = False
+    right.set_xticks(x)
+    right.set_xticklabels([name for _, name in stages], rotation=20, ha='right')
+    right.set_ylabel('Raw fraction in the reconstructed test sample')
+    right.set_ylim(-.025, min(1.04, max(.20, largest_upper*1.2)))
+    right.grid(axis='y', color='#dddddd')
+    if scope['complete_events']:
+        right.legend(frameon=False, fontsize=10)
+    else:
+        right.set_ylim(-.035, 1.04)
+        right.text(.5, .52, 'No complete current source draws yet.\nNo reconstruction efficiency is estimated.',
+                   transform=right.transAxes, ha='center', va='center', fontsize=12)
+    right.set_title('Raw sample response with 95% intervals')
+    fig.text(.04, .16, 'Good = opposite sign, valid closest approach, and 0 ≤ DCA ≤ 50 cm.', fontsize=11)
+    fig.text(.04, .105, 'Candidates and controls have different sampling probabilities. These raw fractions are not population efficiencies.', fontsize=10)
+    fig.text(.04, .055, 'Completed cohorts can differ from unfinished cohorts. No full-campaign gain or physical event yield is claimed.', fontsize=10)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with PdfPages(output) as pdf:
+        pdf.savefig(fig)
+        plt.close(fig)
+        fig, axes = plt.subplots(1, 2, figsize=(14, 8.7))
+        from matplotlib.ticker import MaxNLocator
+        fig.subplots_adjust(left=.075, right=.98, top=.78, bottom=.47, wspace=.24)
+        fig.suptitle('Actual Both-Both pair kinematics and tail statistics', fontsize=18, y=.975)
+        fig.text(.5, .925, 'Raw pair counts; several pairs from one collision are not independent observations.',
+                 ha='center', fontsize=11)
+        fig.text(.5, .878, 'Solid: Both-Both + Good; dotted: all Both-Both vertices.', ha='center', fontsize=11)
+        flow_notes = []
+        for axis, field, xlabel in zip(axes, ('mass', 'pt'),
+                ('Reconstructed dimuon mass [GeV]', 'Reconstructed dimuon pT [GeV]')):
+            for group_name in ('candidate', 'controls'):
+                for category, style in (('both_both', ':'), ('both_both_good', '-')):
+                    histogram = histograms.get((group_name, category, field))
+                    if histogram is None:
+                        continue
+                    edges, counts = histogram['edges'], histogram['raw_counts']
+                    axis.step(edges, [*counts[1:-1], counts[-2]], where='post',
+                        color=colors[group_name], linestyle=style, linewidth=2.,
+                        label=labels[group_name] if category == 'both_both_good' else None)
+                    if category == 'both_both_good':
+                        flow_notes.append(f"{group_name} {field} {counts[0]}/{counts[-1]}/{histogram['nonfinite']}")
+            for threshold in ((20., 50.) if field == 'mass' else (10., 20.)):
+                axis.axvline(threshold, color='#777777', linewidth=.8, alpha=.6)
+            axis.set_xlabel(xlabel)
+            axis.set_ylabel('Reconstructed pairs, unweighted')
+            axis.set_ylim(bottom=0)
+            axis.yaxis.set_major_locator(MaxNLocator(integer=True))
+            axis.grid(axis='y', color='#dddddd')
+            if histograms:
+                axis.legend(frameon=False, fontsize=9)
+        tail_rows = []
+        for group_name in ('candidate', 'controls'):
+            for category, category_name in (('both_both', 'Both-Both'), ('both_both_good', '+ Good')):
+                tail = groups[group_name]['tails'][category]
+                target = groups[group_name]['targets'][category]
+                available = groups[group_name]['rows'] > 0
+                tail_rows.append([labels[group_name], category_name,
+                    str(target['positive_originals']) if available else '—',
+                    str(target['pairs']) if available else '—',
+                    *(str(tail[name]['positive_originals']) if available else '—' for name in
+                      ('mass_gt_20', 'mass_gt_50', 'pt_gt_10', 'pt_gt_20'))])
+        table_axis = fig.add_axes([.035, .18, .93, .22])
+        table_axis.axis('off')
+        table = table_axis.table(cellText=tail_rows,
+            colLabels=['GEN group', 'Vertex selection', 'Events', 'Pairs',
+                       'm >20', 'm >50', 'pT >10', 'pT >20'],
+            colWidths=[.25, .16, .08, .13, .095, .095, .095, .095],
+            loc='center', cellLoc='center')
+        table.auto_set_font_size(False)
+        table.set_fontsize(10)
+        table.scale(1., 1.85)
+        for (row, _), cell in table.get_celld().items():
+            cell.set_edgecolor('#c5cdd3')
+            if row == 0:
+                cell.set_facecolor('#e3eaf0')
+                cell.set_text_props(weight='bold')
+        fig.text(.04, .12, 'Tail columns count independent original events. Weighted statistics are shown separately for each generator bin.', fontsize=10)
+        fig.text(.04, .080, 'These raw kinematic distributions describe the sampled test mix, not the physical QCD spectrum.', fontsize=10)
+        fig.text(.04, .043, 'Zero observed tails do not establish zero physical rate.', fontsize=9)
+        fig.text(.04, .019, 'Underflow/overflow/nonfinite pair counts: '+ '; '.join(flow_notes), fontsize=8)
+        pdf.savefig(fig)
+        plt.close(fig)
+        fig, axis = plt.subplots(figsize=(14, 8.7))
+        fig.subplots_adjust(left=.035, right=.97, top=.79, bottom=.34)
+        fig.suptitle('Useful weighted statistics within each QCD generator bin', fontsize=18, y=.975)
+        fig.text(.5, .918, 'Both-Both + Good; completed source draws only. No weighted spectrum is pooled across bins.',
+                 ha='center', fontsize=11)
+        axis.axis('off')
+        rows = []
+        for group in sorted(report['groups'], key=lambda row: (
+                float(row['stratum'].split('_')[1].split('to')[0]), row['region_group'] != 'candidate')):
+            stats = group['targets']['both_both_good']
+            available = group['rows'] > 0
+            bin_name = group['stratum'].split('_', 1)[1].replace('to', '–').replace('inf', '∞')
+            tails = group['tails']['both_both_good']
+            rows.append([bin_name, labels[group['region_group']], str(group['rows']),
+                str(stats['positive_originals']) if available else '—',
+                f"{stats['effective_pair_contributions']:.3f}" if available else '—',
+                str(tails['mass_gt_20']['positive_originals']) if available else '—',
+                str(tails['pt_gt_10']['positive_originals']) if available else '—',
+                f"{group['total_sim_seconds']/3600.:.2f}" if available else '—'])
+        if rows:
+            table = axis.table(cellText=rows,
+                colLabels=['Generator bin\n[GeV]', 'GEN group', 'Tested', 'Good events',
+                           'Weighted Neff', 'm >20', 'pT >10', 'SIM hours'],
+                colWidths=[.13, .25, .10, .12, .13, .09, .09, .10],
+                loc='center', cellLoc='center')
+            table.auto_set_font_size(False)
+            table.set_fontsize(10)
+            table.scale(1., 2.1)
+            for (row, _), cell in table.get_celld().items():
+                cell.set_edgecolor('#c5cdd3')
+                if row == 0:
+                    cell.set_facecolor('#e3eaf0')
+                    cell.set_text_props(weight='bold')
+        else:
+            axis.text(.5, .5, 'No completed source cohorts yet.', ha='center', va='center', fontsize=14)
+        fig.text(.04, .275, 'Neff uses W / (p × q) once, with all pairs from an original grouped before its second moment.', fontsize=10)
+        fig.text(.04, .230, 'Different generator bins have different source exposure. Their native weighted sums are not a physical combined yield.', fontsize=10)
+        fig.text(.04, .195, 'No luminosity scaling; rate normalization remains unqualified.', fontsize=10)
+        baseline = report.get('historical_baseline')
+        if baseline:
+            historical = {row['region_group']: row for row in baseline['pooled_groups']}
+            a, b = historical['candidate'], historical['controls']
+            fig.text(.04, .165, f"Earlier independent validation: {a['rows']} candidates → "
+                f"{a['targets']['both_both_good']['positive_originals']} Good Both-Both events; "
+                f"{b['rows']} controls → {b['targets']['both_both_good']['positive_originals']}.", fontsize=11)
+            fig.text(.04, .118, 'Earlier candidates used a looser one-station pointing rule; this search requires two stations. The samples are separate.', fontsize=10)
+            fig.text(.04, .073, 'Those earlier successes support testing the idea; they do not establish a gain for the current selection or its tails.', fontsize=10)
+        else:
+            fig.text(.04, .155, 'Completion conditioning and limited positive statistics still apply. No full-production gain is inferred.', fontsize=10)
+        pdf.savefig(fig)
+        plt.close(fig)
+    return dict(schema='shift-sm-candidate-response-plot-v1', pages=3,
+        complete_sources=scope['complete_sources'], complete_events=scope['complete_events'],
+        completion_conditioned=True, physical_yield_estimate=False,
+        production_policy_qualified=False)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('summary', type=Path)
     parser.add_argument('output', type=Path)
     parser.add_argument('--receipt', type=Path)
     parser.add_argument('--stratified', action='store_true')
+    parser.add_argument('--candidate-comparison', action='store_true',
+                        help='Plot complete-source candidate/control response and reconstructed mass/pT')
     parser.add_argument('--all-features', action='store_true',
                         help='Write the measured direction, energy, material and birth profiles into one PDF')
     parser.add_argument('--split', choices=('development', 'validation'))
     args = parser.parse_args()
     raw = args.summary.read_bytes()
     summary = json.loads(raw)
+    if args.candidate_comparison:
+        if args.stratified or args.all_features or args.split:
+            parser.error('--candidate-comparison is separate from marginal or old benchmark reports')
+        receipt = plot_candidate_comparison(summary, args.output)
+        receipt.update(input=str(args.summary), input_sha256=hashlib.sha256(raw).hexdigest(),
+            output=str(args.output), output_sha256=hashlib.sha256(args.output.read_bytes()).hexdigest())
+        if args.receipt:
+            args.receipt.parent.mkdir(parents=True, exist_ok=True)
+            args.receipt.write_text(json.dumps(receipt, indent=2, allow_nan=False)+'\n')
+        print('PDF SHA256', receipt['output_sha256'])
+        return
     if args.all_features:
         if args.stratified:
             parser.error('--all-features and --stratified are separate report types')

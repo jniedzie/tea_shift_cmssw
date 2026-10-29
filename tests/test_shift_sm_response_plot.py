@@ -1,5 +1,6 @@
 # Code style: AI-code. AI-generated checks of stratified response plot claims.
 import importlib.util
+import copy
 from pathlib import Path
 import shutil
 import subprocess
@@ -127,6 +128,99 @@ class StratifiedPlotTest(unittest.TestCase):
         self.assertIn('Zero ordinary pairs do not establish zero rate', text)
         self.assertTrue(receipt['decay_pilot_included'])
         self.assertFalse(receipt['production_policy_qualified'])
+
+
+class CandidateComparisonTest(unittest.TestCase):
+    def statistics(self, count, passed):
+        return dict(events=count, positive_originals=passed, pairs=passed,
+                    effective_pair_contributions=float(passed))
+
+    def summary(self):
+        groups = []
+        for name, count, muons, passed in [('candidate', 10, 4, 2), ('controls', 20, 1, 0)]:
+            stats = self.statistics(count, passed)
+            groups.append(dict(region_group=name, rows=count, muon_events=muons,
+                targets={category: dict(stats) for category in ('inclusive', *module.CATEGORIES)},
+                tails={category: {tail: self.statistics(count, 0) for tail in
+                    ('mass_gt_20', 'mass_gt_50', 'pt_gt_10', 'pt_gt_20')}
+                    for category in module.CATEGORIES}))
+        histograms = []
+        for group in ('candidate', 'controls'):
+            for category in module.CATEGORIES:
+                for field in ('mass', 'pt'):
+                    histograms.append(dict(stratum='qcd_20toinf', region_group=group,
+                        category=category, field=field, edges=[0., 10., 20., 50., 100.],
+                        raw_counts=[0, 2 if group == 'candidate' else 0, 0, 0, 0, 0]))
+        return dict(schema='shift-sm-candidate-response-analysis-v1',
+            scope=dict(complete_sources=5, total_sources=385, complete_events=30,
+                       completion_conditioned=True), pooled_groups=groups,
+            groups=[dict(copy.deepcopy(group), stratum='qcd_20toinf', total_sim_seconds=0.)
+                    for group in groups], histograms=histograms)
+
+    def test_incomplete_response_cannot_be_presented_as_completed(self):
+        report = self.summary()
+        report['scope']['complete_events'] += 1
+        with self.assertRaisesRegex(ValueError, 'do not cover completed'):
+            module.candidate_comparison_input(report)
+        report = self.summary()
+        report['pooled_groups'][0]['targets']['both_both']['positive_originals'] = 11
+        with self.assertRaisesRegex(ValueError, 'do not describe'):
+            module.candidate_comparison_input(report)
+        report = self.summary()
+        report['groups'][0]['rows'] -= 1
+        with self.assertRaisesRegex(ValueError, 'Generator-bin counts'):
+            module.candidate_comparison_input(report)
+
+    def test_flow_bins_survive_pooling_and_different_axes_fail(self):
+        report = self.summary()
+        additional = copy.deepcopy(report['histograms'][0])
+        additional.update(stratum='qcd_10to20', raw_counts=[1, 3, 0, 0, 0, 4])
+        report['histograms'].append(additional)
+        key = ('candidate', 'both_both', 'mass')
+        pooled = module.pooled_candidate_histograms(report)
+        self.assertEqual(pooled[key]['raw_counts'], [1, 5, 0, 0, 0, 4])
+        report['histograms'][-1]['edges'][1] = 12.
+        with self.assertRaisesRegex(ValueError, 'different axes'):
+            module.pooled_candidate_histograms(report)
+
+    def test_kinematic_entries_cannot_disappear_from_the_report(self):
+        report = self.summary()
+        report['histograms'][0]['raw_counts'][1] = 1
+        with tempfile.TemporaryDirectory(prefix='sm-missing-pair-') as directory:
+            with self.assertRaisesRegex(ValueError, 'do not cover retained pairs'):
+                module.plot_candidate_comparison(report, Path(directory)/'response.pdf')
+
+    @unittest.skipUnless(shutil.which('pdftotext'), 'Requires PDF text readback')
+    def test_render_keeps_raw_and_weighted_claims_separate(self):
+        with tempfile.TemporaryDirectory(prefix='sm-candidate-response-') as directory:
+            path = Path(directory)/'response.pdf'
+            receipt = module.plot_candidate_comparison(self.summary(), path)
+            text = subprocess.check_output(['pdftotext', '-layout', str(path), '-'], text=True)
+        self.assertEqual(text.count('\f'), 3)
+        self.assertIn('30 originals from 5 complete source cohorts / 385 planned cohorts', text)
+        self.assertIn('not population efficiencies', text)
+        self.assertIn('Zero observed tails do not establish zero physical rate', text)
+        self.assertIn('rate normalization remains unqualified', text)
+        self.assertFalse(receipt['physical_yield_estimate'])
+        self.assertFalse(receipt['production_policy_qualified'])
+
+    @unittest.skipUnless(shutil.which('pdftotext'), 'Requires PDF text readback')
+    def test_empty_completed_snapshot_does_not_invent_an_efficiency(self):
+        report = self.summary()
+        report['scope'].update(complete_sources=0, complete_events=0)
+        for group in report['pooled_groups']+report['groups']:
+            group.update(rows=0, muon_events=0)
+            group['targets'] = {category: self.statistics(0, 0) for category in
+                                ('inclusive', *module.CATEGORIES)}
+            group['tails'] = {category: {tail: self.statistics(0, 0) for tail in
+                ('mass_gt_20', 'mass_gt_50', 'pt_gt_10', 'pt_gt_20')} for category in module.CATEGORIES}
+        report['histograms'] = []
+        with tempfile.TemporaryDirectory(prefix='sm-empty-response-') as directory:
+            path = Path(directory)/'response.pdf'
+            module.plot_candidate_comparison(report, path)
+            text = subprocess.check_output(['pdftotext', '-layout', str(path), '-'], text=True)
+        self.assertIn('No complete current source draws yet', text)
+        self.assertIn('No reconstruction efficiency is estimated', text)
 
 
 if __name__ == '__main__':
