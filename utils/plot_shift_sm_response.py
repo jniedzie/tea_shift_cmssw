@@ -552,6 +552,9 @@ def plot_candidate_comparison(report, output):
             child = dict(child)
             if index==0 and 'historical_baseline' in report:
                 child['historical_baseline'] = report['historical_baseline']
+            control = report.get('control_tail_case')
+            if control and control['selection_policy_version']==child['selection_policy_version']:
+                child['control_tail_case'] = control
             receipt = _plot_candidate_comparison(child,output,_pdf=pdf)
             receipts.append(dict(receipt,selection_policy_version=child['selection_policy_version']))
     return dict(schema='shift-sm-candidate-response-plot-v1',pages=sum(r['pages'] for r in receipts),
@@ -779,6 +782,10 @@ def _plot_candidate_comparison(report, output, *, _pdf=None):
                     cell.set_text_props(weight='bold')
         else:
             axis.text(.5, .5, 'No completed source cohorts yet.', ha='center', va='center', fontsize=14)
+        control = report.get('control_tail_case')
+        if control:
+            fig.text(.04,.34,f"Control event {control['event_id'][-1]} passes Good Both-Both, but two distinct GEN muons are not confirmed.",fontsize=10)
+            fig.text(.04,.305,'It remains counted; split tracks, charge errors and unmatched secondaries need separate checks.',fontsize=10)
         fig.text(.04, .275, 'Neff uses W / (p × q) once, with all pairs from an original grouped before its second moment.', fontsize=10)
         fig.text(.04, .230, 'Different generator bins have different source exposure. Their native weighted sums are not a physical combined yield.', fontsize=10)
         fig.text(.04, .195, 'No luminosity scaling; rate normalization remains unqualified.', fontsize=10)
@@ -798,7 +805,9 @@ def _plot_candidate_comparison(report, output, *, _pdf=None):
         pages = 3
         if partial_pairs:
             fig, axes = plt.subplots(1, 2, figsize=(14, 8.5))
-            fig.subplots_adjust(left=.075, right=.97, top=.79, bottom=.38, wspace=.24)
+            many_cases = len(partial_pairs) > 6
+            fig.subplots_adjust(left=.075,right=.97,top=.79,
+                                bottom=.49 if many_cases else .38,wspace=.24)
             fig.suptitle('First Both-Both pairs from partial source cohorts'+suffix, fontsize=18, y=.975)
             fig.text(.5, .922, f'{len(partial_pairs)} observed pairs; raw case diagnostics only. No efficiency or normalized rate.',
                      ha='center', fontsize=11)
@@ -830,7 +839,7 @@ def _plot_candidate_comparison(report, output, *, _pdf=None):
                 axis.set_ylabel('Dimuon distance of closest approach [cm]')
                 axis.grid(alpha=.2)
                 axis.legend(frameon=False, fontsize=10, loc='upper right')
-            table_axis = fig.add_axes([.04, .15, .92, .16])
+            table_axis = fig.add_axes([.04,.15,.92,.27 if many_cases else .16])
             table_axis.axis('off')
             def number(value):
                 return 'Unavailable' if value is None or not math.isfinite(value) else f'{value:.3f}'
@@ -840,19 +849,21 @@ def _plot_candidate_comparison(report, output, *, _pdf=None):
                 str(row['pair']['isOS']), str(row['pair']['dcaValid']), 'Yes' if row['good'] else 'No']
                 for row in partial_pairs],
                 colLabels=['Source', 'Event', 'Mass [GeV]', 'pT [GeV]', 'DCA [cm]', 'OS', 'Valid DCA', 'Good'],
-                loc='center', cellLoc='center', colWidths=[.22, .08, .13, .13, .13, .07, .13, .09])
+                loc='center',bbox=[0.,0.,1.,1.] if many_cases else None,
+                cellLoc='center',colWidths=[.22,.08,.13,.13,.13,.07,.13,.09])
             table.auto_set_font_size(False)
-            table.set_fontsize(10)
-            table.scale(1., 1.7)
+            table.set_fontsize(9 if many_cases else 10)
+            if not many_cases:
+                table.scale(1.,1.7)
             for (row, _), cell in table.get_celld().items():
                 cell.set_edgecolor('#c5cdd3')
                 if row == 0:
                     cell.set_facecolor('#e3eaf0')
             good = sum(row['good'] for row in partial_pairs)
             if good:
-                observed = '; '.join(f"event {row['event_id'][-1]}: pT {row['pair']['pt']:.2f} GeV, mass {row['pair']['mass']:.2f} GeV"
-                                     for row in partial_pairs if row['good'])
-                fig.text(.04,.118,'Observed Good Both-Both '+observed,fontsize=11,color='#46602f')
+                leading = max((row for row in partial_pairs if row['good']),key=lambda row:row['pair']['pt'])
+                observed = f"event {leading['event_id'][-1]}: pT {leading['pair']['pt']:.2f} GeV, mass {leading['pair']['mass']:.2f} GeV"
+                fig.text(.04,.118,'Largest observed Good Both-Both pT, '+observed,fontsize=11,color='#46602f')
             fig.text(.04, .088, f'Good pairs in these observations: {good}/{len(partial_pairs)}. '
                      'Good requires OS, valid DCA and 0 ≤ DCA ≤ 50 cm.', fontsize=11)
             fig.text(.04, .045, f'{len(partial_pairs)-len(shown)} pairs have no usable DCA coordinate. '

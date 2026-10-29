@@ -193,17 +193,18 @@ class CandidateComparisonTest(unittest.TestCase):
     @unittest.skipUnless(shutil.which('pdftotext'), 'Requires PDF text readback')
     def test_partial_pairs_are_visible_but_do_not_enter_efficiency_counts(self):
         report = self.summary()
-        report['partial_groups'] = [dict(stratum='all_qcd', region_group='candidate', rows=2,
-            muon_events=2, targets=dict(inclusive=dict(positive_originals=2), both_both=dict(pairs=2)))]
+        report['partial_groups'] = [dict(stratum='all_qcd', region_group='candidate', rows=3,
+            muon_events=3, targets=dict(inclusive=dict(positive_originals=3), both_both=dict(pairs=3)))]
         report['partial_positive_originals'] = [dict(source_id='supply_qcd_20toinf_00032',
             gen_sha256='a'*64, event_id=[1, 1, number], region_group='candidate',
             rates_and_intervals_withheld=True, pair_counts=dict(both_both=1),
             retained_pairs=[dict(topologyMin=2, topologyMax=2, isOS=1, dcaValid=1,
-                                 mass=mass, pt=1.2, dca=distance)])
-            for number, mass, distance in [(576, 3.119, 219.36), (61, .971, 96.05)]]
+                                 mass=mass, pt=pt, dca=distance)])
+            for number,mass,distance,pt in [(576,3.119,219.36,1.2),(61,.971,96.05,1.2),
+                                           (286,3.569,11.87,22.79)]]
         pairs = module.partial_both_both_pairs(report)
-        self.assertEqual(len(pairs), 2)
-        self.assertFalse(any(row['good'] for row in pairs))
+        self.assertEqual(len(pairs), 3)
+        self.assertEqual(sum(row['good'] for row in pairs),1)
         with tempfile.TemporaryDirectory(prefix='sm-partial-pairs-') as directory:
             path = Path(directory)/'response.pdf'
             receipt = module.plot_candidate_comparison(report, path)
@@ -212,7 +213,8 @@ class CandidateComparisonTest(unittest.TestCase):
         self.assertEqual(receipt['complete_events'], 30)
         self.assertIn('First Both-Both pairs from partial source cohorts', text)
         self.assertIn('Good DCA limit: 50 cm', text)
-        self.assertIn('Good pairs in these observations: 0/2', text)
+        self.assertIn('Good pairs in these observations: 1/3', text)
+        self.assertIn('pT 22.79 GeV',text)
         self.assertIn('excluded from the efficiency plots', text)
         report['partial_positive_originals'].pop()
         with self.assertRaisesRegex(ValueError, 'does not cover the raw observed'):
@@ -220,15 +222,18 @@ class CandidateComparisonTest(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which('pdftotext'), 'Requires PDF text readback')
     def test_render_keeps_raw_and_weighted_claims_separate(self):
+        report = self.summary()
+        report['control_tail_case'] = dict(event_id=[1,1,949])
         with tempfile.TemporaryDirectory(prefix='sm-candidate-response-') as directory:
             path = Path(directory)/'response.pdf'
-            receipt = module.plot_candidate_comparison(self.summary(), path)
+            receipt = module.plot_candidate_comparison(report,path)
             text = subprocess.check_output(['pdftotext', '-layout', str(path), '-'], text=True)
         self.assertEqual(text.count('\f'), 3)
         self.assertIn('30 originals from 5 complete source cohorts / 385 planned cohorts', text)
         self.assertIn('not population efficiencies', text)
         self.assertIn('Zero observed tails do not establish zero physical rate', text)
         self.assertIn('rate normalization remains unqualified', text)
+        self.assertIn('two distinct GEN muons are not confirmed',text)
         self.assertFalse(receipt['physical_yield_estimate'])
         self.assertFalse(receipt['production_policy_qualified'])
 
