@@ -174,7 +174,24 @@ def profile_q_mc(signal, signal_variance, background_components, background_vari
                            2.*LOG_KAPPA*float(np.sum(fitted[1:]*t))+2.*theta[1]])
         return value,gradient
 
-    fit=minimize(objective,np.zeros(2),jac=True,method='L-BFGS-B',bounds=((-20.,20.),(-20.,20.)),
+    # Approximate local information rescales the two optimizer coordinates.
+    # Large, well-known control yields can make the background-normalization
+    # curvature many orders larger than the signal curvature. Unit steps in
+    # theta would then send trial fits near a numerically singular gamma pole.
+    # This changes coordinates only: objective, nuisance bounds and priors stay
+    # identical. The scale uses the Poisson+MC variance at the nominal point.
+    denominator=observed+variances.sum(axis=0)
+    information=np.array([np.sum(np.divide(signal*signal,denominator,out=np.zeros_like(signal),where=denominator>0)),
+                          np.sum(np.divide(observed*observed,denominator,out=np.zeros_like(observed),where=denominator>0))])
+    information[0]+=signal[denominator==0].sum()
+    coordinate_scale=np.sqrt(1.+LOG_KAPPA**2*information)
+
+    def scaled_objective(coordinates):
+        value,gradient=objective(coordinates/coordinate_scale)
+        return value,gradient/coordinate_scale
+
+    bounds=[(-20.*scale,20.*scale) for scale in coordinate_scale]
+    fit=minimize(scaled_objective,np.zeros(2),jac=True,method='L-BFGS-B',bounds=bounds,
                  options={'ftol':1.e-13,'gtol':1.e-8,'maxiter':500,'maxls':40})
     if not fit.success and np.linalg.norm(fit.jac,np.inf)>1.e-5:
         raise RuntimeError('Global MC likelihood profile did not converge: '+str(fit.message))

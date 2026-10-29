@@ -532,9 +532,143 @@ def mc_statistics_study(config,masses=(.7,2.,5.)):
     print('MC comparison retained in',output,flush=True)
 
 
+def sm_statistics_study(config,masses=(.7,2.,5.)):
+    """Rank existing SM MC limitations; forecast unchanged-mean MC top-ups."""
+    import csv
+    import time
+    from matplotlib.backends.backend_pdf import PdfPages
+    from shift_limits_lifetime import plotting
+    started=time.monotonic();current=SimpleNamespace(**vars(config));current.include_mc_stat_uncertainties=True
+    model=Model(current);output=model.output/'mc_statistics';output.mkdir(exist_ok=True)
+    destination=output/'sm_precision.json'
+    if destination.exists():raise ValueError('Reuse the completed frozen SM-statistics diagnosis')
+    nominal=json.loads((model.output/'scan.json').read_text())
+    if nominal.get('include_mc_stat_uncertainties',False):raise ValueError('SM-statistics diagnosis requires the nominal baseline scan')
+    comparison=json.loads((output/'comparison.json').read_text())
+    if comparison['snapshot_sha256']!=digest(model.output/'snapshot.json'):raise ValueError('Finite-MC comparison uses a different snapshot')
+    channel=config.primary_channel;category=config.categories.index(channel);edges=model.snapshot['mass_edges_gev']
+    original_bins=np.flatnonzero(model.background[category]>0)
+    source_records=[];bin_records=[];source_bin_records=[];cases=[];scenarios=[];current_priorities=[]
+    threshold=float(norm.ppf(.975)**2)
+
+    def q_with_exposure(mass,epsilon,multiplier):
+        s,v,b,bv,_=model.mc_cells(mass,epsilon,channel,'background')
+        return profile_q_mc(s,v,b,bv/multiplier)
+
+    for mass in masses:
+        old=next(r for r in nominal['records'] if r['mass_gev']==mass and r['mode']=='background'
+                 and r['channel']==channel and r['confidence_level']==.95)
+        epsilon=old['roots'][0];s,v,b,bv,coverage=model.mc_cells(mass,epsilon,channel,'background')
+        base=profile_q_mc(s,v,b,bv);case=dict(mass_gev=mass,reference_epsilon=epsilon,
+            reference='First nominal95percent background boundary',finite_mc_q=base,**coverage)
+        case['q_after_all_sm_variance_reduction']={str(factor):profile_q_mc(s,v,b,bv/factor) for factor in (10.,100.)}
+        case['q_with_known_sm_and_fixed_signal_mc']=profile_q_mc(s,v,b,bv*0)
+        cases.append(case)
+        for k,row in enumerate(model.snapshot['backgrounds']):
+            if not np.any(bv[k]):continue
+            result=dict(mass_gev=mass,reference_epsilon=epsilon,source=row['name'],baseline_q=base)
+            for factor in (10.,100.):
+                changed=bv.copy();changed[k]/=factor;q=profile_q_mc(s,v,b,changed)
+                result['q_if_source_variance_divided_by_'+str(int(factor))]=q
+                result['q_gain_for_source_exposure_x'+str(int(factor))]=q-base
+            source_records.append(result)
+        for j in np.flatnonzero(s>0):
+            ib=int(original_bins[j]);total_b=float(b[:,j].sum());total_v=float(bv[:,j].sum())
+            result=dict(mass_gev=mass,reference_epsilon=epsilon,original_bin=ib,
+                reco_mass_low_gev=edges[ib],reco_mass_high_gev=edges[ib+1],signal_yield=float(s[j]),
+                background_yield=total_b,background_mc_variance=total_v,
+                background_effective_mc_events=total_b**2/total_v if total_v else None,baseline_q=base)
+            changed=bv.copy();changed[:,j]/=10.;q=profile_q_mc(s,v,b,changed)
+            result.update(q_if_bin_sm_variance_divided_by_10=q,q_gain_for_bin_sm_exposure_x10=q-base)
+            bin_records.append(result)
+            for k,row in enumerate(model.snapshot['backgrounds']):
+                if bv[k,j]<=0:continue
+                raw=float(model.arrays[row['array_key']][category,ib]);raw_variance=float(model.arrays[row['array_key']+'_sumw2'][category,ib])
+                scale=config.luminosity*row['cross_section_pb']/row['full_gen_sumw']
+                changed=bv.copy();changed[k,j]/=10.;q=profile_q_mc(s,v,b,changed)
+                source_bin_records.append(dict(mass_gev=mass,reference_epsilon=epsilon,source=row['name'],original_bin=ib,
+                    reco_mass_low_gev=edges[ib],reco_mass_high_gev=edges[ib+1],signal_yield=float(s[j]),
+                    source_raw_sumw=raw,source_raw_sumw2=raw_variance,source_effective_mc_events=raw**2/raw_variance,
+                    source_expected_yield=float(b[k,j]),source_expected_mc_variance=float(bv[k,j]),
+                    source_fraction_of_bin_mc_variance=float(bv[k,j]/total_v),
+                    effective_native_weight=raw_variance/raw,expected_events_per_native_weight=scale,
+                    expected_events_per_effective_mc_event=float(bv[k,j]/b[k,j]),
+                    source_full_gen_sumw=row['full_gen_sumw'],source_histogram_sha256=row['sha256'],
+                    q_if_source_bin_variance_divided_by_10=q,q_gain_for_source_bin_exposure_x10=q-base))
+        reference=next(r for r in comparison['records'] if r['mass_gev']==mass and r['mode']=='background')
+        grid=reference['epsilon_grid']
+        for factor in (1.,10.,100.):
+            values=[q_with_exposure(mass,e,factor) for e in grid];roots=[]
+            for a,z,qa,qz in zip(grid,grid[1:],values,values[1:]):
+                if (qa-threshold)*(qz-threshold)<0:
+                    roots.append(math.exp(brentq(lambda x:q_with_exposure(mass,math.exp(x),factor)-threshold,math.log(a),math.log(z),xtol=1.e-9)))
+            bounds=[grid[0]]+roots+[grid[-1]]
+            intervals=[[a,z] for a,z in zip(bounds,bounds[1:]) if q_with_exposure(mass,math.sqrt(a*z),factor)>threshold]
+            scenarios.append(dict(mass_gev=mass,sm_mc_exposure_multiplier=factor,epsilon_grid=grid,q_grid=values,
+                roots=roots,excluded_intervals=intervals,epsilon_support=[grid[0],grid[-1]]))
+            print('SM precision',mass,'exposure x',factor,'roots',roots,flush=True)
+        present=next(r for r in scenarios if r['mass_gev']==mass and r['sm_mc_exposure_multiplier']==1.)
+        present_epsilon=present['roots'][0] if present['roots'] else grid[-1]
+        ps,pv,pb,pbv,_=model.mc_cells(mass,present_epsilon,channel,'background')
+        present_q=profile_q_mc(ps,pv,pb,pbv);priorities=[];cells=[]
+        for k,row in enumerate(model.snapshot['backgrounds']):
+            changed=pbv.copy();changed[k]/=10.
+            priorities.append(dict(source=row['name'],q_gain_if_source_mc_exposure_x10=profile_q_mc(ps,pv,pb,changed)-present_q))
+        for j in np.flatnonzero(ps>0):
+            changed=pbv.copy();changed[:,j]/=10.;ib=int(original_bins[j])
+            cells.append(dict(original_bin=ib,reco_mass_gev=edges[ib:ib+2],
+                q_gain_if_bin_sm_mc_exposure_x10=profile_q_mc(ps,pv,pb,changed)-present_q))
+        priorities.sort(key=lambda r:r['q_gain_if_source_mc_exposure_x10'],reverse=True)
+        cells.sort(key=lambda r:r['q_gain_if_bin_sm_mc_exposure_x10'],reverse=True)
+        j=int(np.flatnonzero(original_bins==cells[0]['original_bin'])[0]);moments=[]
+        for k,row in enumerate(model.snapshot['backgrounds']):
+            if pb[k,j]<=0:continue
+            moments.append(dict(source=row['name'],yield_expected=float(pb[k,j]),variance=float(pbv[k,j]),
+                effective_mc_events=float(pb[k,j]**2/pbv[k,j]),expected_effective_event_weight=float(pbv[k,j]/pb[k,j])))
+        moments.sort(key=lambda r:r['variance'],reverse=True)
+        current_priorities.append(dict(mass_gev=mass,epsilon=present_epsilon,baseline_q=present_q,
+            reference='Current finite-MC95percent boundary' if present['roots'] else 'Upper scan support; no exclusion',
+            sources=priorities[:5],bins=cells[:3],dominant_bin_source_moments=moments[:4]))
+    source_records.sort(key=lambda r:(r['mass_gev'],-r['q_gain_for_source_exposure_x10']))
+    bin_records.sort(key=lambda r:(r['mass_gev'],-r['q_gain_for_bin_sm_exposure_x10']))
+    source_bin_records.sort(key=lambda r:(r['mass_gev'],-r['q_gain_for_source_bin_exposure_x10']))
+    for name,rows in [('sm_precision_sources.csv',source_records),('sm_precision_bins.csv',bin_records),('sm_precision_source_bins.csv',source_bin_records)]:
+        with (output/name).open('w',newline='') as stream:
+            writer=csv.DictWriter(stream,fieldnames=list(rows[0]));writer.writeheader();writer.writerows(rows)
+    report=dict(schema='shift-sm-mc-precision-diagnosis-v1',snapshot_sha256=digest(model.output/'snapshot.json'),
+        histogram_cache_sha256=model.snapshot['histogram_cache_sha256'],luminosity_pb=config.luminosity,channel=channel,
+        background_campaign=model.snapshot['background_campaign'],
+        source_hashes={name:digest(Path(__file__).parent/name) for name in ['shift_limits_current.py','shift_limits_profile.py']},
+        counterfactual='Central SM yields and all signal MC moments fixed; divide selected SM variances by10 or100. Equivalent to independent increased MC exposure only if its weight/selection distribution remains the same.',
+        ranking='Exact profiled q improvement at each first nominal95percent boundary. Source/bin gains are not additive. Full nuisance fit is repeated for every counterfactual.',
+        weight_interpretation='Effective MC events and sumw/sumw2 are reported. These do not determine literal event entries. Effective native weight=sumw2/sumw; expected effective-event weight=variance/yield after luminosity normalization.',
+        limitations=comparison['limitations'],cases=cases,scenarios=scenarios,current_boundary_source_priorities=current_priorities,
+        priority_caveat='CSV ranks diagnose lost nominal boundaries. Current-boundary priorities are separately recorded for allocation after finite-MC changes the boundary. Check newer completed SM before top-ups.',
+        csv_files=['sm_precision_sources.csv','sm_precision_bins.csv','sm_precision_source_bins.csv'],elapsed_seconds=time.monotonic()-started)
+    save_json(destination,report)
+    plt=plotting()
+    with PdfPages(output/'sm_precision_priorities.pdf') as pdf:
+        fig,axes=plt.subplots(2,len(masses),figsize=(12,7.3),squeeze=False)
+        for column,mass in enumerate(masses):
+            axis=axes[0,column]
+            for factor,color in [(1.,'black'),(10.,'tab:blue'),(100.,'tab:orange')]:
+                row=next(r for r in scenarios if r['mass_gev']==mass and r['sm_mc_exposure_multiplier']==factor)
+                axis.plot(row['epsilon_grid'],row['q_grid'],color=color,label=f'SM MC exposure x{factor:g}')
+            axis.axhline(threshold,color='tab:red',linestyle='--');axis.set(xscale='log',yscale='log',ylim=(1.e-4,1.e3),title=f'{mass:g} GeV',xlabel='Kinetic mixing epsilon',ylabel='Profile q')
+            axis.grid(alpha=.2)
+            if column==0:axis.legend(fontsize=7)
+            axis=axes[1,column];rows=[r for r in source_records if r['mass_gev']==mass][:5]
+            axis.barh([r['source'] for r in reversed(rows)],[r['q_gain_for_source_exposure_x10'] for r in reversed(rows)],color='tab:blue')
+            axis.set(xlabel='q gain if this source has x10 MC exposure',title='Priority at old first95% boundary');axis.tick_params(axis='y',labelsize=8);axis.grid(axis='x',alpha=.2)
+        fig.suptitle(f'SM simulation statistics: Both-Both, {config.luminosity/1000:g} fb$^{{-1}}$')
+        fig.text(.5,.01,'Counterfactual forecasts: SM means and signal MC fixed; independent MC with unchanged weights assumed. Not achieved statistics.',ha='center',fontsize=8)
+        fig.tight_layout(rect=(0,.04,1,.95));pdf.savefig(fig);plt.close(fig)
+    print('SM precision diagnosis retained in',output,flush=True)
+
+
 
 def main():
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--stage',choices=['snapshot','scan','native_canary','native','projections','mc_statistics'],required=True);parser.add_argument('--config',default='shift_limits_current_config')
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--stage',choices=['snapshot','scan','native_canary','native','projections','mc_statistics','sm_statistics'],required=True);parser.add_argument('--config',default='shift_limits_current_config')
     parser.add_argument('--output',type=Path)
     parser.add_argument('--luminosity-pb',type=float)
     parser.add_argument('--signal-inventory',type=Path)
@@ -546,6 +680,6 @@ def main():
     if args.signal_inventory is not None:config.signal_input_inventory=str(args.signal_inventory.resolve())
     if args.channel is not None:config.channel_names=(args.channel,);config.primary_channel=args.channel
     if args.native_masses is not None:config.native_validation_masses=args.native_masses
-    {'snapshot':snapshot,'scan':scan,'native_canary':lambda c:native(c,True),'native':native,'projections':projection_inventory,'mc_statistics':mc_statistics_study}[args.stage](config)
+    {'snapshot':snapshot,'scan':scan,'native_canary':lambda c:native(c,True),'native':native,'projections':projection_inventory,'mc_statistics':mc_statistics_study,'sm_statistics':sm_statistics_study}[args.stage](config)
 
 if __name__=='__main__':main()

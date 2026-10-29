@@ -51,6 +51,25 @@ class FiniteMCTest(unittest.TestCase):
         actual=profile_q_mc([signal],[signal**2],[[background]],[[0.]])
         self.assertAlmostEqual(actual,fit.fun,places=7)
 
+    def test_large_control_yields_do_not_break_sparse_mc_profile(self):
+        # A rounded positive-weight fixture spanning very different template
+        # normalizations. Unit theta steps used to hit an unresolved gamma pole
+        # during the global fit, despite the optimum being well behaved.
+        signal=np.array([19000.,4600.,2000.])
+        variance=np.array([2.25e8,5.42e6,2.18e6])
+        background=np.array([[9.11e6,0.,27.],[.18,1.3e7,0.],[6.19e9,0.,0.]])
+        background_variance=np.array([[8.29e9,0.,.0714],[1.76e-5,2.38e9,0.],[1.01e14,0.,0.]])
+        actual=profile_q_mc(signal,variance,background,background_variance)
+        self.assertAlmostEqual(actual,18.365069159,places=6)
+        self.assertLess(actual,profile_q(1.,signal,background.sum(axis=0)))
+
+    def test_more_independent_sm_mc_cannot_weaken_the_profile(self):
+        signal=np.array([8.,1.5]);variance=signal**2
+        background=np.array([[15.5,5.]]);background_variance=background**2/10.
+        values=[profile_q_mc(signal,variance,background,background_variance/factor) for factor in (1.,10.,100.)]
+        self.assertTrue(all(b>=a-1.e-10 for a,b in zip(values,values[1:])))
+        self.assertLessEqual(values[-1],profile_q_mc(signal,variance,background,background_variance*0)+1.e-10)
+
     def test_literally_known_zero_background_keeps_signal_mc_uncertainty(self):
         with self.assertRaisesRegex(ValueError,'unknown'):
             profile_q_mc([3.],[9.],[[0.]],[[0.]])
