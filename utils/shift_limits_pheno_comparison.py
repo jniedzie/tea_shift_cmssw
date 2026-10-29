@@ -172,7 +172,16 @@ def summarize():
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--plot',action='store_true')
+    parser.add_argument('--current-study',type=Path)
+    parser.add_argument('--darkcast-path',type=Path)
+    parser.add_argument('--darkcast-receipt',type=Path)
+    parser.add_argument('--meson-model',type=Path)
     args=parser.parse_args()
+    if args.current_study is not None:
+        if any(value is None for value in (args.darkcast_path,args.darkcast_receipt,args.meson_model)):
+            parser.error('Current-study diagnostics require the pinned width provider and meson model')
+        current_shape_diagnostics(args.current_study,args.darkcast_path,args.darkcast_receipt,args.meson_model)
+        return
     plot_saved() if args.plot else summarize()
 
 
@@ -294,6 +303,145 @@ def plot_saved():
     finish(figure,output,'06_coupling_gap_budget',
         'Middle points are rate-budget counterfactuals: zero background, no nuisances and fixed measured prompt response. They are not new physical limits.\n'
         'Report uses the 2.3-event criterion; the exact background prescription/version of the briefing-book curve remains unverified. Epsilon changes the lifetime too.')
+
+
+def radiative_phase_space(masses,parent_mass):
+    """Pointlike P -> photon A' phase space, normalized to its massless value."""
+    masses=np.asarray(masses,dtype=float)
+    if parent_mass<=0 or np.any(masses<0):raise ValueError('Positive parent and nonnegative daughter masses required')
+    return np.maximum(1-(masses/parent_mass)**2,0.)**3
+
+
+def current_shape_diagnostics(study,darkcast_path,receipt_path,meson_model):
+    """Separate sparse response, physical mass dependence and model coverage."""
+    import sys
+    from types import SimpleNamespace
+    from matplotlib.backends.backend_pdf import PdfPages
+    from scipy.stats import norm
+    from shift_limits_current import Model
+    from shift_limits_profile import profile_q
+    from shift_limits_lifetime import plotting
+
+    study=study.resolve();output=study/'shape_diagnostics';output.mkdir(exist_ok=True)
+    audit=json.loads((output/'numerical_audit.json').read_text())
+    source=json.loads((output/'source_audit.json').read_text())
+    if audit['snapshot']['sha256']!=digest(study/'snapshot.json'):
+        raise ValueError('Numerical audit belongs to another input snapshot')
+    receipt=json.loads(receipt_path.read_text())
+    for name,expected in receipt['files'].items():
+        if digest(darkcast_path/name)!=expected:raise ValueError('Pinned width provider changed: '+name)
+    sys.path.insert(0,str(darkcast_path.resolve()))
+    import darkcast
+    photon=darkcast.Model('dark_photon');threshold=2*darkcast.pars.mfs['mu']
+    parents=json.loads(meson_model.read_text())['parents']
+    parent_masses={row['pdg_id']:row['mass_gev'] for row in parents}
+    masses=np.unique(np.r_[np.linspace(.209,.26,160),np.geomspace(.26,5.,500),
+        threshold,threshold+1.e-8,parent_masses[221],parent_masses[331],.77549,.78265,1.01946])
+    total=np.array([photon.width('total',float(m),.001) for m in masses])
+    muon=np.array([photon.width('mu_mu',float(m),.001) for m in masses])
+    branching=np.divide(muon,total,out=np.zeros_like(muon),where=total>0)
+    if np.any(muon[masses<=threshold]!=0) or not np.all(muon[masses>threshold]>0):
+        raise ValueError('Dimuon threshold closure failed in the pinned provider')
+
+    snapshot=json.loads((study/'snapshot.json').read_text())
+    components={}
+    for name in ['m0p25_lab_0p01m','m0p7_lab_0p01m']:
+        row=next(row for row in snapshot['signals'] if row['name']==name)
+        if digest(row['rate_authority'])!=row['rate_authority_sha256']:
+            raise ValueError('Rate authority changed: '+name)
+        rate=json.loads(Path(row['rate_authority']).read_text());channels={}
+        for weight,population in zip(rate['combination']['normalized_weights'],rate['per_population']):
+            for channel,value in population['record']['source_exposure']['raw_source_summary']['channels'].items():
+                channels[channel]=channels.get(channel,0.)+weight*value['sigma_over_epsilon_squared_pb']
+        total_rate=sum(channels.values())
+        expected=sum(value['value_pb'] for value in rate['physical_inclusive_cross_sections_pb'])/rate['epsilon']**2
+        if not math.isclose(total_rate,expected,rel_tol=2.e-6):raise ValueError('Production channels do not close: '+name)
+        components[name]={channel:value/total_rate for channel,value in channels.items()}
+    config=SimpleNamespace(output_path=str(study),luminosity=300.,categories=tuple(snapshot['categories']),
+        primary_channel='Both-Both',response_anchors=('prompt','lab_0p01m','lab_5m','lab_30m','lab_100m','lab_1000m'))
+    model=Model(config);category=config.categories.index('Both-Both')
+    anchors={row['point']:row for row in audit['anchor_table']}
+    chosen=[anchors[name] for name in ['m0p25_lab_0p01m','m0p7_lab_0p01m','m2_prompt','m5_prompt']]
+    epsilon_grid=np.geomspace(1.e-5,.004,100);q_values={key:[] for key in ['actual','without_tail','fixed_cm_shape','fixed_prompt_shape']}
+    cm=next(row for row in snapshot['signals'] if row['name']=='m0p7_lab_0p01m')
+    prompt=next(row for row in snapshot['signals'] if row['name']=='m0p7_prompt')
+    cm_shape=model.arrays[cm['array_key']][category];cm_shape=cm_shape/cm_shape.sum()
+    prompt_shape=model.arrays[prompt['array_key']][category];prompt_shape=prompt_shape/prompt_shape.sum()
+    driver=audit['low07_single_tail_driver'];edges=np.array(snapshot['mass_edges_gev'])
+    bin_index=int(np.flatnonzero(np.isclose(edges[:-1],driver['mass_bin_gev'][0]))[0])
+    for epsilon in epsilon_grid:
+        signal,background=model.cells(.7,float(epsilon),'Both-Both','background')
+        omitted=signal.copy();omitted[bin_index]=0.
+        for key,values in [('actual',signal),('without_tail',omitted),
+                           ('fixed_cm_shape',cm_shape*signal.sum()),('fixed_prompt_shape',prompt_shape*signal.sum())]:
+            q_values[key].append(profile_q(1.,values,background))
+    save_json(output/'mass_shape_diagnostic.json',dict(schema='shift-limit-mass-shape-diagnostic-v1',
+        snapshot_sha256=digest(study/'snapshot.json'),width_provider_receipt_sha256=digest(receipt_path),
+        meson_model_sha256=digest(meson_model),threshold_gev=threshold,masses_gev=masses.tolist(),
+        BR_mumu=branching.tolist(),eta_phase_space=radiative_phase_space(masses,parent_masses[221]).tolist(),
+        eta_prime_phase_space=radiative_phase_space(masses,parent_masses[331]).tolist(),
+        source_channel_fractions=components,
+        epsilon_grid=epsilon_grid.tolist(),profile_q=q_values,
+        interpretation='Width/phase-space curves are physics diagnostics, not a densely simulated exclusion. Fixed shapes and tail omission are counterfactuals; published inputs and limits are unchanged.'))
+
+    plt=plotting();path=output/'limit_shape_diagnostics.pdf'
+    with PdfPages(path) as pdf:
+        fig,axes=plt.subplots(2,2,figsize=(13,10));fig.suptitle('Why the current mass contour misses expected structures')
+        axis=axes[0,0];axis.plot(masses,branching,color='tab:blue',label='Pinned DarkCast BR to dimuons')
+        axis.axvspan(threshold,.25,color='.85',label='No new RECO mass anchor')
+        for mass,label in [(threshold,'2 mu'),(.77549,'rho / omega'),(1.01946,'phi')]:axis.axvline(mass,color='.6',ls=':',lw=1)
+        axis.scatter([r['mass_gev'] for r in chosen if r['mass_gev']<=5],
+                     [r['physical_BR_mumu'] for r in chosen if r['mass_gev']<=5],color='black',s=22,label='Actual limit mass anchors')
+        axis.set(xscale='log',xlim=(.209,5),ylim=(0,.55),xlabel='Dark-photon mass [GeV]',ylabel='BR(A prime -> mu mu)',title='The dimuon turn-on is present in the width model');axis.legend(fontsize=8)
+        axis=axes[0,1]
+        for pdg,label,color in [(221,'eta -> gamma A prime','tab:orange'),(331,"eta prime -> gamma A prime",'tab:green')]:
+            axis.plot(masses,radiative_phase_space(masses,parent_masses[pdg]),color=color,label=label)
+            axis.axvline(parent_masses[pdg],color=color,ls=':',lw=1)
+        for mass in [.25,.7]:axis.axvline(mass,color='black',ls='--',lw=.8)
+        axis.set(xlim=(.21,1.05),ylim=(0,1),xlabel='Dark-photon mass [GeV]',ylabel='Normalized pointlike phase space',title='Radiative eta endpoints lie between missing mass points');axis.legend(fontsize=8)
+        axis=axes[1,0]
+        for group,color,label in [(chosen[:2],'tab:green','Mesons + fragmentation + FR'),(chosen[2:],'tab:blue','Drell-Yan only')]:
+            axis.plot([r['mass_gev'] for r in group],[r['selected_sigma_over_epsilon_squared_pb'] for r in group],'o-',color=color,label=label)
+        axis.axvspan(.7,2,color='.9',label='Unsampled mechanism transition')
+        axis.set(xscale='log',yscale='log',xlabel='Mass [GeV]',ylabel='sigma times BR / epsilon squared [pb]',title='The current connected contour changes production recipe');axis.legend(fontsize=8)
+        axis.text(.03,.04,f"0.25 GeV: eta = {100*components['m0p25_lab_0p01m']['eta-decay']:.1f}% of source",transform=axis.transAxes,fontsize=8)
+        axis=axes[1,1]
+        current=[r for r in chosen if r['mass_gev'] in [2,5,10,15]]
+        reference=source['reference_table'];table=np.loadtxt(reference['path'])
+        if digest(reference['path'])!=reference['sha256']:raise ValueError('Public reference DY table changed')
+        public={float(m):float(value) for m,value in table}
+        axis.plot([r['mass_gev'] for r in current],[r['inclusive_sigma_over_epsilon_squared_pb']/current[0]['inclusive_sigma_over_epsilon_squared_pb'] for r in current],'o-',label='Current DY, normalized at 2 GeV')
+        axis.plot([r['mass_gev'] for r in current],[public[r['mass_gev']]/public[2.] for r in current],'s--',label='Public author fork DY, normalized at 2 GeV')
+        axis.set(xscale='log',yscale='log',xlabel='Mass [GeV]',ylabel='Inclusive rate coefficient / value at 2 GeV',title='Neither DY prediction has a flat production rate');axis.legend(fontsize=8)
+        fig.text(.025,.02,'Dense curves show decay/phase-space physics only; actual detector templates exist at sparse black markers.\nMeson endpoints suppress radiative production; vector rho/omega/phi structures are distinct. Public fork is not an authenticated record of the book run.',fontsize=9)
+        fig.tight_layout(rect=(0,.07,1,.95));pdf.savefig(fig);plt.close(fig)
+
+        fig,axes=plt.subplots(2,2,figsize=(13,10));fig.suptitle('The current low-mass limit is sensitive to single reconstructed tail events')
+        axis=axes[0,0];axis.stairs(cm_shape,edges,label='0.7 GeV, LAB1cm (N effective = 16.9)',color='tab:blue')
+        axis.stairs(prompt_shape,edges,label='0.7 GeV, prompt (N effective = 1)',color='tab:orange')
+        axis.axvspan(*driver['mass_bin_gev'],color='red',alpha=.2,label='One effective event at 14.8--15 GeV')
+        axis.set(yscale='log',xlim=(0,20),ylim=(.001,2),xlabel='Reconstructed dimuon mass [GeV]',ylabel='Fraction of selected weighted signal',title='Generated mass 0.7 GeV; the driver is reconstructed near 15 GeV');axis.legend(fontsize=7.5)
+        axis=axes[0,1]
+        for key,label,style in [('actual','Actual interpolated templates','-'),('without_tail','Only the 15 GeV signal bin omitted','--'),('fixed_cm_shape','Fixed 1 cm shape, same total yield',':'),('fixed_prompt_shape','Fixed prompt shape, same total yield','-.')]:
+            axis.plot(epsilon_grid,q_values[key],style,label=label)
+        axis.axhline(norm.ppf(.975)**2,color='black',lw=1,label='95% threshold')
+        axis.set(xscale='log',yscale='log',ylim=(1.e-4,1.e3),xlabel='Mixing epsilon',ylabel='Profile q',title='One reconstructed tail bin creates\nthe extra exclusion island');axis.legend(fontsize=7)
+        axis=axes[1,0];names=['m0p25_lab_0p01m','m0p7_lab_0p01m','m0p7_prompt','m2_prompt','m5_prompt']
+        cases=[next(r for r in audit['template_background_counterfactuals'] if r['point']==name) for name in names]
+        axis.bar(np.arange(len(cases)),[r['required_events_background'] for r in cases],color='#b33636',label='Required signal with current SM/template shape')
+        axis.axhline(audit['required_events_zero_background'],color='#176b9c',ls='--',label='Zero-background requirement')
+        axis.set_xticks(np.arange(len(cases)),['0.25 cm','0.7 cm','0.7 prompt','2 prompt','5 prompt']);axis.set(yscale='log',ylabel='Required selected signal events',title='Background and template shape set a second mass dependence');axis.legend(fontsize=7)
+        axis=axes[1,1]
+        for study_name,offset,color in [('old',-.08,'gray'),('new',.08,'tab:blue')]:
+            rows=sorted([r for r in audit['matched_luminosity_prompt_comparison'] if r['study']==study_name],key=lambda r:r['mass'])
+            for i,row in enumerate(rows):
+                axis.plot([i+offset]*2,[row['epsilon_limit_zeroB'],row['epsilon_limit_fixed_prompt']],color=color,ls=':')
+            axis.scatter(np.arange(len(rows))+offset,[r['epsilon_limit_fixed_prompt'] for r in rows],color=color,label=study_name+' fixed prompt, current background')
+            axis.scatter(np.arange(len(rows))+offset,[r['epsilon_limit_zeroB'] for r in rows],facecolors='white',edgecolors=color,label=study_name+' fixed prompt, zero background')
+        axis.set_xticks([0,1],['2 GeV','5 GeV']);axis.set(yscale='log',ylabel='Mixing epsilon',title='Old/new at the SAME 0.3 fb^-1:\nsensitivity to reconstructed tails');axis.legend(fontsize=7)
+        fig.text(.025,.02,'All counterfactuals use the unchanged 0.3 fb^-1 likelihood and 30% proxy nuisances; MC-stat uncertainty is absent.\nTail omission/fixed shapes are diagnostics, not new selections or published limits. More GEN alone cannot repair a sparse mass grid or authenticate the reference.',fontsize=9)
+        fig.tight_layout(rect=(0,.07,1,.95));pdf.savefig(fig);plt.close(fig)
+    print('Saved',path,flush=True)
 
 
 if __name__=='__main__':main()

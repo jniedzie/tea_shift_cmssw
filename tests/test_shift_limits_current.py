@@ -71,5 +71,12 @@ class PublishedLimitsTest(unittest.TestCase):
             self.assertFalse(min(values)<.001<max(values))
         plt.close(fig)
 
+    def test_radiative_meson_endpoint_closes_without_an_above_threshold_tail(self):
+        from shift_limits_pheno_comparison import radiative_phase_space
+        parent=.547862
+        values=radiative_phase_space([0.,parent/2,parent,2*parent],parent)
+        np.testing.assert_allclose(values,[1.,(.75)**3,0.,0.],rtol=1.e-14)
+        with self.assertRaises(ValueError):radiative_phase_space([-.1],parent)
+
 
 if __name__=='__main__':unittest.main()
