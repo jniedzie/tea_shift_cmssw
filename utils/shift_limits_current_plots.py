@@ -21,8 +21,15 @@ def finish(fig,path,caption,plt):
     fig.tight_layout(rect=(0,.105,1,.94));fig.savefig(path);plt.close(fig)
 
 
+def nominal_scan(model):
+    saved=json.loads((model.output/'scan.json').read_text())
+    if getattr(model,'mc_statistics',False) or saved.get('include_mc_stat_uncertainties',False):
+        raise ValueError('Finite-MC scans need the dedicated mc_statistics comparison; full native plotting is not qualified')
+    return saved['records']
+
+
 def boundaries(model,level,channel,omitted_masses=()):
-    scan=json.loads((model.output/'scan.json').read_text())['records']
+    scan=nominal_scan(model)
     native=json.loads((model.output/'native_results.json').read_text())['records'] if (model.output/'native_results.json').exists() else []
     result=[]
     for row in scan:
@@ -360,6 +367,7 @@ def main():
     if args.output is not None:config.output_path=str(args.output.resolve())
     if args.luminosity_pb is not None:config.luminosity=args.luminosity_pb
     model=Model(config)
+    nominal_scan(model)
     if not args.original_only:draw_comparisons(config,model);draw_inputs(config,model);draw_luminosity_scenarios(config,model);brazil(config,model)
     draw_original_comparisons(config,model);qa(model.output)
 

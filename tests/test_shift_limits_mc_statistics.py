@@ -1,15 +1,19 @@
 # Code style: AI-code. AI-generated finite-MC likelihood regression checks.
+import json
 import math
 from pathlib import Path
 import sys
+import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 from scipy.optimize import minimize
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'bin'))
-from shift_limits_current import Model,native
+from shift_limits import digest
+from shift_limits_current import Model,native,scan
 from shift_limits_profile import LOG_KAPPA,profile_q,profile_q_mc
 
 
@@ -98,6 +102,41 @@ class FiniteMCTest(unittest.TestCase):
     def test_legacy_native_cards_cannot_silently_drop_mc_constraints(self):
         with self.assertRaisesRegex(ValueError,'legacy native cards omit finite-MC'):
             native(SimpleNamespace(include_mc_stat_uncertainties=True))
+
+    def test_checkpoint_cannot_mix_nominal_and_finite_mc_records(self):
+        for saved_mode,current_mode in [(None,True),(True,False),(False,True)]:
+            with self.subTest(saved=saved_mode,current=current_mode),tempfile.TemporaryDirectory() as directory:
+                output=Path(directory);(output/'snapshot.json').write_text('{}')
+                saved={'snapshot_sha256':digest(output/'snapshot.json'),'records':[]}
+                if saved_mode is not None:saved['include_mc_stat_uncertainties']=saved_mode
+                (output/'scan.checkpoint.json').write_text(json.dumps(saved))
+                model=SimpleNamespace(output=output,mc_statistics=current_mode,signals={})
+                with patch('shift_limits_current.Model',return_value=model):
+                    with self.assertRaisesRegex(ValueError,'checkpoint uses a different finite-MC mode'):scan(None)
+                self.assertFalse((output/'scan.json').exists())
+
+    def test_legacy_nominal_checkpoint_resumes_with_explicit_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output=Path(directory);(output/'snapshot.json').write_text('{}')
+            (output/'scan.checkpoint.json').write_text(json.dumps({'snapshot_sha256':digest(output/'snapshot.json'),'records':[]}))
+            with patch('shift_limits_current.Model',return_value=SimpleNamespace(output=output,mc_statistics=False,signals={})):
+                scan(None)
+            self.assertIs(json.loads((output/'scan.json').read_text())['include_mc_stat_uncertainties'],False)
+
+    def test_nominal_plotter_rejects_mc_scan_before_native_override(self):
+        from shift_limits_current_plots import boundaries
+        with tempfile.TemporaryDirectory() as directory:
+            output=Path(directory)
+            (output/'scan.json').write_text(json.dumps({'include_mc_stat_uncertainties':True,'records':[]}))
+            (output/'native_results.json').write_text('Must not read the legacy native overrides')
+            with self.assertRaisesRegex(ValueError,'dedicated mc_statistics comparison'):
+                boundaries(SimpleNamespace(output=output,mc_statistics=False),.95,'Both-Both')
+
+    def test_legacy_native_cards_reject_mc_scan_even_with_nominal_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory)/'scan.json').write_text(json.dumps({'include_mc_stat_uncertainties':True,'records':[]}))
+            with self.assertRaisesRegex(ValueError,'cannot consume a finite-MC scan'):
+                native(SimpleNamespace(output_path=directory,include_mc_stat_uncertainties=False))
 
 
 if __name__=='__main__':unittest.main()

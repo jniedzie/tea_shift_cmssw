@@ -249,12 +249,20 @@ class Model:
 
 def scan(config):
     model=Model(config);records=[]
+    metadata={'snapshot_sha256':digest(model.output/'snapshot.json'),
+              'include_mc_stat_uncertainties':model.mc_statistics}
     path=model.output/'scan.json'
-    if path.exists():raise ValueError('A completed scan exists; reuse it')
+    if path.exists():
+        saved=json.loads(path.read_text())
+        if bool(saved.get('include_mc_stat_uncertainties',False))!=model.mc_statistics:
+            raise ValueError('Completed scan uses a different finite-MC mode; use a separate output directory')
+        raise ValueError('A completed scan exists; reuse it')
     checkpoint=model.output/'scan.checkpoint.json'
     if checkpoint.exists():
         saved=json.loads(checkpoint.read_text())
-        assert saved['snapshot_sha256']==digest(model.output/'snapshot.json')
+        assert saved['snapshot_sha256']==metadata['snapshot_sha256']
+        if bool(saved.get('include_mc_stat_uncertainties',False))!=model.mc_statistics:
+            raise ValueError('Scan checkpoint uses a different finite-MC mode; use a separate output directory')
         records=saved['records']
     done={(r['mass_gev'],r['mode'],r['channel'],r['confidence_level']) for r in records}
     for mass,anchors in sorted(model.signals.items()):
@@ -275,15 +283,18 @@ def scan(config):
                         if model.q(mass,math.sqrt(a*b),channel,mode)>threshold:intervals.append([a,b])
                     records.append(dict(mass_gev=mass,mode=mode,channel=channel,confidence_level=level,roots=roots,
                         excluded_intervals=intervals,epsilon_support=[low,high],upper_prompt_continuation=anchors[-1]['prompt'],
-                        q_grid=values,epsilon_grid=grid,source='independent_exact_asimov_profile'))
+                        q_grid=values,epsilon_grid=grid,include_mc_stat_uncertainties=model.mc_statistics,
+                        source='independent_effective_poisson_mc_profile' if model.mc_statistics else 'independent_exact_asimov_profile'))
                 print('Scanned',mass,mode,channel,flush=True)
-        save_json(checkpoint,{'records':records,'snapshot_sha256':digest(model.output/'snapshot.json')})
-    save_json(path,{'records':records,'snapshot_sha256':digest(model.output/'snapshot.json')})
+        save_json(checkpoint,dict(records=records,**metadata))
+    save_json(path,dict(records=records,**metadata))
 
 
 def native(config,canary=False):
     if getattr(config,'include_mc_stat_uncertainties',False):
         raise ValueError('The legacy native cards omit finite-MC constraints; use the dedicated mc_statistics comparison and validated controls')
+    if json.loads((Path(config.output_path)/'scan.json').read_text()).get('include_mc_stat_uncertainties',False):
+        raise ValueError('The legacy native cards cannot consume a finite-MC scan; use the dedicated mc_statistics comparison')
     import subprocess,time
     import shift_limits as limits
     import limits_producer
@@ -460,7 +471,9 @@ def mc_statistics_study(config,masses=(.7,2.,5.)):
     nominal=Model(nominal_config);finite=Model(mc_config)
     output=nominal.output/'mc_statistics';output.mkdir(exist_ok=True)
     if (output/'comparison.json').exists():raise ValueError('Reuse the completed frozen MC-statistics comparison')
-    threshold=float(norm.ppf(.975)**2);records=[];original=json.loads((nominal.output/'scan.json').read_text())['records']
+    original=json.loads((nominal.output/'scan.json').read_text())
+    if original.get('include_mc_stat_uncertainties',False):raise ValueError('The MC comparison requires a nominal baseline scan')
+    threshold=float(norm.ppf(.975)**2);records=[];original=original['records']
     for mass in masses:
         anchors=nominal.signals[mass]
         low=anchors[0]['epsilon'];high=min(config.small_mixing_max,config.epsilon_max) if anchors[-1]['prompt'] else anchors[-1]['epsilon']
