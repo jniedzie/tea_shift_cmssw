@@ -16,7 +16,7 @@ from shift_limits import digest
 from shift_limits_lifetime import save_json
 from shift_limits_resolution import resolution_boundaries
 from shift_limits_shapes import rebin
-from shift_limits_profile import profile_q
+from shift_limits_profile import profile_q,profile_q_mc
 
 
 def histogram_array(file, name, edges):
@@ -131,10 +131,19 @@ class Model:
         with np.load(self.snapshot['histogram_cache'],allow_pickle=False) as saved:self.arrays={k:saved[k].copy() for k in saved.files}
         self.background=np.zeros_like(self.arrays[self.snapshot['signals'][0]['array_key']])
         self.processes={name:np.zeros_like(self.background) for name in ['qcd','dy','jpsi']}
+        self.mc_statistics=bool(getattr(config,'include_mc_stat_uncertainties',False))
+        self.background_components=[];self.background_variances=[]
         self.signals={}
         for row in self.snapshot['backgrounds']:
-            value=self.arrays[row['array_key']]*config.luminosity*row['cross_section_pb']/row['full_gen_sumw']
+            scale=config.luminosity*row['cross_section_pb']/row['full_gen_sumw']
+            value=self.arrays[row['array_key']]*scale
             self.background+=value;self.processes[row['name'].split('_')[0]]+=value
+            variance_key=row['array_key']+'_sumw2'
+            if self.mc_statistics and variance_key not in self.arrays:raise ValueError('Missing original MC variance: '+row['name'])
+            self.background_components.append(value)
+            self.background_variances.append(self.arrays.get(variance_key,np.zeros_like(value))*scale**2)
+        self.background_components=np.asarray(self.background_components).reshape((-1,)+self.background.shape)
+        self.background_variances=np.asarray(self.background_variances).reshape((-1,)+self.background.shape)
         self.unused_signals=[]
         for row in self.snapshot['signals']:
             if not any(row['name'].endswith('_'+anchor) for anchor in config.response_anchors):
@@ -152,25 +161,34 @@ class Model:
             if len({row['mechanism'] for row in rows})!=1:
                 raise ValueError('Different signal production prescriptions at one mass: '+str(mass))
 
-    def signal(self,mass,epsilon):
+    def signal_moments(self,mass,epsilon):
         rows=self.signals[mass]
         if epsilon<rows[0]['epsilon'] and math.isclose(epsilon,rows[0]['epsilon'],rel_tol=1e-12):epsilon=rows[0]['epsilon']
         if epsilon>rows[-1]['epsilon'] and math.isclose(epsilon,rows[-1]['epsilon'],rel_tol=1e-12):epsilon=rows[-1]['epsilon']
         x=math.log(epsilon)
         def coefficient(row):
-            return self.arrays[row['array_key']]*self.config.luminosity*row['cross_section_pb']/(row['full_gen_sumw']*row['epsilon']**2)
-        if epsilon<rows[0]['epsilon']:return None
+            scale=self.config.luminosity*row['cross_section_pb']/(row['full_gen_sumw']*row['epsilon']**2)
+            key=row['array_key'];variance_key=key+'_sumw2'
+            if self.mc_statistics and variance_key not in self.arrays:raise ValueError('Missing original MC variance: '+row['name'])
+            return self.arrays[key]*scale,self.arrays.get(variance_key,np.zeros_like(self.arrays[key]))*scale**2
+        if epsilon<rows[0]['epsilon']:return None,None
         if epsilon>rows[-1]['epsilon']:
-            if not rows[-1]['prompt']:return None
-            return coefficient(rows[-1])*epsilon**2
+            if not rows[-1]['prompt']:return None,None
+            value,variance=coefficient(rows[-1]);return value*epsilon**2,variance*epsilon**4
         for a,b in zip(rows,rows[1:]):
             if a['epsilon']<=epsilon<=b['epsilon']:
                 if a['epsilon']==b['epsilon']:raise ValueError('Same-epsilon mechanisms need explicit rate-summed populations')
                 fraction=(x-math.log(a['epsilon']))/math.log(b['epsilon']/a['epsilon'])
                 assert -1e-12<=fraction<=1+1e-12
                 fraction=min(1.,max(0.,fraction))
-                return ((1-fraction)*coefficient(a)+fraction*coefficient(b))*epsilon**2
-        return coefficient(rows[0])*epsilon**2
+                av,avar=coefficient(a);bv,bvar=coefficient(b)
+                # Endpoint samples are independent populations. Hypotheses
+                # along the interpolated curve remain mutually correlated.
+                return ((1-fraction)*av+fraction*bv)*epsilon**2,((1-fraction)**2*avar+fraction**2*bvar)*epsilon**4
+        value,variance=coefficient(rows[0]);return value*epsilon**2,variance*epsilon**4
+
+    def signal(self,mass,epsilon):
+        return self.signal_moments(mass,epsilon)[0]
 
     def cross_section(self,mass,epsilon):
         rows=self.signals[mass]
@@ -191,6 +209,12 @@ class Model:
         return signal.ravel(),background.ravel()
 
     def q(self,mass,epsilon,channel,mode):
+        if self.mc_statistics:
+            signal,variance,backgrounds,background_variances,_=self.mc_cells(mass,epsilon,channel,mode)
+            if signal is None:return None
+            if not np.any(signal):return 0.
+            return profile_q_mc(signal,variance,backgrounds,background_variances,
+                                allow_zero_background=mode=='zero_background')
         signal,background=self.cells(mass,epsilon,channel,mode)
         if signal is None:return None
         if not np.any(signal):return 0.
@@ -198,6 +222,29 @@ class Model:
             total=float(signal.sum());k=math.log(1.3);theta=-float(lambertw(k*k*total).real)/k
             return 2*total*math.exp(k*theta)+theta*theta
         return profile_q(1.,signal,background)
+
+    def mc_cells(self,mass,epsilon,channel,mode):
+        signal,variance=self.signal_moments(mass,epsilon)
+        if signal is None:return None,None,None,None,None
+        backgrounds=self.background_components
+        background_variances=self.background_variances
+        if mode=='zero_background':
+            backgrounds=np.zeros((1,)+signal.shape)
+            background_variances=np.zeros_like(backgrounds)
+        if channel!='combined':
+            index=self.config.categories.index(channel)
+            signal=signal[index:index+1];variance=variance[index:index+1]
+            backgrounds=backgrounds[:,index:index+1];background_variances=background_variances[:,index:index+1]
+        signal=signal.ravel();variance=variance.ravel()
+        backgrounds=backgrounds.reshape(len(backgrounds),signal.size)
+        background_variances=background_variances.reshape(len(backgrounds),signal.size)
+        known=np.ones_like(signal,dtype=bool) if mode=='zero_background' else backgrounds.sum(axis=0)>0
+        report={'omitted_total_zero_background_mc_bins':int((~known).sum()),
+                'omitted_signal_yield':float(signal[~known].sum()),
+                'total_signal_yield':float(signal.sum()),
+                'known_zero_background_scenario':mode=='zero_background',
+                'limitation':'Positive total MC does not bound contributions from individually empty process bins.'}
+        return signal[known],variance[known],backgrounds[:,known],background_variances[:,known],report
 
 
 def scan(config):
@@ -235,6 +282,8 @@ def scan(config):
 
 
 def native(config,canary=False):
+    if getattr(config,'include_mc_stat_uncertainties',False):
+        raise ValueError('The legacy native cards omit finite-MC constraints; use the dedicated mc_statistics comparison and validated controls')
     import subprocess,time
     import shift_limits as limits
     import limits_producer
@@ -400,9 +449,79 @@ def projection_inventory(config):
     print('Projection paths decoded:',len(curves),flush=True)
 
 
+def mc_statistics_study(config,masses=(.7,2.,5.)):
+    """Compare the frozen nominal result with a declared finite-MC variant."""
+    import time
+    from matplotlib.backends.backend_pdf import PdfPages
+    from shift_limits_lifetime import plotting
+    started=time.monotonic()
+    nominal_config=SimpleNamespace(**vars(config));nominal_config.include_mc_stat_uncertainties=False
+    mc_config=SimpleNamespace(**vars(config));mc_config.include_mc_stat_uncertainties=True
+    nominal=Model(nominal_config);finite=Model(mc_config)
+    output=nominal.output/'mc_statistics';output.mkdir(exist_ok=True)
+    if (output/'comparison.json').exists():raise ValueError('Reuse the completed frozen MC-statistics comparison')
+    threshold=float(norm.ppf(.975)**2);records=[];original=json.loads((nominal.output/'scan.json').read_text())['records']
+    for mass in masses:
+        anchors=nominal.signals[mass]
+        low=anchors[0]['epsilon'];high=min(config.small_mixing_max,config.epsilon_max) if anchors[-1]['prompt'] else anchors[-1]['epsilon']
+        grid=sorted(set(np.geomspace(low,high,config.scan_grid_points).tolist()+[r['epsilon'] for r in anchors if low<=r['epsilon']<=high]))
+        for mode in config.background_modes:
+            nominal_values=[nominal.q(mass,e,config.primary_channel,mode) for e in grid]
+            mc_values=[finite.q(mass,e,config.primary_channel,mode) for e in grid]
+            roots=[]
+            for a,b,qa,qb in zip(grid,grid[1:],mc_values,mc_values[1:]):
+                if (qa-threshold)*(qb-threshold)<0:
+                    roots.append(math.exp(brentq(lambda x:finite.q(mass,math.exp(x),config.primary_channel,mode)-threshold,math.log(a),math.log(b),xtol=1.e-9)))
+            bounds=[low]+roots+[high]
+            intervals=[[a,b] for a,b in zip(bounds,bounds[1:]) if finite.q(mass,math.sqrt(a*b),config.primary_channel,mode)>threshold]
+            previous=next(row for row in original if row['mass_gev']==mass and row['mode']==mode and row['channel']==config.primary_channel and row['confidence_level']==.95)
+            comparisons=[]
+            for epsilon in previous['roots']:
+                if not low<=epsilon<=high:continue
+                s,v,b,bv,coverage=finite.mc_cells(mass,epsilon,config.primary_channel,mode)
+                q_signal=profile_q_mc(s,v,b,bv*0,allow_zero_background=mode=='zero_background')
+                q_background=profile_q_mc(s,v*0,b,bv,allow_zero_background=mode=='zero_background')
+                comparisons.append(dict(epsilon=epsilon,nominal_q=nominal.q(mass,epsilon,config.primary_channel,mode),
+                    nominal_q_on_positive_background_support=profile_q(1.,s,b.sum(axis=0)),
+                    signal_mc_only_q=q_signal,background_mc_only_q=q_background,both_mc_q=finite.q(mass,epsilon,config.primary_channel,mode),**coverage))
+            records.append(dict(mass_gev=mass,mode=mode,channel=config.primary_channel,confidence_level=.95,epsilon_grid=grid,
+                nominal_q_grid=nominal_values,mc_q_grid=mc_values,nominal_roots=previous['roots'],mc_roots=roots,
+                mc_excluded_intervals=intervals,epsilon_support=[low,high],at_nominal_boundaries=comparisons))
+            print('MC comparison',mass,mode,'roots',roots,flush=True)
+    report=dict(schema='shift-finite-mc-comparison-v1',luminosity_pb=config.luminosity,confidence_level=.95,
+        channel=config.primary_channel,snapshot_path=str(nominal.output/'snapshot.json'),snapshot_sha256=digest(nominal.output/'snapshot.json'),
+        histograms_sha256=nominal.snapshot['histogram_cache_sha256'],
+        source_hashes={name:digest(Path(__file__).parent/name) for name in ['shift_limits_current.py','shift_limits_profile.py']},
+        method='Independent per-source/per-bin effective-Poisson constraints: n_eff=sumw^2/sumw2; deviance2*n_eff*(beta-1-log(beta)); two unchanged30percent global lognormal nuisances.',
+        source_urls=['https://cms-analysis.github.io/HiggsAnalysis-CombinedLimit/latest/part2/bin-wise-stats/'],
+        limitations=['Moment-matched approximation for positive weights, not exact autoMCStats or an exact weighted-event likelihood.',
+            'Independent endpoint MC populations assumed. Interpolated hypotheses along epsilon remain correlated; no simultaneous contour coverage claim.',
+            'Bins with zero TOTAL background MC are omitted in the background scenario. Individually empty source bins remain unbounded, even where other sources are populated.',
+            'Asymptotic CLs proxy retained; finite-MC constraints alone do not validate sparse-count coverage.',
+            'No smoothing, invented background, response extrapolation or selection changes. Baseline published limits remain unchanged.'],
+        records=records,elapsed_seconds=time.monotonic()-started)
+    save_json(output/'comparison.json',report)
+    plt=plotting()
+    with PdfPages(output/'finite_mc_comparison.pdf') as pdf:
+        for mode in config.background_modes:
+            fig,axes=plt.subplots(1,len(masses),figsize=(12,4.2),squeeze=False)
+            for axis,mass in zip(axes[0],masses):
+                row=next(r for r in records if r['mass_gev']==mass and r['mode']==mode)
+                axis.plot(row['epsilon_grid'],row['nominal_q_grid'],color='black',label='Nominal MC templates')
+                axis.plot(row['epsilon_grid'],row['mc_q_grid'],color='tab:blue',label='Finite MC constraints')
+                axis.axhline(threshold,color='tab:red',linestyle='--',label='95% Asymptotic CLs threshold')
+                axis.set(xscale='log',yscale='log',ylim=(1.e-4,1.e3),xlabel='Kinetic mixing epsilon',ylabel='Profile likelihood q',title=f"{mass:g} GeV")
+                axis.grid(alpha=.2)
+            axes[0,0].legend(fontsize=7)
+            fig.suptitle(f"Both-Both, {config.luminosity/1000:g} fb$^{{-1}}$, "+('SM background' if mode=='background' else 'ideal zero background'))
+            fig.text(.5,.01,'Positive-weight effective-Poisson approximation; empty total-SM MC bins omitted only in background case.',ha='center',fontsize=8)
+            fig.tight_layout(rect=(0,.04,1,.93));pdf.savefig(fig);plt.close(fig)
+    print('MC comparison retained in',output,flush=True)
+
+
 
 def main():
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--stage',choices=['snapshot','scan','native_canary','native','projections'],required=True);parser.add_argument('--config',default='shift_limits_current_config')
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--stage',choices=['snapshot','scan','native_canary','native','projections','mc_statistics'],required=True);parser.add_argument('--config',default='shift_limits_current_config')
     parser.add_argument('--output',type=Path)
     parser.add_argument('--luminosity-pb',type=float)
     parser.add_argument('--signal-inventory',type=Path)
@@ -414,6 +533,6 @@ def main():
     if args.signal_inventory is not None:config.signal_input_inventory=str(args.signal_inventory.resolve())
     if args.channel is not None:config.channel_names=(args.channel,);config.primary_channel=args.channel
     if args.native_masses is not None:config.native_validation_masses=args.native_masses
-    {'snapshot':snapshot,'scan':scan,'native_canary':lambda c:native(c,True),'native':native,'projections':projection_inventory}[args.stage](config)
+    {'snapshot':snapshot,'scan':scan,'native_canary':lambda c:native(c,True),'native':native,'projections':projection_inventory,'mc_statistics':mc_statistics_study}[args.stage](config)
 
 if __name__=='__main__':main()
