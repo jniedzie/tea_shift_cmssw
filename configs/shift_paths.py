@@ -16,12 +16,12 @@ bsm_campaign = "latest"
 # None selects all, [] selects none. None in the list of lifetimes means prompt.
 
 # Mass scan:
-# bsm_masses_to_plot = [0.22, 1.8, 5, 10, 15, 40, 70]  # GeV
-# bsm_mean_lab_flights_to_plot = [None]  # metres
+bsm_masses_to_plot = [0.22, 1.8, 5, 10, 15, 40, 70]  # GeV
+bsm_mean_lab_flights_to_plot = [None]  # metres
 
 # Lifetime scan:
-bsm_masses_to_plot = [15]  # GeV
-bsm_mean_lab_flights_to_plot = [None, 5, 30, 100, 1000]  # metres
+# bsm_masses_to_plot = [15]  # GeV
+# bsm_mean_lab_flights_to_plot = [None, 5, 30, 100, 1000]  # metres
 
 # All signals:
 # bsm_masses_to_plot = [0.22, 0.25, 0.3, 0.4, 0.5, 0.7, 0.9, 1.5, 1.8, 2, 5, 10, 12, 15, 20, 30, 40, 50, 70, 90]  # GeV
@@ -117,7 +117,7 @@ limits_cut_output_path = "../plots/limits/both_both_cuts_20261015/"
 limits_pheno_comparison_output_path = "../plots/limits/pheno_comparison_20261016/"
 limits_resolution_output_path = "../plots/limits/resolution_20261016/"
 limits_book_match_output_path = "../plots/limits/book_match_20261016/"
-limits_current_output_path = "../plots/limits/current_20261021/"
+limits_current_output_path = "../plots/limits/current_20261029/"
 limits_combine_path = (
     "/eos/home-j/jniedzie/combine/CMSSW_16_0_0/src/HiggsAnalysis/CombinedLimit"
 )

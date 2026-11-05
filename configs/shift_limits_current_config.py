@@ -4,7 +4,8 @@ from shift_limits_config import *
 from shift_paths import limits_current_output_path, base_path, campaign, cross_sections
 
 output_path = limits_current_output_path
-luminosity = 3000.0  # pb^-1; includes the assumed 1% halo exposure.
+luminosity = 300.0  # pb^-1; baseline effective exposure (range: 30--3000).
+luminosity_scenarios = ((30.0, "exposure_0p03fb"), (300.0, "."), (3000.0, "exposure_3fb"))
 confidence_levels = (0.95, 0.90)
 background_modes = ("background", "zero_background")
 categories = ("Near-Both", "Near-Far", "Both-Both", "Both-Far", "Other")
@@ -16,7 +17,7 @@ signal_campaign = "latest"
 signal_masses = None
 signal_flights = None
 signal_epsilons = None
-response_anchors = ("prompt", "lab_5m", "lab_30m", "lab_100m", "lab_1000m")
+response_anchors = ("prompt", "lab_0p01m", "lab_5m", "lab_30m", "lab_100m", "lab_1000m")
 mass_resolution_fraction = 0.02  # Provisional scale; no measured core resolution claimed.
 mass_minimum_bin_gev = 0.1
 background_interpolation = False
