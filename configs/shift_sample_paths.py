@@ -4,6 +4,7 @@ import ast
 import json
 import hashlib
 import math
+import os
 import shutil
 import tempfile
 from collections import Counter
@@ -168,6 +169,11 @@ def single_root_file(directory, *, allow_missing=False, cache_directory=None):
             f"Expected exactly one ROOT file in '{directory}', found {len(files)}: {names}"
         )
     source = files[0]
+    resolved = source.resolve()
+    if cache_directory is None and str(resolved).startswith('/eos/cms/'):
+        # A campaign link can cross EOS instances. Stage the small histogram
+        # through the mounted path, then let ROOT read the verified local copy.
+        cache_directory = Path(tempfile.gettempdir()) / f'shift_group_histograms_{os.getuid()}'
     if cache_directory is None:
         return str(source)
     # ROOT can fail on mounted EOS paths even when ordinary byte reads work.
@@ -218,8 +224,16 @@ def histogram_gen_normalization(path, stratum):
         # production uses inf. They identify the same physical bin.
         observed_stratum = str(metadata.get('stratum')).replace('to-1', 'toinf')
         expected_stratum = stratum.replace('to-1', 'toinf')
+        policy = metadata.get('histogram_weight')
+        valid_weight = policy == 'native_gen_weight/reco_inclusion_probability'
+        if policy == 'native_gen_weight/(reco_inclusion_probability*response_sampling_probability)':
+            valid_weight = (metadata.get('histogram_weight_branch') == 'shiftResponseGenWeight'
+                and metadata.get('response_correction_application_count') == 1
+                and metadata.get('material_survival_correction_applied') is False
+                and metadata.get('complete_frozen_response_draws_only') is True
+                and bool(metadata.get('response_draw_authorities')))
         if (observed_stratum != expected_stratum
-                or metadata.get('histogram_weight') != 'native_gen_weight/reco_inclusion_probability'
+                or not valid_weight
                 or metadata.get('no_second_filter_efficiency') is not True
                 or not math.isfinite(denominator) or denominator <= 0
                 or not math.isfinite(cross_section) or cross_section <= 0):

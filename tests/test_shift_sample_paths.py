@@ -17,6 +17,37 @@ import shift_sample_paths
 
 
 class StreamingHistogramInputsTest(unittest.TestCase):
+    def test_group_campaign_link_returns_a_verified_local_root_input(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory=Path(temporary);(directory/'ready.root').write_bytes(b'fixture')
+            target=Path('/eos/cms/store/group/phys_exotica/xtracks/jeremi/shift_cmssw/support/test/ready.root')
+            with patch.object(Path,'resolve',return_value=target), \
+                    patch.object(shift_sample_paths.tempfile,'gettempdir',return_value=temporary):
+                actual=shift_sample_paths.single_root_file(directory)
+            self.assertTrue(str(actual).startswith(temporary))
+            self.assertEqual(Path(actual).read_bytes(),b'fixture')
+
+    def test_response_histogram_keeps_full_exposure_and_rejects_double_correction(self):
+        import ROOT
+        with tempfile.TemporaryDirectory() as temporary:
+            path=Path(temporary)/'response.root'
+            metadata=dict(schema='shift-preserved-full-GEN-histogram-v1',stratum='qcd_5to10',
+                full_source_sumw=1000,cross_section_pb=50.,no_second_filter_efficiency=True,
+                histogram_weight='native_gen_weight/(reco_inclusion_probability*response_sampling_probability)',
+                histogram_weight_branch='shiftResponseGenWeight',response_correction_application_count=1,
+                material_survival_correction_applied=False,complete_frozen_response_draws_only=True,
+                response_draw_authorities=[dict(collector_request='frozen',collector_result='frozen')])
+            for count in (1,2):
+                metadata['response_correction_application_count']=count
+                source=ROOT.TFile(str(path),'RECREATE')
+                ROOT.TObjString(json.dumps(metadata)).Write('ShiftFullGenNormalization');source.Close()
+                if count==1:
+                    self.assertEqual(shift_sample_paths.histogram_gen_normalization(str(path),'qcd_5to10'),
+                        dict(cross_section_pb=50.,initial_weight_sum=1000))
+                else:
+                    with self.assertRaisesRegex(ValueError,'Invalid full GEN'):
+                        shift_sample_paths.histogram_gen_normalization(str(path),'qcd_5to10')
+
     def test_published_campaign_resolves_without_working_directory_dependence(self):
         path = shift_sample_paths.campaign_histogram_inventory('20261016_mu_enriched_weekend_v1')
         self.assertIsNone(path)
