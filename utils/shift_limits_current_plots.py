@@ -46,12 +46,22 @@ def boundaries(model,level,channel,omitted_masses=()):
     return result
 
 
+def single_lifetime(row):
+    low,high=row['epsilon_support']
+    return math.isclose(low,high,rel_tol=1.e-12)
+
+
 def draw_regions(axis,rows,mode,color,label,fill=True,linewidth=2,linestyle=None):
     nodes=sorted((r for r in rows if r['mode']==mode),key=lambda r:r['mass_gev']);labelled=False
     # Requested presentation: connect every available mass boundary, including
     # across gaps in generated response coverage. This is plot interpolation.
     run=[]
     for row in nodes:
+        if single_lifetime(row):
+            axis.scatter([row['mass_gev']],[row['epsilon_support'][0]],marker='D',
+                         facecolors=color if row['excluded_intervals'] else 'white',
+                         edgecolors=color,s=28,zorder=8)
+            continue
         if not row['excluded_intervals']:continue
         row=copy.deepcopy(row)
         # Extra islands have no established correspondence at neighbouring
@@ -129,6 +139,7 @@ def draw_comparisons(config,model):
             checked=sum(source=='native_tea_AsymptoticLimits' for row in rows for source in row['boundary_sources']);total=sum(len(row['roots']) for row in rows)
             note+=f'Published QCD + DY + J/psi only; empty MC bins stay empty. Asimov profile; {checked}/{total} boundaries checked with native TEA/Combine.\n'
             note+=('External curves: briefing-book Fig. 8.15; mostly 90% CL, FCC curves 95% CL. Production/response remain provisional.' if external else 'Open upper endpoints mark missing lifetime coverage, not physical exclusion edges. Sparse MC and missing background tails remain provisional.')
+            note+='\nDiamonds test one lifetime only; filled/open means excluded/not excluded at that point. No lifetime interval is inferred.'
             name=f'limits_current_cl{round(100*level)}'+('_comparison' if external else '')+'.pdf';finish(fig,output/name,note,plt)
 
 
@@ -160,7 +171,8 @@ def draw_original_comparisons(config,model):
     width,height=original.rect.width,original.rect.height;offset=25
     drawings=original.get_drawings()
     omitted_masses=tuple(mass for mass in config.plot_omitted_masses_gev if mass in model.signals)
-    footer_extra=13 if omitted_masses else 0
+    pointwise=any(single_lifetime(row) for row in boundaries(model,config.confidence_levels[0],config.primary_channel,omitted_masses))
+    footer_extra=(13 if omitted_masses else 0)+(13 if pointwise else 0)
     # Copy retained legend rows directly from the original PDF, preserving fonts
     # and styles. Keep the original SHIFT curve as an explicitly named reference.
     legend_indices=[195,197,198,199,203,205,207,211,212]
@@ -207,7 +219,15 @@ def draw_original_comparisons(config,model):
         rows=boundaries(model,level,config.primary_channel,omitted_masses);counts=[]
         for mode,color,label,dashed in [('background',(0,90/255,50/255),': QCD + DY + J/psi',False),
                                         ('zero_background',(102/255,166/255,30/255),': zero background',True)]:
-            nodes=sorted((r for r in rows if r['mode']==mode and r['excluded_intervals']),key=lambda r:r['mass_gev'])
+            if mode not in config.background_modes:continue
+            tested=[r for r in rows if r['mode']==mode and single_lifetime(r)]
+            for row in tested:
+                xy=point(row['mass_gev'],row['epsilon_support'][0]);radius=4 if mode=='background' else 2.5
+                diamond=[xy+(-radius,0),xy+(0,-radius),xy+(radius,0),xy+(0,radius)]
+                shape=page.new_shape();shape.draw_polyline(diamond)
+                shape.finish(color=color,fill=color if row['excluded_intervals'] else (1,1,1),
+                             width=1.3,closePath=True);shape.commit()
+            nodes=sorted((r for r in rows if r['mode']==mode and r['excluded_intervals'] and not single_lifetime(r)),key=lambda r:r['mass_gev'])
             if not nodes:continue
             for row in nodes:
                 for low,high in row['excluded_intervals'][:-1]:
@@ -239,7 +259,8 @@ def draw_original_comparisons(config,model):
             y=shift_legend_y+(40 if dashed else 20)
             page.draw_line((640,y),(665,y),color=color,width=2.5,dashes='[6 3] 0' if dashed else None)
             luminosity_label(page,(672,y+4),f'SHIFT, {config.luminosity/1000:g} fb',label,color)
-            counts.append({'mode':mode,'connected_mass_points':[r['mass_gev'] for r in nodes]})
+            counts.append({'mode':mode,'connected_mass_points':[r['mass_gev'] for r in nodes],
+                           'single_lifetime_tests':[dict(mass_gev=r['mass_gev'],epsilon=r['epsilon_support'][0],excluded=bool(r['excluded_intervals'])) for r in tested]})
         page.draw_rect(fitz.Rect(638.3,shift_legend_y+60,width,height+offset),color=None,fill=(1,1,1))
         luminosity_label(page,(84,17),f'SHIFT Both-Both, {config.luminosity/1000:g} fb',f': expected {round(100*level)}% CLs',(0,0,0),fontsize=13)
         notes=[
@@ -259,16 +280,19 @@ def draw_original_comparisons(config,model):
             'Epsilon above 0.1 is a formal model extrapolation.',
             f'Current SHIFT: expected {round(100*level)}% CLs. Most source projections: 90% CL; FCC: 95% CL.']
         if omitted_masses:notes.append('Temporarily omitted pending review: '+', '.join(f'{m:g} GeV' for m in omitted_masses)+'. Neighbouring points are connected.')
+        if pointwise:notes.append('Diamonds test one lifetime only: filled/open means excluded/not excluded. No lifetime interval is inferred.')
         for index,note in enumerate(notes):
             y=height+offset+13+index*13
             page.draw_circle((87,y-3),1.5,color=None,fill=(0,0,0))
             page.insert_text((96,y),note,fontsize=10,fontname='tiro')
         page.insert_text((84,height+offset+211+footer_extra),'Source: arXiv:2511.03883v1, Fig. 8.15 (CC BY 4.0). Original SHIFT exposure: 30 fb^-1 (1% of 3 ab^-1).',fontsize=9.2,fontname='tiro')
-        path=model.output/f'limits_current_cl{round(100*level)}_comparison.pdf';temporary=path.with_suffix('.tmp.pdf')
+        suffix='_'+config.background_modes[0] if len(config.background_modes)==1 else ''
+        path=model.output/f'limits_current_cl{round(100*level)}{suffix}_comparison.pdf';temporary=path.with_suffix('.tmp.pdf')
         doc.save(temporary,garbage=4,deflate=True);doc.close();temporary.replace(path)
         receipts.append({'file':path.name,'boundaries':counts,'sha256':digest(path)})
     clean.close();source.close()
-    save_json(model.output/'original_overlay_provenance.json',{'source_sha256':provenance['figure_sha256'],'removed_svg_elements':removed_elements,
+    suffix='_'+config.background_modes[0] if len(config.background_modes)==1 else ''
+    save_json(model.output/f'original_overlay{suffix}_provenance.json',{'source_sha256':provenance['figure_sha256'],'removed_svg_elements':removed_elements,
         'removed_projection_colors':sorted(removed),'retained_legend_drawing_indices':legend_indices,'figures':receipts,
         'recolored_source_curves':recolor,'original_shift_luminosity_fb_inverse':30,
         'omitted_masses_gev':list(omitted_masses),'omission_reason':'Temporary user-requested presentation omission pending review; raw scan and fit results retained.',

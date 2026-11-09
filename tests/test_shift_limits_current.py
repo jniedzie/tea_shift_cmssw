@@ -14,6 +14,22 @@ from shift_limits_current import Model,signal_normalization
 
 
 class PublishedLimitsTest(unittest.TestCase):
+    def test_single_lifetime_is_drawn_as_a_tested_point_without_a_contour(self):
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        from shift_limits_current_plots import draw_regions
+        for excluded in (False,True):
+            with self.subTest(excluded=excluded):
+                row=dict(mode='background',mass_gev=.212,epsilon_support=[1.e-5,1.e-5],
+                         excluded_intervals=[[1.e-5,1.e-5]] if excluded else [])
+                fig,axis=plt.subplots()
+                draw_regions(axis,[row],'background','red','test')
+                self.assertEqual(len(axis.lines),0)
+                self.assertEqual(len(axis.collections),1)
+                np.testing.assert_allclose(axis.collections[0].get_offsets(),[[.212,1.e-5]])
+                plt.close(fig)
+
     def test_full_gen_normalization_does_not_use_sampled_cutflow_or_repeat_branching(self):
         # A sampled cutflow may be 3225.4 while the original exposure is 3196.
         rate={'physical_selected_cross_sections_pb':[{'value_pb':2.},{'value_pb':1.}],
