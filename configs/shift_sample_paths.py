@@ -226,6 +226,8 @@ def histogram_gen_normalization(path, stratum):
         expected_stratum = stratum.replace('to-1', 'toinf')
         policy = metadata.get('histogram_weight')
         valid_weight = policy == 'native_gen_weight/reco_inclusion_probability'
+        if policy == 'native_gen_weight*component_rate_scale/reco_inclusion_probability':
+            valid_weight = _component_rate_histogram_normalization(metadata)
         if policy == 'native_gen_weight/(reco_inclusion_probability*response_sampling_probability)':
             valid_weight = (metadata.get('histogram_weight_branch') == 'shiftResponseGenWeight'
                 and metadata.get('response_correction_application_count') == 1
@@ -241,6 +243,63 @@ def histogram_gen_normalization(path, stratum):
         return dict(cross_section_pb=cross_section, initial_weight_sum=denominator)
     finally:
         source.Close()
+
+
+def _component_rate_histogram_normalization(metadata):
+    """Check the physical component scales using only embedded histogram data."""
+    normalization = metadata.get('component_rate_normalization', {})
+    if not isinstance(normalization, dict):
+        return False
+    components = normalization.get('components', [])
+    if (type(metadata.get('component_rate_scale_application_count')) is not int or
+            metadata['component_rate_scale_application_count'] != 1 or
+            metadata.get('component_nanos_combined') is not False or
+            metadata.get('native_nano_weights_changed') is not False or
+            normalization.get('scale_flow_bins') is not True or
+            normalization.get('scale_sumw2_by_squared_factor') is not True or
+            not isinstance(components, list) or len(components) < 2):
+        return False
+    names, sources, sums, rates, weighted, variances = set(), set(), [], [], [], []
+    for component in components:
+        if not isinstance(component, dict):
+            return False
+        name = component.get('name')
+        keys = ('full_gen_weight_sum', 'selected_cross_section_pb',
+                'cross_section_per_gen_weight_pb', 'histogram_scale')
+        if (not isinstance(name, str) or not name or name in names or
+                any(type(component.get(key)) not in (int, float) or
+                    not math.isfinite(component[key]) or component[key] <= 0 for key in keys)):
+            return False
+        count, rate, per_weight, scale = [component[key] for key in keys]
+        hashes = component.get('original_gen_sha256', [])
+        if (not isinstance(hashes, list) or not hashes or
+                any(not isinstance(digest, str) or not re.fullmatch('[0-9a-f]{64}', digest)
+                    for digest in hashes) or len(set(hashes)) != len(hashes) or sources.intersection(hashes) or
+                not math.isclose(per_weight, rate / count, rel_tol=1e-12)):
+            return False
+        names.add(name); sources.update(hashes)
+        sums.append(count); rates.append(rate); weighted.append(scale * count); variances.append(scale**2 * count)
+    total, sigma = math.fsum(sums), math.fsum(rates)
+    expected = dict(reference_gen_weight_sum=total, cross_section_per_stored_weight_pb=sigma / total,
+                    expected_full_gen_stored_sumw=math.fsum(weighted),
+                    expected_full_gen_stored_sumw2=math.fsum(variances))
+    if any(type(normalization.get(key)) not in (int, float) or
+           not math.isfinite(normalization[key]) or
+           not math.isclose(normalization[key], value, rel_tol=1e-12) for key, value in expected.items()):
+        return False
+    originals = metadata.get('original_sources', [])
+    if (not isinstance(originals, list) or len(originals) != len(sources) or
+            any(not isinstance(row, dict) for row in originals) or
+            {row.get('gen_sha256') for row in originals} != sources):
+        return False
+    if any(type(metadata.get(key)) not in (int, float) or not math.isfinite(metadata[key])
+           for key in ('full_source_sumw', 'cross_section_pb')):
+        return False
+    return (math.isclose(metadata.get('full_source_sumw', 0), total, rel_tol=1e-12) and
+            math.isclose(metadata.get('cross_section_pb', 0), sigma, rel_tol=1e-12) and
+            math.isclose(expected['expected_full_gen_stored_sumw'], total, rel_tol=1e-12) and
+            all(math.isclose(row['histogram_scale'], row['cross_section_per_gen_weight_pb'] / (sigma / total),
+                             rel_tol=1e-12) for row in components))
 
 
 def latest_merged_sample(samples_dir):

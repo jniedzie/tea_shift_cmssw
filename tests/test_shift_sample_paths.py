@@ -17,6 +17,44 @@ import shift_sample_paths
 
 
 class StreamingHistogramInputsTest(unittest.TestCase):
+    def test_component_rate_normalization_uses_embedded_separate_exposures(self):
+        import ROOT
+        metadata = dict(schema='shift-preserved-full-GEN-histogram-v1', stratum='darkphoton_m1p8_lab30',
+            full_source_sumw=12., cross_section_pb=8., no_second_filter_efficiency=True,
+            histogram_weight='native_gen_weight*component_rate_scale/reco_inclusion_probability',
+            component_rate_scale_application_count=1, component_nanos_combined=False,
+            native_nano_weights_changed=False,
+            original_sources=[dict(gen_sha256='a' * 64), dict(gen_sha256='b' * 64)],
+            component_rate_normalization=dict(reference_gen_weight_sum=12.,
+                cross_section_per_stored_weight_pb=8./12., expected_full_gen_stored_sumw=12.,
+                expected_full_gen_stored_sumw2=15.75, scale_flow_bins=True,
+                scale_sumw2_by_squared_factor=True, components=[
+                    dict(name='inclusive', full_gen_weight_sum=10., selected_cross_section_pb=5.,
+                         cross_section_per_gen_weight_pb=.5, histogram_scale=.75, original_gen_sha256=['a' * 64]),
+                    dict(name='dy', full_gen_weight_sum=2., selected_cross_section_pb=3.,
+                         cross_section_per_gen_weight_pb=1.5, histogram_scale=2.25, original_gen_sha256=['b' * 64])]))
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'partial.root'
+            for failure in (None, 'scale', 'denominator', 'cross_section', 'variance', 'duplicate', 'twice', 'nano'):
+                candidate = copy.deepcopy(metadata)
+                normalization = candidate['component_rate_normalization']
+                if failure == 'scale':normalization['components'][0]['histogram_scale'] *= 2
+                elif failure == 'denominator':candidate['full_source_sumw'] = 11.
+                elif failure == 'cross_section':candidate['cross_section_pb'] = 7.
+                elif failure == 'variance':normalization['expected_full_gen_stored_sumw2'] = 12.
+                elif failure == 'duplicate':normalization['components'][1]['original_gen_sha256'] = ['a' * 64]
+                elif failure == 'twice':candidate['component_rate_scale_application_count'] = 2
+                elif failure == 'nano':candidate['component_nanos_combined'] = True
+                file = ROOT.TFile(str(path), 'RECREATE')
+                ROOT.TObjString(json.dumps(candidate)).Write('ShiftFullGenNormalization'); file.Close()
+                with self.subTest(failure=failure):
+                    if failure is None:
+                        self.assertEqual(shift_sample_paths.histogram_gen_normalization(str(path), 'darkphoton_m1p8_lab30'),
+                                         dict(cross_section_pb=8., initial_weight_sum=12.))
+                    else:
+                        with self.assertRaisesRegex(ValueError, 'Invalid full GEN'):
+                            shift_sample_paths.histogram_gen_normalization(str(path), 'darkphoton_m1p8_lab30')
+
     def test_group_campaign_link_returns_a_verified_local_root_input(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory=Path(temporary);(directory/'ready.root').write_bytes(b'fixture')
