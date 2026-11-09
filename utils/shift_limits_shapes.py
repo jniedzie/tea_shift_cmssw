@@ -18,6 +18,130 @@ from shift_limits import digest, reference_cross_section
 from shift_limits_lifetime import save_json
 
 
+def source_variation_templates(events, theory, mass_edges, categories):
+    """Fold source density ratios through unchanged reconstructed events.
+
+    Event weights already contain native W/p. All scenarios retain the nominal
+    GEN denominator and use its physical rate once. Covariances group records
+    by an explicit source-collision identity when supplied, otherwise by their
+    raw MC event identity. Different scenarios are never independent MC samples.
+    """
+    edges=np.asarray(mass_edges,dtype=float)
+    if len(edges)<2 or not np.all(np.isfinite(edges)) or np.any(np.diff(edges)<=0):
+        raise ValueError('Require finite increasing mass edges')
+    if not categories or len(set(categories))!=len(categories):
+        raise ValueError('Require distinct reconstructed categories')
+    names=tuple(theory['variations'])
+    if not names or any(theory['variations'][name].get('available') is not True for name in names):
+        raise ValueError('Requested source variation is outside its qualified support')
+    records={}
+    for row in theory['records']:
+        identity=tuple(row['event_id'])
+        if len(identity)!=3 or identity in records:
+            raise ValueError('Source theory records repeat or misidentify an original GEN event')
+        weights=row['weights']
+        if set(weights)!=set(names) or any(value is None or not math.isfinite(value) or value<0
+                                           for value in weights.values()):
+            raise ValueError('Missing or nonphysical source theory weight')
+        records[identity]=row
+    shape=(len(names),len(categories),len(edges)+1)  # Both mass flow bins retained.
+    sums=np.zeros(shape);entry_variances=np.zeros(shape)
+    raw_pairs=np.zeros(len(categories),dtype=np.int64)
+    clusters={};seen=set();raw_with_pairs=0
+    for event in events:
+        identity=tuple(event['id'])
+        if identity in seen or identity not in records:
+            raise ValueError('Reconstructed event is repeated or missing from its original GEN theory records')
+        seen.add(identity)
+        weight=event['weight']
+        if not math.isfinite(weight) or weight<=0:
+            raise ValueError('Expected a positive stored native W/p event weight')
+        ratios=np.asarray([records[identity]['weights'][name] for name in names])
+        vector=weight*ratios
+        cluster=tuple(event.get('source_collision_id',identity))
+        cells=clusters.setdefault(cluster,{}) if event['dimuons'] else None
+        raw_with_pairs+=bool(event['dimuons'])
+        for pair in event['dimuons']:
+            category=pair['category'];mass=pair['mass_gev']
+            if category not in categories or not math.isfinite(mass):
+                raise ValueError('Nonfinite mass or unknown reconstructed category')
+            index=categories.index(category);bin_index=int(np.searchsorted(edges,mass,side='right'))
+            sums[:,index,bin_index]+=vector
+            entry_variances[:,index,bin_index]+=vector**2
+            raw_pairs[index]+=1
+            cell=(index,bin_index)
+            cells[cell]=cells.get(cell,np.zeros(len(names)))+vector
+    covariance={}
+    for cells in clusters.values():
+        for first in sorted(cells):
+            for second in sorted(cells):
+                if second<first:continue
+                key=first+second
+                covariance[key]=covariance.get(key,np.zeros((len(names),len(names))))+np.outer(cells[first],cells[second])
+    variances=np.zeros(shape)
+    for (a,i,b,j),matrix in covariance.items():
+        if (a,i)==(b,j):variances[:,a,i]=np.diag(matrix)
+    return dict(schema='shift-source-variation-mass-templates-v1',variations=list(names),
+        categories=list(categories),mass_edges_gev=edges.tolist(),flow_bins_retained=True,
+        weighted_sums=sums.tolist(),entry_sumw2=entry_variances.tolist(),cluster_sumw2=variances.tolist(),
+        covariance=[dict(cells=list(key),values=matrix.tolist()) for key,matrix in sorted(covariance.items())],
+        covariance_scope='Response sampling only; independent source-rate integration errors remain separate',
+        raw_MC_events=len(seen),raw_MC_events_with_dimuon=raw_with_pairs,
+        raw_MC_dimuon_pairs=raw_pairs.tolist(),response_clusters_with_dimuon=len(clusters),
+        original_GEN_theory_records=len(records),source_variations_share_raw_MC_events=True,
+        integrated_rate_ratio_applied=False,additional_sampling_correction_applied=False)
+
+
+def source_templates_at_lumi(templates, *, cross_section_pb, full_gen_sumw, luminosity_pb):
+    """Use one nominal rate/GEN factor for all source-density scenarios."""
+    if any(not math.isfinite(value) or value<=0 for value in
+           (cross_section_pb,full_gen_sumw,luminosity_pb)):
+        raise ValueError('Require positive original GEN exposure, physical rate and luminosity')
+    factor=cross_section_pb*luminosity_pb/full_gen_sumw
+    return dict(luminosity_pb=luminosity_pb,cross_section_pb=cross_section_pb,
+        original_full_gen_sumw=full_gen_sumw,common_lumi_factor=factor,
+        raw_MC_events=templates['raw_MC_events'],raw_MC_events_with_dimuon=templates['raw_MC_events_with_dimuon'],
+        events_normalized_to_lumi=(np.asarray(templates['weighted_sums'])*factor).tolist(),
+        response_variance_normalized_to_lumi=(np.asarray(templates['cluster_sumw2'])*factor**2).tolist(),
+        covariance_normalized_to_lumi=[dict(cells=row['cells'],values=(np.asarray(row['values'])*factor**2).tolist())
+                                      for row in templates['covariance']],
+        extra_branching_or_epsilon_factor=False,extra_integrated_variation_rate_factor=False)
+
+
+def source_variation_events_from_nano(files, theory, weight_branch='shiftSamplingGenWeight'):
+    """Read stored dimuons and W/p, without adding a reconstruction selection."""
+    import ROOT
+    from shift_limits_yields import event_category
+    from teaHelpers import eos_xrootd_url
+    records={tuple(row['event_id']):row for row in theory['records']}
+    required=['run','luminosityBlock','event','nShiftDimuonVertex',weight_branch,
+              'ShiftDimuonVertex_mass','ShiftDimuonVertex_topologyMin','ShiftDimuonVertex_topologyMax']
+    for filename in files:
+        source=ROOT.TFile.Open(eos_xrootd_url(str(filename)) or str(filename),'READ')
+        if not source or source.IsZombie() or source.TestBit(ROOT.TFile.kRecovered):
+            raise OSError('Unreadable completed signal Nano: '+str(filename))
+        try:
+            tree=source.Get('Events')
+            if not tree:raise ValueError('Missing Nano Events tree: '+str(filename))
+            tree.SetBranchStatus('*',0)
+            for name in required:
+                if not tree.GetBranch(name):raise ValueError('Missing source-template branch: '+name)
+                tree.SetBranchStatus(name,1)
+            for event in tree:
+                identity=(int(event.run),int(event.luminosityBlock),int(event.event))
+                if identity not in records:raise ValueError('Nano event is missing from the source theory ledger')
+                record=records[identity]
+                pairs=[dict(mass_gev=float(event.ShiftDimuonVertex_mass[i]),
+                            category=event_category(int(event.ShiftDimuonVertex_topologyMin[i]),
+                                                    int(event.ShiftDimuonVertex_topologyMax[i])))
+                       for i in range(int(event.nShiftDimuonVertex))]
+                row=dict(id=list(identity),weight=float(getattr(event,weight_branch)),dimuons=pairs)
+                if 'source_trial' in record:
+                    row['source_collision_id']=[record.get('source_bank_id',identity[0]),record['source_trial']]
+                yield row
+        finally:source.Close()
+
+
 def merge_background_bins(values, variances, minimum_ess):
     """Merge from the high-mass end, including a sparse remainder in its neighbour."""
     if len(values) != len(variances) or minimum_ess <= 0:

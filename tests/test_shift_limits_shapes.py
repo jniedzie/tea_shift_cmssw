@@ -11,9 +11,75 @@ from unittest.mock import Mock, patch
 import numpy as np
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'bin'))
-from shift_limits_shapes import merge_background_bins, rebin, weighted_shape, clipped_boundary_segments, boundary_outline_segments, draw_mass_improvement
+from shift_limits_shapes import (merge_background_bins, rebin, weighted_shape, clipped_boundary_segments,
+                                boundary_outline_segments, draw_mass_improvement,
+                                source_variation_templates, source_templates_at_lumi)
 from shift_limits import digest, reference_cross_section
 from shift_limits_cuts import cut_mask
+
+
+class SourceVariationTemplatesTest(unittest.TestCase):
+    def theory(self):
+        return dict(variations={name:dict(available=True) for name in ('Lower','Central','Upper')},
+            records=[dict(event_id=[10,1,i],weights=dict(zip(('Lower','Central','Upper'),weights)))
+                     for i,weights in enumerate(((.5,1.,2.),(2.,1.,.25),(1.,1.,1.)),1)])
+
+    def events(self):
+        return [dict(id=[10,1,1],weight=2.,dimuons=[dict(category='Both-Both',mass_gev=1.5),
+                                                    dict(category='Both-Both',mass_gev=5.)]),
+                dict(id=[10,1,2],weight=1.,dimuons=[dict(category='Other',mass_gev=-1.)]),
+                dict(id=[10,1,3],weight=3.,dimuons=[])]
+
+    def test_density_weights_preserve_flows_raw_counts_and_cross_bin_correlations(self):
+        result=source_variation_templates(self.events(),self.theory(),[0.,1.,2.],('Both-Both','Other'))
+        sums=np.array(result['weighted_sums'])
+        self.assertEqual(result['raw_MC_events'],3)
+        self.assertEqual(result['raw_MC_events_with_dimuon'],2)
+        self.assertEqual(result['raw_MC_dimuon_pairs'],[2,1])
+        self.assertEqual(list(sums[:,0,2]),[1.,2.,4.])
+        self.assertEqual(list(sums[:,0,3]),[1.,2.,4.])
+        self.assertEqual(list(sums[:,1,0]),[2.,1.,.25])
+        cross=next(row['values'] for row in result['covariance'] if row['cells']==[0,2,0,3])
+        self.assertEqual(cross[1][1],4.)
+        self.assertEqual(cross[1][2],8.)
+
+    def test_shared_source_collision_is_not_independent_raw_MC(self):
+        events=self.events()[:2]
+        for event in events:
+            event['dimuons']=[dict(category='Both-Both',mass_gev=1.5)]
+            event['source_collision_id']=['same-bank',9]
+        result=source_variation_templates(events,self.theory(),[0.,1.,2.],('Both-Both',))
+        self.assertEqual(result['response_clusters_with_dimuon'],1)
+        self.assertEqual(result['entry_sumw2'][1][0][2],5.)
+        self.assertEqual(result['cluster_sumw2'][1][0][2],9.)
+        self.assertAlmostEqual(result['cluster_sumw2'][2][0][2],4.25**2)
+
+    def test_lumi_factor_uses_original_GEN_once_and_does_not_scale_raw_counts(self):
+        result=source_variation_templates(self.events(),self.theory(),[0.,1.,2.],('Both-Both','Other'))
+        normalized=source_templates_at_lumi(result,cross_section_pb=10.,full_gen_sumw=100.,luminosity_pb=300.)
+        self.assertEqual(normalized['raw_MC_events'],3)
+        self.assertEqual(normalized['original_full_gen_sumw'],100.)
+        self.assertEqual(normalized['common_lumi_factor'],30.)
+        self.assertEqual(np.array(normalized['events_normalized_to_lumi'])[1].sum(),150.)
+        self.assertEqual(normalized['response_variance_normalized_to_lumi'][1][0][2],3600.)
+        doubled=source_templates_at_lumi(result,cross_section_pb=10.,full_gen_sumw=100.,luminosity_pb=600.)
+        self.assertEqual(doubled['events_normalized_to_lumi'][1][0][2],120.)
+        self.assertEqual(doubled['response_variance_normalized_to_lumi'][1][0][2],14400.)
+        self.assertFalse(normalized['extra_integrated_variation_rate_factor'])
+
+    def test_missing_reused_or_unsupported_source_weights_fail(self):
+        import copy
+        for change in ('duplicate','missing','unavailable','missing_weight'):
+            theory=copy.deepcopy(self.theory())
+            if change=='duplicate':theory['records'].append(copy.deepcopy(theory['records'][0]))
+            elif change=='missing':theory['records'].pop()
+            elif change=='unavailable':theory['variations']['Upper']['available']=False
+            else:theory['records'][0]['weights']['Upper']=None
+            with self.subTest(change=change),self.assertRaises(ValueError):
+                source_variation_templates(self.events(),theory,[0.,1.,2.],('Both-Both','Other'))
+        events=self.events();events.append(events[0])
+        with self.assertRaises(ValueError):
+            source_variation_templates(events,self.theory(),[0.,1.,2.],('Both-Both','Other'))
 
 
 class MassShapesTest(unittest.TestCase):
