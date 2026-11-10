@@ -51,7 +51,7 @@ def single_lifetime(row):
     return math.isclose(low,high,rel_tol=1.e-12)
 
 
-def draw_regions(axis,rows,mode,color,label,fill=True,linewidth=2,linestyle=None):
+def draw_regions(axis,rows,mode,color,label,fill=True,linewidth=2,linestyle=None,point_marker_size=28):
     nodes=sorted((r for r in rows if r['mode']==mode),key=lambda r:r['mass_gev']);labelled=False
     # Requested presentation: connect every available mass boundary, including
     # across gaps in generated response coverage. This is plot interpolation.
@@ -60,7 +60,7 @@ def draw_regions(axis,rows,mode,color,label,fill=True,linewidth=2,linestyle=None
         if single_lifetime(row):
             axis.scatter([row['mass_gev']],[row['epsilon_support'][0]],marker='D',
                          facecolors=color if row['excluded_intervals'] else 'white',
-                         edgecolors=color,s=28,zorder=8)
+                         edgecolors=color,s=point_marker_size,zorder=8)
             continue
         if not row['excluded_intervals']:continue
         row=copy.deepcopy(row)
@@ -173,6 +173,8 @@ def draw_original_comparisons(config,model):
     omitted_masses=tuple(mass for mass in config.plot_omitted_masses_gev if mass in model.signals)
     pointwise=any(single_lifetime(row) for row in boundaries(model,config.confidence_levels[0],config.primary_channel,omitted_masses))
     footer_extra=(13 if omitted_masses else 0)+(13 if pointwise else 0)
+    complete_notes=getattr(config,'comparison_notes_are_complete',False)
+    if complete_notes:footer_extra=0
     # Copy retained legend rows directly from the original PDF, preserving fonts
     # and styles. Keep the original SHIFT curve as an explicitly named reference.
     legend_indices=[195,197,198,199,203,205,207,211,212]
@@ -188,8 +190,12 @@ def draw_original_comparisons(config,model):
         x+=fitz.get_text_length('-1',fontname='tiro',fontsize=.65*fontsize)+1
         page.insert_text((x,y),suffix,fontsize=fontsize,fontname='tiro',color=color)
     receipts=[]
+    caption_height=33+13*len(config.comparison_notes) if complete_notes else max(235,33+13*len(getattr(config,'comparison_notes',())))
+    mode_styles=getattr(config,'comparison_mode_styles',
+        [('background',(0,90/255,50/255),': QCD + DY + J/psi',False),
+         ('zero_background',(102/255,166/255,30/255),': zero background',True)])
     for level in config.confidence_levels:
-        doc=fitz.open();page=doc.new_page(width=width,height=height+offset+235+footer_extra)
+        doc=fitz.open();page=doc.new_page(width=width,height=height+offset+caption_height+footer_extra)
         page.show_pdf_page(fitz.Rect(0,offset,width,height+offset),source,0)
         # SVG import does not preserve nested PDF clipping or masked images.
         # Restrict it to the axes, keeping original PDF text around the axes
@@ -217,8 +223,7 @@ def draw_original_comparisons(config,model):
         page.draw_line((640,shift_legend_y),(665,shift_legend_y),color=original_color,width=2)
         luminosity_label(page,(672,shift_legend_y+4),'SHIFT (briefing book), 30 fb','',original_color)
         rows=boundaries(model,level,config.primary_channel,omitted_masses);counts=[]
-        for mode,color,label,dashed in [('background',(0,90/255,50/255),': QCD + DY + J/psi',False),
-                                        ('zero_background',(102/255,166/255,30/255),': zero background',True)]:
+        for mode,color,label,dashed in mode_styles:
             if mode not in config.background_modes:continue
             tested=[r for r in rows if r['mode']==mode and single_lifetime(r)]
             for row in tested:
@@ -256,9 +261,9 @@ def draw_original_comparisons(config,model):
                     shape=page.new_shape();shape.draw_polyline(finite);shape.finish(color=color,width=2.5,dashes='[6 3] 0' if dashed else None,closePath=False);shape.commit()
                 else:page.draw_circle(finite[0],2.2,color=color,fill=(1,1,1))
             for xy in lower:page.draw_circle(xy,2.2,color=color,fill=color)
-            y=shift_legend_y+(40 if dashed else 20)
+            y=shift_legend_y+(40 if mode=='zero_background' else 20)
             page.draw_line((640,y),(665,y),color=color,width=2.5,dashes='[6 3] 0' if dashed else None)
-            luminosity_label(page,(672,y+4),f'SHIFT, {config.luminosity/1000:g} fb',label,color)
+            luminosity_label(page,(672,y+4),f"{getattr(config,'signal_model_label','SHIFT')}, {config.luminosity/1000:g} fb",label,color,fontsize=getattr(config,'comparison_legend_fontsize',12))
             counts.append({'mode':mode,'connected_mass_points':[r['mass_gev'] for r in nodes],
                            'single_lifetime_tests':[dict(mass_gev=r['mass_gev'],epsilon=r['epsilon_support'][0],excluded=bool(r['excluded_intervals'])) for r in tested]})
         page.draw_rect(fitz.Rect(638.3,shift_legend_y+60,width,height+offset),color=None,fill=(1,1,1))
@@ -279,13 +284,14 @@ def draw_original_comparisons(config,model):
             'Mass boundaries are interpolated; lifetime coverage ends are not physical exclusion edges. Empty signal controls are omitted.',
             'Epsilon above 0.1 is a formal model extrapolation.',
             f'Current SHIFT: expected {round(100*level)}% CLs. Most source projections: 90% CL; FCC: 95% CL.']
-        if omitted_masses:notes.append('Temporarily omitted pending review: '+', '.join(f'{m:g} GeV' for m in omitted_masses)+'. Neighbouring points are connected.')
-        if pointwise:notes.append('Diamonds test one lifetime only: filled/open means excluded/not excluded. No lifetime interval is inferred.')
+        notes=list(getattr(config,'comparison_notes',notes))
+        if omitted_masses and not complete_notes:notes.append(getattr(config,'comparison_omission_label','Temporarily omitted pending review')+': '+', '.join(f'{m:g} GeV' for m in omitted_masses)+'. Neighbouring points are connected.')
+        if pointwise and not complete_notes:notes.append('Diamonds test one lifetime only: filled/open means excluded/not excluded. No lifetime interval is inferred.')
         for index,note in enumerate(notes):
             y=height+offset+13+index*13
             page.draw_circle((87,y-3),1.5,color=None,fill=(0,0,0))
             page.insert_text((96,y),note,fontsize=10,fontname='tiro')
-        page.insert_text((84,height+offset+211+footer_extra),'Source: arXiv:2511.03883v1, Fig. 8.15 (CC BY 4.0). Original SHIFT exposure: 30 fb^-1 (1% of 3 ab^-1).',fontsize=9.2,fontname='tiro')
+        page.insert_text((84,height+offset+caption_height-24+footer_extra),'Source: arXiv:2511.03883v1, Fig. 8.15 (CC BY 4.0). Original SHIFT exposure: 30 fb^-1 (1% of 3 ab^-1).',fontsize=9.2,fontname='tiro')
         suffix='_'+config.background_modes[0] if len(config.background_modes)==1 else ''
         path=model.output/f'limits_current_cl{round(100*level)}{suffix}_comparison.pdf';temporary=path.with_suffix('.tmp.pdf')
         doc.save(temporary,garbage=4,deflate=True);doc.close();temporary.replace(path)
@@ -298,6 +304,60 @@ def draw_original_comparisons(config,model):
         'omitted_masses_gev':list(omitted_masses),'omission_reason':'Temporary user-requested presentation omission pending review; raw scan and fit results retained.',
         'upper_outline':'Finite upper edges are not joined to artificial plot-top caps; exclusion shading and numerical limits are unchanged.',
         'style':'Original vector axes, existing exclusion shading, curve styles, labels and logo retained; retained legend rows copied from source.'})
+
+
+
+def draw_model_update(config, model, reference_directory):
+    """Overlay only qualified response support on a named older-model reference.
+
+    The reference PDF is rendered separately by draw_original_comparisons with
+    muted styles. This function adds no response anchors or old-model lifetime
+    templates. Mass-boundary interpolation follows the existing plotting rule.
+    """
+    import fitz
+    from shift_paths import limits_output_path
+    reference_directory=Path(reference_directory)
+    provenance=json.loads((Path(limits_output_path).resolve()/'paper_figure_provenance.json').read_text())
+    left,top,right,bottom=provenance['axis_rectangle_points_top_left_origin']
+    receipts=[]
+    for level in config.confidence_levels:
+        suffix='_'+config.background_modes[0] if len(config.background_modes)==1 else ''
+        name=f'limits_current_cl{round(100*level)}{suffix}_comparison.pdf'
+        base=reference_directory/name
+        document=fitz.open(base);page=document[0]
+        width,height=page.rect.width,page.rect.height
+        plt=plotting();figure=plt.figure(figsize=(width/72,height/72))
+        axis=figure.add_axes([left/width,1-(bottom+25)/height,(right-left)/width,(bottom-top)/height])
+        axis.set(xscale='log',yscale='log',xlim=(1.e-3,1.e3),ylim=(1.e-10,1.))
+        axis.set_axis_off()
+        rows=boundaries(model,level,config.primary_channel,())
+        styles=[('background','#b43c88','New model: QCD + DY + J/psi'),
+                ('zero_background','#166db0','New model: zero background')]
+        for mode,color,label in styles:
+            if mode in config.background_modes:
+                draw_regions(axis,rows,mode,color,label,fill=True,linewidth=2.1,
+                             point_marker_size=52 if mode=='background' else 24)
+        import io
+        buffer=io.BytesIO();figure.savefig(buffer,format='pdf',transparent=True);plt.close(figure)
+        layer=fitz.open(stream=buffer.getvalue(),filetype='pdf')
+        page.show_pdf_page(page.rect,layer,0,overlay=True);layer.close()
+        # Existing reference legend ends above this deliberately reserved box.
+        legend_y=337
+        for mode,color,label in styles:
+            if mode not in config.background_modes:continue
+            rgb=tuple(int(color[i:i+2],16)/255 for i in (1,3,5))
+            page.draw_line((640,legend_y),(665,legend_y),color=rgb,width=2.1,
+                           dashes='[6 3] 0' if mode=='zero_background' else None)
+            page.insert_text((672,legend_y+4),label,fontsize=10,fontname='tiro',color=rgb)
+            legend_y+=19
+        target=model.output/name;temporary=target.with_suffix('.tmp.pdf')
+        document.save(temporary,garbage=4,deflate=True);document.close();temporary.replace(target)
+        receipts.append(dict(file=name,sha256=digest(target),reference_pdf=str(base),
+            reference_sha256=digest(base),new_model_scan_sha256=digest(model.output/'scan.json'),
+            tested_support=[{k:row[k] for k in ('mass_gev','mode','epsilon_support','excluded_intervals')}for row in rows]))
+    save_json(model.output/f'model_update{suffix}_provenance.json',dict(figures=receipts,
+        new_model_support='Literal new scan support only; no old-DY lifetime interpolation',
+        reference='Older signal prescription, retained as an explicitly named comparison'))
 
 
 def draw_inputs(config,model):

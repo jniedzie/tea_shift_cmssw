@@ -61,6 +61,28 @@ class PublishedLimitsTest(unittest.TestCase):
             self.assertIsNone(model.signal(.25,5.e-5))
             self.assertIsNone(model.signal(.25,2.e-4))
 
+    def test_prompt_control_capped_at_its_anchor_is_only_a_pointwise_test(self):
+        from shift_limits_current import scan
+        from shift_limits_current_plots import single_lifetime
+        with tempfile.TemporaryDirectory() as directory:
+            model=self.make_model(directory,['new_DY'])
+            path=Path(directory)/'snapshot.json';snapshot=json.loads(path.read_text())
+            row=snapshot['signals'][0]
+            row.update(name='m70_prompt',mass_gev=70.,epsilon=.001,prompt=True)
+            path.write_text(json.dumps(snapshot))
+            config=model.config
+            config.epsilon_max=.001;config.confidence_levels=(.9,)
+            config.background_modes=('zero_background',);config.channel_names=('Both-Both',)
+            config.scan_grid_points=65
+            updated=Model(config)
+            self.assertIsNone(updated.signal(70.,.0009))
+            scan(config)
+            result=json.loads((Path(directory)/'scan.json').read_text())['records'][0]
+            self.assertEqual(result['epsilon_support'],[.001,.001])
+            self.assertTrue(single_lifetime(result))
+            self.assertEqual(result['roots'],[])
+            self.assertEqual(result['epsilon_grid'],[.001])
+
     def test_old_eta_and_new_senscalc_lifetimes_cannot_be_interpolated_together(self):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ValueError,'Different signal production prescriptions'):
