@@ -16,6 +16,14 @@ MODE_COLORS={'background':'#b33636','zero_background':'#176b9c'}
 MODE_LABELS={'background':'SHIFT: QCD + DY + J/psi','zero_background':'SHIFT: zero background'}
 
 
+def comparison_figure_directory(config):
+    """Let frozen analysis workers pin the figure without importing live configs."""
+    explicit=getattr(config,'comparison_figure_directory',None)
+    if explicit is not None:return Path(explicit).resolve()
+    from shift_paths import limits_output_path
+    return Path(limits_output_path).resolve()
+
+
 def finish(fig,path,caption,plt):
     fig.text(.025,.018,caption,fontsize=8,va='bottom')
     fig.tight_layout(rect=(0,.105,1,.94));fig.savefig(path);plt.close(fig)
@@ -147,10 +155,9 @@ def draw_original_comparisons(config,model):
     """Keep the source figure's vector axes, existing bounds, fonts and logo."""
     import fitz
     import xml.etree.ElementTree as ET
-    from shift_paths import limits_output_path
     ET.register_namespace('','http://www.w3.org/2000/svg')
     ET.register_namespace('xlink','http://www.w3.org/1999/xlink')
-    source_path=Path(limits_output_path).resolve()/'arxiv_2511.03883v1_fig8_15.pdf'
+    source_path=comparison_figure_directory(config)/'arxiv_2511.03883v1_fig8_15.pdf'
     provenance=json.loads(source_path.with_name('paper_figure_provenance.json').read_text())
     assert digest(source_path)==provenance['figure_sha256']
     source=fitz.open(source_path);original=source[0]
@@ -315,9 +322,8 @@ def draw_model_update(config, model, reference_directory):
     templates. Mass-boundary interpolation follows the existing plotting rule.
     """
     import fitz
-    from shift_paths import limits_output_path
     reference_directory=Path(reference_directory)
-    provenance=json.loads((Path(limits_output_path).resolve()/'paper_figure_provenance.json').read_text())
+    provenance=json.loads((comparison_figure_directory(config)/'paper_figure_provenance.json').read_text())
     left,top,right,bottom=provenance['axis_rectangle_points_top_left_origin']
     receipts=[]
     for level in config.confidence_levels:
