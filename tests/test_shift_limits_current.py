@@ -10,7 +10,7 @@ import numpy as np
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'bin'))
 from shift_limits import digest
-from shift_limits_current import Model,signal_normalization
+from shift_limits_current import Model,cached_backgrounds,signal_normalization,signal_physical_point
 
 
 class PublishedLimitsTest(unittest.TestCase):
@@ -39,6 +39,51 @@ class PublishedLimitsTest(unittest.TestCase):
         self.assertAlmostEqual(300*sigma*10/exposure,9000/3196)
         with self.assertRaises(ValueError):
             signal_normalization(rate,{'cross_section_pb':3.,'initial_weight_sum':3225.4})
+
+    def test_component_sum_uses_its_stored_reference_without_reapplying_branching(self):
+        rate=dict(schema='shift-dark-photon-senscalc-dy-component-rates-v1',
+            physical_selected_cross_sections_pb=[dict(value_pb=5.)],
+            histogram_normalization=dict(reference_gen_weight_sum=1100.),
+            physical_point=dict(mass_gev=1.5,epsilon=.001,proper_ctau_mm=.002,physical_br_mumu=.2),
+            components=[dict(mechanism='senscalc-meson-fragmentation-bremsstrahlung',
+                             full_gen_weight_sum=1000.,selected_cross_section_pb=2.),
+                        dict(mechanism='pure-on-shell-drell-yan',
+                             full_gen_weight_sum=100.,selected_cross_section_pb=3.)])
+        self.assertEqual(signal_normalization(rate,dict(cross_section_pb=5.,initial_weight_sum=1100.)),(5.,1100.))
+        physical,mechanism=signal_physical_point(rate)
+        self.assertEqual(physical,rate['physical_point'])
+        self.assertEqual(mechanism,'senscalc-meson-fragmentation-bremsstrahlung-plus-DY')
+        for changed in (dict(reference_gen_weight_sum=100.),dict(reference_gen_weight_sum=1101.)):
+            with self.subTest(changed=changed),self.assertRaisesRegex(ValueError,'physical components'):
+                signal_normalization(dict(rate,histogram_normalization=changed))
+        with self.assertRaisesRegex(ValueError,'original normalization'):
+            signal_normalization(rate,dict(cross_section_pb=2.,initial_weight_sum=1100.))
+
+    def test_background_cache_preserves_counts_variances_and_original_exposure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output=Path(directory);cache=output/'histograms.npz';path=output/'snapshot.json'
+            values=np.array([[1.5,2.5]]);variance=np.array([[2.25,6.25]])
+            np.savez_compressed(cache,backgrounds_0=values,backgrounds_0_sumw2=variance)
+            record=dict(name='qcd_test',array_key='backgrounds_0',cross_section_pb=123.,full_gen_sumw=42.)
+            saved=dict(categories=['Both-Both'],mass_edges_gev=[0.,.1,.2],background_campaign='frozen',
+                       histogram_cache=str(cache),histogram_cache_sha256=digest(cache),backgrounds=[record])
+            path.write_text(json.dumps(saved))
+            records,arrays,campaign,provenance=cached_backgrounds(path,('Both-Both',),[0,1,2])
+            self.assertEqual(records,[record]);self.assertEqual(campaign,'frozen')
+            np.testing.assert_array_equal(arrays['backgrounds_0'],values)
+            np.testing.assert_array_equal(arrays['backgrounds_0_sumw2'],variance)
+            self.assertEqual(provenance['sha256'],digest(path))
+            for categories,edges in [(('Other',),[0,1,2]),(('Both-Both',),[0,2,3])]:
+                with self.subTest(categories=categories,edges=edges),self.assertRaisesRegex(ValueError,'categories or mass bins'):
+                    cached_backgrounds(path,categories,edges)
+            np.savez_compressed(cache,backgrounds_0=values*2,backgrounds_0_sumw2=variance)
+            with self.assertRaisesRegex(ValueError,'histogram bytes changed'):
+                cached_backgrounds(path,('Both-Both',),[0,1,2])
+            saved['histogram_cache_sha256']=digest(cache)
+            saved['backgrounds'][0]['cross_section_pb']=float('inf')
+            path.write_text(json.dumps(saved))
+            with self.assertRaisesRegex(ValueError,'normalization is invalid'):
+                cached_backgrounds(path,('Both-Both',),[0,1,2])
 
     def make_model(self,directory,mechanisms,zero_first=False):
         output=Path(directory);arrays={};rows=[]

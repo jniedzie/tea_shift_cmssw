@@ -39,7 +39,19 @@ def histogram_array(file, name, edges):
 def signal_normalization(authority, preserved=None):
     """Keep original GEN exposure; sampled cutflows already contain W/p."""
     sigma=math.fsum(row['value_pb'] for row in authority['physical_selected_cross_sections_pb'])
-    denominator=float(authority['full_gen']['sum_weights'])
+    if authority.get('schema') == 'shift-dark-photon-senscalc-dy-component-rates-v1':
+        # This is the stored composite's reference weight sum. The component
+        # GEN denominators remain separate; it is not a shared collision exposure.
+        denominator=float(authority['histogram_normalization']['reference_gen_weight_sum'])
+        components=authority['components']
+        if (len(components)!=2 or
+                {row['mechanism'] for row in components} !=
+                {'senscalc-meson-fragmentation-bremsstrahlung','pure-on-shell-drell-yan'} or
+                not math.isclose(denominator,math.fsum(row['full_gen_weight_sum'] for row in components),rel_tol=1.e-12) or
+                not math.isclose(sigma,math.fsum(row['selected_cross_section_pb'] for row in components),rel_tol=1.e-12)):
+            raise ValueError('Composite normalization differs from its physical components')
+    else:
+        denominator=float(authority['full_gen']['sum_weights'])
     if preserved is not None:
         if (not math.isclose(sigma,preserved['cross_section_pb'],rel_tol=2e-6)
                 or not math.isclose(denominator,preserved['initial_weight_sum'],rel_tol=2e-6)):
@@ -48,6 +60,40 @@ def signal_normalization(authority, preserved=None):
     if not math.isfinite(sigma+denominator) or sigma<=0 or denominator<=0:
         raise ValueError('Invalid original signal cross section or GEN exposure')
     return sigma,denominator
+
+
+def signal_physical_point(authority):
+    if authority.get('schema') == 'shift-dark-photon-senscalc-dy-component-rates-v1':
+        return authority['physical_point'], 'senscalc-meson-fragmentation-bremsstrahlung-plus-DY'
+    return authority,authority['mechanism']
+
+
+def cached_backgrounds(snapshot_path,categories,edges):
+    """Reuse a pinned baseline without rereading or selecting different SM files."""
+    path=Path(snapshot_path).resolve()
+    saved=json.loads(path.read_text())
+    target_edges=[e/10 for e in edges]
+    if saved['categories']!=list(categories) or saved['mass_edges_gev']!=target_edges:
+        raise ValueError('Cached background categories or mass bins differ')
+    cache=Path(saved['histogram_cache'])
+    if digest(cache)!=saved['histogram_cache_sha256']:
+        raise ValueError('Cached background histogram bytes changed')
+    records=copy.deepcopy(saved['backgrounds']);arrays={}
+    if not records or len({row['array_key'] for row in records})!=len(records):
+        raise ValueError('Cached backgrounds are empty or repeat array keys')
+    with np.load(cache,allow_pickle=False) as source:
+        for row in records:
+            sigma,denominator=row['cross_section_pb'],row['full_gen_sumw']
+            if not math.isfinite(sigma+denominator) or not sigma>0 or not denominator>0:
+                raise ValueError('Cached background normalization is invalid')
+            for key in (row['array_key'],row['array_key']+'_sumw2'):
+                value=source[key].copy()
+                if (value.shape!=(len(categories),len(edges)-1) or
+                        not np.isfinite(value).all() or (value<0).any()):
+                    raise ValueError('Invalid cached background values or variances: '+key)
+                arrays[key]=value
+    provenance=dict(path=str(path),sha256=digest(path),histogram_cache_sha256=digest(cache))
+    return records,arrays,saved['background_campaign'],provenance
 
 
 def signal_inputs(config):
@@ -64,34 +110,53 @@ def signal_inputs(config):
 
 def snapshot(config):
     import ROOT
-    from shift_plot_samples import prepare_plot_samples
     from shift_sample_paths import histogram_gen_normalization
     ROOT.gROOT.SetBatch(True)
     output=Path(config.output_path).resolve();output.mkdir(parents=True,exist_ok=True)
     if (output/'snapshot.json').exists():
         raise ValueError('A frozen snapshot already exists; reuse it instead of repeating input reads')
-    backgrounds,_=prepare_plot_samples(config.base_path,config.cross_sections,config.campaign,None,None,None,None,None)
     points=signal_inputs(config)
     edges=resolution_boundaries(config.mass_resolution_fraction,config.mass_minimum_bin_gev)
     arrays={};records={'backgrounds':[],'signals':[]}
+    background_campaign=config.campaign;provenance={}
+    background_snapshot=getattr(config,'background_snapshot',None)
+    if background_snapshot:
+        records['backgrounds'],arrays,background_campaign,authority=cached_backgrounds(
+            background_snapshot,config.categories,edges)
+        provenance['background_snapshot_authority']=authority
+        backgrounds=[]
+    else:
+        from shift_plot_samples import prepare_plot_samples
+        backgrounds,_=prepare_plot_samples(config.base_path,config.cross_sections,config.campaign,None,None,None,None,None)
     for kind,items in [('backgrounds',backgrounds),('signals',points)]:
         for index,item in enumerate(items):
             name=item.name if kind=='backgrounds' else item['name']
             path=Path(item.file_path if kind=='backgrounds' else item['histogram_path']).resolve()
-            key=f'{kind}_{index}';source={'name':name,'path':str(path),'bytes':path.stat().st_size,'sha256':digest(path)}
-            file=ROOT.TFile.Open(str(path),'READ')
+            local_path=Path(item.get('local_histogram_path',path)).resolve() if kind=='signals' else path
+            actual_digest=digest(local_path)
+            if kind=='signals':
+                expected=item.get('sha256')
+                if (local_path!=path and not expected) or (expected and expected!=actual_digest):
+                    raise ValueError('Signal histogram readback differs from its pinned publication: '+name)
+            key=f'{kind}_{index}';source={'name':name,'path':str(path),'bytes':local_path.stat().st_size,'sha256':actual_digest}
+            file=ROOT.TFile.Open(str(local_path),'READ')
             if not file or file.IsZombie():raise OSError(str(path))
             try:
                 flow=file.Get('cutFlow');initial=next(flow.GetBinContent(i) for i in range(1,flow.GetNbinsX()+1) if flow.GetXaxis().GetBinLabel(i)=='0_initial')
                 if kind=='signals':
                     # The histogram owns its actually published denominator. Rate
                     # metadata already includes BR(mu mu), including meson sources.
-                    authority_path=path.parent.parent/'cross_sections.json'
-                    authority=json.loads(authority_path.read_text())
-                    preserved=histogram_gen_normalization(str(path),'darkphoton_'+name)
+                    authority_path=Path(item.get('rate_path',path.parent.parent/'cross_sections.json')).resolve()
+                    local_authority=Path(item.get('local_rate_path',authority_path)).resolve()
+                    rate_digest=digest(local_authority);expected=item.get('rate_sha256')
+                    if (local_authority!=authority_path and not expected) or (expected and expected!=rate_digest):
+                        raise ValueError('Signal rate readback differs from its pinned publication: '+name)
+                    authority=json.loads(local_authority.read_text())
+                    preserved=histogram_gen_normalization(str(local_path),'darkphoton_'+name)
                     sigma,denominator=signal_normalization(authority,preserved)
-                    source.update(mass_gev=authority['mass_gev'],epsilon=authority['epsilon'],proper_ctau_mm=authority['proper_ctau_mm'],
-                        mechanism=authority['mechanism'],prompt=name.endswith('_prompt'),rate_authority=str(authority_path),rate_authority_sha256=digest(authority_path),
+                    physical,mechanism=signal_physical_point(authority)
+                    source.update(mass_gev=physical['mass_gev'],epsilon=physical['epsilon'],proper_ctau_mm=physical['proper_ctau_mm'],
+                        mechanism=mechanism,prompt=name.endswith('_prompt'),rate_authority=str(authority_path),rate_authority_sha256=rate_digest,
                         physics_valid=authority.get('physics_valid'),normalization_ready=authority.get('normalization_ready'),
                         normalization_source='histogram_full_GEN' if preserved else 'published_full_GEN_sidecar',
                         mean_lab_flight_m=item.get('mean_lab_flight_m'),input_role=item.get('input_role','current'),
@@ -116,12 +181,12 @@ def snapshot(config):
             print('Snapshotted',kind,name,flush=True)
     target=output/'histograms.npz';np.savez_compressed(target,**arrays)
     save_json(output/'snapshot.json',dict(schema='shift-current-limit-snapshot-v1',luminosity_pb=config.luminosity,categories=list(config.categories),
-        background_campaign=config.campaign,signal_campaign=config.signal_campaign,mass_edges_gev=[e/10 for e in edges],
+        background_campaign=background_campaign,signal_campaign=config.signal_campaign,mass_edges_gev=[e/10 for e in edges],
         histogram_cache=str(target),histogram_cache_sha256=digest(target),flow_policy='Underflow and overflow folded into first and last mass bin',
         background_policy='Only published QCD/DY/Jpsi; no tail interpolation, smoothing, floor or truth removal',
         lifetime_policy='Convex interpolation of rate-weighted reconstructed shapes in log epsilon between generated anchors; prompt-only continuation towards shorter lifetimes',
-        **records))
-    print('Frozen',len(backgrounds),'backgrounds and',len(points),'signals.',flush=True)
+        **provenance,**records))
+    print('Frozen',len(records['backgrounds']),'backgrounds and',len(points),'signals.',flush=True)
 
 
 class Model:
@@ -672,12 +737,20 @@ def main():
     parser.add_argument('--output',type=Path)
     parser.add_argument('--luminosity-pb',type=float)
     parser.add_argument('--signal-inventory',type=Path)
+    parser.add_argument('--background-snapshot',type=Path)
+    parser.add_argument('--response-anchors',nargs='+')
+    parser.add_argument('--epsilon-max',type=float)
     parser.add_argument('--channel',choices=['Both-Both','combined'])
     parser.add_argument('--native-masses',nargs='+',type=float)
     args=parser.parse_args();config=importlib.import_module(args.config)
     if args.output is not None:config.output_path=str(args.output.resolve())
     if args.luminosity_pb is not None:config.luminosity=args.luminosity_pb
     if args.signal_inventory is not None:config.signal_input_inventory=str(args.signal_inventory.resolve())
+    if args.background_snapshot is not None:config.background_snapshot=str(args.background_snapshot.resolve())
+    if args.response_anchors is not None:config.response_anchors=tuple(args.response_anchors)
+    if args.epsilon_max is not None:
+        if not math.isfinite(args.epsilon_max) or args.epsilon_max<=0:parser.error('--epsilon-max must be finite and positive')
+        config.epsilon_max=args.epsilon_max
     if args.channel is not None:config.channel_names=(args.channel,);config.primary_channel=args.channel
     if args.native_masses is not None:config.native_validation_masses=args.native_masses
     {'snapshot':snapshot,'scan':scan,'native_canary':lambda c:native(c,True),'native':native,'projections':projection_inventory,'mc_statistics':mc_statistics_study,'sm_statistics':sm_statistics_study}[args.stage](config)
