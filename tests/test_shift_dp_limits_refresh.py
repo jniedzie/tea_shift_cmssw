@@ -9,7 +9,7 @@ import numpy as np
 
 ANALYSIS=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ANALYSIS/'utils'),str(ANALYSIS/'bin')]
-from shift_dp_limits_refresh import mass_fingerprint,qualify_rate,qualify_row,select_signals
+from shift_dp_limits_refresh import mass_fingerprint,qualify_rate,qualify_row,select_signals,same_scan_support
 from shift_limits_current_plots import comparison_figure_directory
 
 
@@ -81,6 +81,12 @@ class RefreshInputsTest(unittest.TestCase):
         expected=Path('/tmp/frozen-figure').resolve()
         self.assertEqual(comparison_figure_directory(SimpleNamespace(
             comparison_figure_directory=str(expected))),expected)
+
+    def test_legacy_high_epsilon_roots_cannot_be_reused_under_the_new_cap(self):
+        anchors=[dict(epsilon=1.e-6,prompt=False),dict(epsilon=.001,prompt=True)]
+        self.assertTrue(same_scan_support(dict(epsilon_support=[1.e-6,.001]),anchors,.001))
+        self.assertFalse(same_scan_support(dict(epsilon_support=[1.e-6,1.]),anchors,.001))
+        self.assertFalse(same_scan_support(dict(epsilon_support=[2.e-6,.001]),anchors,.001))
 
 
 if __name__=='__main__':unittest.main()

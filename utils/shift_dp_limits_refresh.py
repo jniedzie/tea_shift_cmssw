@@ -199,6 +199,13 @@ def mass_fingerprint(model, mass):
     return hashlib.sha256(json.dumps(rows, sort_keys=True, allow_nan=False).encode()).hexdigest()
 
 
+def same_scan_support(row, anchors, epsilon_max):
+    low=anchors[0]['epsilon']
+    high=epsilon_max if anchors[-1]['prompt'] else anchors[-1]['epsilon']
+    return all(math.isclose(left,right,rel_tol=1.e-12,abs_tol=0.)
+               for left,right in zip(row['epsilon_support'],[low,high]))
+
+
 def reuse_scan(reference, model, config):
     from shift_limits_current import Model
     from shift_dp_progress_plots import background_closure
@@ -219,6 +226,11 @@ def reuse_scan(reference, model, config):
                 and row['channel'] == config.primary_channel and row['confidence_level'] == .9]
         valid = True
         for row in rows:
+            if not same_scan_support(row,model.signals[mass],config.epsilon_max):
+                valid=False
+                checks.append(dict(mass_gev=mass,mode=row['mode'],paired_profile_checks=False,
+                                   reason='Generated lifetime or epsilon scan support changed'))
+                break
             for index in sorted({0, len(row['epsilon_grid']) // 2, len(row['epsilon_grid']) - 1}):
                 epsilon = row['epsilon_grid'][index]
                 actual = model.q(mass, epsilon, config.primary_channel, row['mode'])
