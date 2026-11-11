@@ -8,7 +8,9 @@ Legacy DY and qualified new-model support are deliberately shown separately.
 import argparse
 import hashlib
 import json
+import math
 from pathlib import Path
+import re
 import sys
 
 import numpy as np
@@ -236,6 +238,70 @@ def draw_grid(census_path, output):
                 missing_is_zero=False, counts_normalized_to_luminosity=False,
                 outputs=[dict(path=str(path), sha256=digest(path))
                          for path in [destination, benchmark]])
+
+
+def draw_snapshot_statistics(before, current, output, cutoff):
+    """Show stored weighted passing statistics, with model changes explicit."""
+    snapshots=[read_json(before),read_json(current)]
+    rows=[snapshot['rows'] for snapshot in snapshots]
+    masses=sorted({row['mass_gev'] for group in rows for row in group})
+    def flight_label(row):
+        # Keep nominal sample labels together despite small boost differences.
+        name=row.get('name',row.get('point',''))
+        match=re.search(r'_lab_([0-9p]+)m$',name)
+        return float(match[1].replace('p','.')) if match else row.get('mean_lab_flight_m')
+    flights=[None]+sorted({flight_label(row) for group in rows for row in group
+                          if flight_label(row) is not None})
+    plt=plotting()
+    from matplotlib.colors import LogNorm
+    from matplotlib.patches import Patch,Rectangle
+    cells=[];maximum=10.
+    for group in rows:
+        lookup={}
+        for row in group:
+            key=(row['mass_gev'],flight_label(row))
+            if key in lookup:raise ValueError('Repeated physical point in statistics map')
+            if row['event_histogram_readback']!='passed':raise ValueError('Missing event-histogram readback')
+            value=row['event_neff']
+            maximum=max(maximum,value);lookup[key]=(value,row)
+        cells.append(lookup)
+    norm=LogNorm(1,10**math.ceil(math.log10(maximum)))
+    cmap=plt.get_cmap('viridis')
+    figure,axes=plt.subplots(1,2,figsize=(15,6.1),sharey=True)
+    for epoch,(axis,lookup,group) in enumerate(zip(axes,cells,rows)):
+        for i,mass in enumerate(masses):
+            for j,flight in enumerate(flights):
+                cell=lookup.get((mass,flight));value=cell[0] if cell else None
+                color='white' if value is None else '#dddddd' if value==0 else cmap(norm(value))
+                axis.add_patch(Rectangle((i-.5,j-.5),1,1,facecolor=color,edgecolor='#cccccc',linewidth=.5))
+                if epoch==0 and cell and 'drell-yan' in cell[1]['mechanism']:
+                    axis.add_patch(Rectangle((i-.5,j-.5),1,1,facecolor='none',edgecolor='#999999',
+                                             hatch='///',linewidth=.1,alpha=.6))
+                label='\u2014' if value is None else '0' if value==0 else f'{value:.1f}' if value<10 else f'{value:.0f}'
+                axis.text(i,j,label,ha='center',va='center',fontsize=7.3,
+                          color='white' if value is not None and 0<value<100 else '#111111')
+        axis.set(xlim=(-.5,len(masses)-.5),ylim=(len(flights)-.5,-.5),
+                 xticks=range(len(masses)),yticks=range(len(flights)),xlabel=r'$m_{A\prime}$ [GeV]',
+                 title=('29 October: available inputs' if epoch==0 else 'Now: qualified benchmark')+f' ({len(group)} anchors)')
+        axis.set_xticklabels([f'{mass:g}' for mass in masses],rotation=60,ha='right',fontsize=8)
+        axis.set_yticklabels(['prompt' if flight is None else f'{flight:g} m' for flight in flights]);axis.grid(False)
+    axes[0].set_ylabel('Nominal mean lab-flight label')
+    figure.suptitle('DP simulation statistics: effective weighted Both-Both passing events',fontsize=14)
+    figure.subplots_adjust(left=.06,right=.92,bottom=.30,top=.85,wspace=.07)
+    bar=figure.add_axes([.935,.30,.012,.55]);figure.colorbar(plt.cm.ScalarMappable(norm=norm,cmap=cmap),cax=bar,label='Effective weighted passing events')
+    figure.legend(handles=[Patch(facecolor='white',edgecolor='#aaa',label='Dash: no input in this snapshot'),
+        Patch(facecolor='#ddd',edgecolor='#aaa',label='0: no passing MC event observed'),
+        Patch(facecolor='white',edgecolor='#999',hatch='///',label='Previous DY prescription')],
+        loc='lower center',bbox_to_anchor=(.5,.16),ncol=3,frameon=False,fontsize=8.5)
+    figure.text(.035,.025,
+        'Current catalog cutoff: '+cutoff+'. Same axes and colour scale; weights and original GEN exposure are preserved.\n'
+        'N_eff = (sum w)^2 / sum w^2 from positive event-multiplicity bins, including overflow; each event is counted once.\n'
+        'These are MC statistics, not raw event counts or events normalized to lumi; source-collision correlations can reduce independent precision.\n'
+        'Previous DY samples remain available. Missing new-model replacements are not deleted samples; models/populations are not interchangeable.\n'
+        'Lab-flight rows use the nominal sample labels; exact epsilon, proper lifetime and reference boost remain in the saved inputs.',fontsize=8.1,va='bottom')
+    path=output/'signal_statistics_before_after.pdf';figure.savefig(path);plt.close(figure)
+    return dict(path=str(path),sha256=digest(path),before_anchors=len(rows[0]),current_anchors=len(rows[1]),
+                missing_is_zero=False,source_collision_correlations_generally_omitted=True)
 
 
 def main():

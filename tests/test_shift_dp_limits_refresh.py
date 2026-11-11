@@ -4,12 +4,14 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
 ANALYSIS=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ANALYSIS/'utils'),str(ANALYSIS/'bin')]
-from shift_dp_limits_refresh import mass_fingerprint,qualify_rate,qualify_row,select_signals,same_scan_support
+from shift_dp_limits_refresh import (mass_fingerprint,qualify_rate,qualify_row,select_signals,
+                                    same_scan_support,passing_event_statistics)
 from shift_limits_current_plots import comparison_figure_directory
 
 
@@ -87,6 +89,19 @@ class RefreshInputsTest(unittest.TestCase):
         self.assertTrue(same_scan_support(dict(epsilon_support=[1.e-6,.001]),anchors,.001))
         self.assertFalse(same_scan_support(dict(epsilon_support=[1.e-6,1.]),anchors,.001))
         self.assertFalse(same_scan_support(dict(epsilon_support=[2.e-6,.001]),anchors,.001))
+
+    def test_event_statistics_exclude_zero_and_count_multiplicity_once_with_overflow(self):
+        # Positive bins hold weighted event entries, not multiplicity times weight.
+        histogram=SimpleNamespace(GetNbinsX=lambda:3,
+            GetXaxis=lambda:SimpleNamespace(FindBin=lambda value:1),
+            GetBinContent=lambda index:[100.,1000.,4.,2.,1.][index],
+            GetBinError=lambda index:[10.,100.,4.,2.,1.][index])
+        source=SimpleNamespace(IsZombie=lambda:False,Get=lambda name:histogram,Close=lambda:None)
+        with patch.dict(sys.modules,ROOT=SimpleNamespace(TFile=SimpleNamespace(Open=lambda path:source))):
+            result=passing_event_statistics('/tmp/test.root')
+        self.assertEqual(result['event_passing_sumw'],7.)
+        self.assertEqual(result['event_passing_sumw2'],21.)
+        self.assertAlmostEqual(result['event_neff'],49./21.)
 
 
 if __name__=='__main__':unittest.main()

@@ -187,6 +187,31 @@ def settings(output, background, inventory, figure_directory):
         plot_omitted_masses_gev=(), comparison_figure_directory=str(figure_directory))
 
 
+def passing_event_statistics(path):
+    """Count events with a positive candidate multiplicity, including overflow."""
+    import ROOT
+    name='event/Event_nShiftDimuonVertexBoth-Both'
+    source=ROOT.TFile.Open(str(path))
+    if not source or source.IsZombie():raise ValueError('Cannot read staged event histogram')
+    try:
+        histogram=source.Get(name)
+        if not histogram:raise ValueError('Missing event-multiplicity histogram: '+name)
+        if histogram.GetXaxis().FindBin(0)!=1:
+            raise ValueError('Expected zero candidates in the first multiplicity bin')
+        bins=range(2,histogram.GetNbinsX()+2)
+        values=[histogram.GetBinContent(index) for index in bins]
+        variances=[histogram.GetBinError(index)**2 for index in bins]
+        if any(not math.isfinite(value) or value<0 for value in values+variances):
+            raise ValueError('Invalid weighted event-multiplicity moments')
+        sumw=math.fsum(values);sumw2=math.fsum(variances)
+        if sumw>0 and sumw2<=0:raise ValueError('Positive event yield lacks a variance')
+        return dict(event_passing_sumw=sumw,event_passing_sumw2=sumw2,
+            event_neff=sumw**2/sumw2 if sumw2 else 0.,event_histogram=name,
+            event_histogram_readback='passed',raw_passing_events=None,
+            event_neff_source_collision_correlations_included=False)
+    finally:source.Close()
+
+
 def mass_fingerprint(model, mass):
     rows = []
     for row in model.signals.get(mass, []):
@@ -279,10 +304,10 @@ def finite_mc_diagnostics(config, model):
     return report
 
 
-def render(config, model, legacy, before, output, cutoff):
+def render(config, model, legacy, before, output, cutoff, before_event_statistics):
     from shift_limits_current import Model
     from shift_limits_current_plots import draw_original_comparisons, draw_model_update, draw_inputs
-    from shift_dp_progress_plots import draw_limits
+    from shift_dp_progress_plots import draw_limits,draw_snapshot_statistics
     reference = output / 'legacy_reference'
     reference.mkdir()
     for name in ('snapshot.json', 'scan.json'):
@@ -312,7 +337,10 @@ def render(config, model, legacy, before, output, cutoff):
         current.background_modes = modes
         draw_model_update(current, model, reference)
     draw_inputs(config, model)
-    return draw_limits(before, legacy, output, output)
+    progress=draw_limits(before, legacy, output, output)
+    progress['statistics_map']=draw_snapshot_statistics(before_event_statistics,
+        output/'event_statistics.json',output,cutoff)
+    return progress
 
 
 def check_pdfs(output):
@@ -323,7 +351,7 @@ def check_pdfs(output):
             if len(document)!=1 or document[0].rect.width<300 or not document[0].get_drawings():
                 raise ValueError('Final figure is missing its expected single plotted page: '+path.name)
             records.append(dict(path=str(path),sha256=digest(path),pages=len(document)))
-    if len(records)!=6:raise ValueError('Expected comparison variants, before/after and input figures')
+    if len(records)!=7:raise ValueError('Expected comparison variants, before/after, inputs and statistics map')
     return records
 
 
@@ -355,6 +383,7 @@ def refresh(args):
         scratch = Path(temporary)
         stager = Stager(scratch, args.maximum_input_bytes)
         inventory = []
+        event_statistics=[]
         for row in selected:
             qualifier = row['qualification']
             proof = stager.stage(qualifier['path'], qualifier['sha256'])
@@ -363,6 +392,11 @@ def refresh(args):
                                      size=row['histogram_bytes'], url=row.get('histogram_url'))
             rate = stager.stage(row['rate_path'], row['rate_sha256'], url=row.get('rate_url'))
             qualify_rate(row, read(rate))
+            event_statistics.append(dict(name=row['name'],mass_gev=row['mass_gev'],
+                mean_lab_flight_m=row.get('mean_lab_flight_m'),
+                mechanism=read(rate).get('mechanism','senscalc-meson-fragmentation-bremsstrahlung-plus-DY'),
+                histogram_path=row['histogram_path'],histogram_sha256=row['histogram_sha256'],
+                **passing_event_statistics(histogram)))
             inventory.append(dict(name=row['name'], histogram_path=row['histogram_path'],
                 local_histogram_path=str(histogram), sha256=row['histogram_sha256'],
                 rate_path=row['rate_path'], local_rate_path=str(rate), rate_sha256=row['rate_sha256'],
@@ -371,6 +405,8 @@ def refresh(args):
         write(local_inventory, dict(signals=inventory))
         write(output / 'signal_input_inventory.json', dict(signals=[
             {key: value for key, value in row.items() if not key.startswith('local_')} for row in inventory]))
+        write(output/'event_statistics.json',dict(schema='shift-dp-passing-event-statistics-v1',
+            catalog_cutoff_utc=catalog['updated_utc'],rows=event_statistics))
         config = settings(output, reference / 'snapshot.json', local_inventory, args.figure_directory.resolve())
         snapshot(config)
         model = Model(config)
@@ -386,7 +422,8 @@ def refresh(args):
         reuse = reuse_scan(reuse_reference, model, config)
         scan(config)
         diagnostics=finite_mc_diagnostics(config,model)
-        plots = render(config, model, args.legacy.resolve(), args.before.resolve(), output, catalog['updated_utc'])
+        plots = render(config, model, args.legacy.resolve(), args.before.resolve(), output,
+            catalog['updated_utc'],args.before_event_statistics.resolve())
         pdfs=check_pdfs(output)
         report.update(complete=True, completed_utc=datetime.now(timezone.utc).isoformat(),
                       elapsed_seconds=time.monotonic()-started, staged_bytes=stager.bytes,
@@ -421,6 +458,7 @@ def main():
     parser.add_argument('--reuse-scan',type=Path)
     parser.add_argument('--legacy', type=Path, required=True)
     parser.add_argument('--before', type=Path, required=True)
+    parser.add_argument('--before-event-statistics',type=Path,required=True)
     parser.add_argument('--figure-directory', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--scratch-base', type=Path, default=Path('/tmp'))
