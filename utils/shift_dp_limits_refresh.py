@@ -289,7 +289,7 @@ def render(config, model, legacy, before, output, cutoff):
         shutil.copy2(legacy / name, reference / name)
     notes = [
         '0.3 fb^-1, Both-Both; no BDT/additional cuts; trigger efficiency and scale factors are 1.',
-        'Grey: previous full-grid prescription. New model: actual qualified SensCalc plus MSHT20 NNLO response support.',
+        'Grey: previous MC; epsilon > 0.1 is extrapolated. New model: qualified SensCalc plus MSHT20 NNLO anchors.',
         'Catalog cutoff: ' + cutoff + '. Missing lifetimes and support endpoints are not physical exclusion edges.',
         'Independent 30% signal/background normalization uncertainties; finite-MC uncertainty omitted from these matched curves.',
         'Provisional 2% mass resolution. Literal SM histogram bins; no invented background tail or interpolation.',
