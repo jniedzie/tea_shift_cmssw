@@ -115,7 +115,7 @@ def draw_limits(before, legacy, after, output):
     figure.text(.035, .02,
                 'Matched assumptions: Both-Both, same 19 SM templates, no BDT/additional cuts; trigger/SFs = 1.\n'
                 'Provisional 2% mass resolution; independent 30% signal/background normalization uncertainties; finite-MC uncertainty omitted.\n'
-                'New DY: prompt tests at 1.5 and 70 GeV, epsilon = 0.001 only. Missing new DY lifetimes are not supplied by the legacy curves.\n'
+                'New-model lifetime support comes from the qualified published anchors; missing responses are not supplied by the previous DY model.\n'
                 'Mass connections are interpolation; support endpoints are not physical boundaries. Grey band: epsilon > 0.1 extrapolation.',
                 fontsize=8.1, va='bottom')
     figure.tight_layout(rect=(0, .18, 1, .94))
