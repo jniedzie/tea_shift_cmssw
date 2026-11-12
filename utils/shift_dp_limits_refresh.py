@@ -354,7 +354,8 @@ def finite_mc_diagnostics(config, model):
 def render(config, model, legacy, before, output, cutoff, before_event_statistics):
     from shift_limits_current import Model
     from shift_limits_current_plots import draw_original_comparisons, draw_model_update, draw_inputs
-    from shift_dp_progress_plots import draw_limits,draw_snapshot_statistics,with_retained_statistics
+    from shift_dp_progress_plots import (draw_limits,draw_snapshot_statistics,
+                                         draw_signal_strength_map,with_retained_statistics)
     reference = output / 'legacy_reference'
     reference.mkdir()
     for name in ('snapshot.json', 'scan.json'):
@@ -386,6 +387,8 @@ def render(config, model, legacy, before, output, cutoff, before_event_statistic
         draw_model_update(current, model, reference)
     draw_inputs(config, model)
     progress=draw_limits(before, legacy, output, output)
+    progress['zoomed_limits']=draw_limits(before,legacy,output,output,zoom=True)
+    progress['signal_strength']=draw_signal_strength_map(output,output,reference_directory=legacy)
     current_statistics=output/'event_statistics.json'
     retained_statistics=legacy/'event_statistics.json'
     if retained_statistics.exists():
