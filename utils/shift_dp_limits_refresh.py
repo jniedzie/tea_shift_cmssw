@@ -182,7 +182,7 @@ def rate_epsilon_domain(rate):
     name = prescription.get('name')
     hashes = {
         'msht20-nnlo': '18fac0c030160c00d8fd50a3ce145a5e435546a5b3426d6caa4942af1c2384e5',
-        'msht20-nnlo-v2': 'b27dd724696f8f4d72b04d94fe9c87caf61620a646ade8c7ef27ff122036f691'}
+        'msht20-nnlo-v2': 'c238aaeb64640dab129cf26b101f293ddcd34357d04d852fe50dffbd3587af5c'}
     if name not in hashes or prescription.get('authority', {}).get('sha256') != hashes[name]:
         raise ValueError('Old NNPDF DY is not a qualified MSHT20 response')
     if name == 'msht20-nnlo':
@@ -264,6 +264,8 @@ def mass_fingerprint(model, mass):
     for row in model.signals.get(mass, []):
         item = {key: row[key] for key in ('epsilon', 'proper_ctau_mm', 'cross_section_pb',
                                           'full_gen_sumw', 'prompt', 'mechanism')}
+        for key in ('name','sha256','rate_authority_sha256'):
+            item[key]=row.get(key)
         for suffix in ('', '_sumw2'):
             array = model.arrays[row['array_key'] + suffix]
             item['array' + suffix] = hashlib.sha256(array.tobytes()).hexdigest()

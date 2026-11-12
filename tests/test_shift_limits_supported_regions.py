@@ -4,9 +4,11 @@ from pathlib import Path
 import sys
 import unittest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'bin'))
+ANALYSIS=Path(__file__).resolve().parents[1]
+sys.path[:0]=[str(ANALYSIS/'bin'),str(ANALYSIS/'utils')]
 from shift_limits_current_plots import draw_regions, supported_contour_rows
 from shift_limits_profile import expected_limit, profile_q
+from shift_dp_progress_plots import signal_strength_contours
 
 
 class RecordingAxis:
@@ -77,6 +79,18 @@ class SupportedRegionsTest(unittest.TestCase):
         self.assertAlmostEqual(r, .5)
         self.assertGreater(profile_q(1., [predicted], [0.]), threshold)
         self.assertAlmostEqual(profile_q(r, [predicted], [0.]), threshold, places=6)
+
+    def test_signal_strength_map_omits_prompt_roots_beyond_generated_support(self):
+        row=boundary(1.5)
+        row.update(confidence_level=.9,channel='Both-Both',roots=[.016],
+                   excluded_intervals=[[.016,.03]],epsilon_support=[1.e-6,.03],
+                   epsilon_grid=[1.e-6,.001,.016,.03],q_grid=[0.,0.,2.7055,5.])
+        signals=[dict(mass_gev=1.5,epsilon=e) for e in [1.e-6,.001]]
+        self.assertEqual(signal_strength_contours(dict(signals=signals),dict(records=[row])),[])
+        signals.append(dict(mass_gev=1.5,epsilon=.03))
+        self.assertEqual(len(signal_strength_contours(dict(signals=signals),dict(records=[row]))),1)
+        signals[-1]['counts']={'Both-Both':dict(sumw=0.)}
+        self.assertEqual(signal_strength_contours(dict(signals=signals),dict(records=[row])),[])
 
 
 if __name__ == '__main__':

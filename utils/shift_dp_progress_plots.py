@@ -325,6 +325,11 @@ def draw_snapshot_statistics(before, current, output, cutoff):
                 missing_is_zero=False,source_collision_correlations_generally_omitted=True)
 
 
+def signal_strength_contours(snapshot, scan):
+    """Use the same generated positive-response brackets as the limit curves."""
+    return supported_contour_rows(selected_rows(scan),snapshot['signals'])
+
+
 def draw_signal_strength_map(directory, output, confidence_level=.9, reference_directory=None):
     """Evaluate r at generated anchors; never fill unsupported mass/epsilon gaps."""
     import csv
@@ -333,6 +338,7 @@ def draw_signal_strength_map(directory, output, confidence_level=.9, reference_d
     from shift_limits_current import Model
     from shift_limits_profile import expected_limit, profile_q
     snapshot, scan = checked_snapshot(directory)
+    supported_rows=signal_strength_contours(snapshot,scan)
     config = SimpleNamespace(output_path=str(directory), luminosity=snapshot['luminosity_pb'],
         categories=snapshot['categories'], primary_channel='Both-Both',
         response_anchors=tuple(r['name'].split('_', 1)[1] for r in snapshot['signals']),
@@ -391,7 +397,7 @@ def draw_signal_strength_map(directory, output, confidence_level=.9, reference_d
             status = ('no positive-response new-model anchor' if not anchors else
                       'bracketed' if brackets else 'need smaller epsilon' if all(r['r']<1 for r in anchors)
                       else 'no excluded anchor; extend coverage or improve sensitivity')
-            saved=next((r for r in selected_rows(scan) if r['mass_gev']==mass and r['mode']==mode),None)
+            saved=next((r for r in supported_rows if r['mass_gev']==mass and r['mode']==mode),None)
             gaps.append(dict(mass_gev=mass, mode=mode, anchors=len(anchors),
                              r1_brackets=brackets, interpolated_roots=saved['roots'] if saved else [],
                              bracket_epsilon_ratios=[b/a for a,b in brackets], status=status))
@@ -426,7 +432,7 @@ def draw_signal_strength_map(directory, output, confidence_level=.9, reference_d
                           xytext=(5,3),textcoords='offset points',fontsize=6.3,zorder=4)
         for row in model.unused_signals:
             axis.scatter([positions[row['mass_gev']]],[row['epsilon']],marker='x',color='#777777',s=45)
-        for row in selected_rows(scan):
+        for row in supported_rows:
             if row['mode']!=mode:continue
             for epsilon in row['roots']:
                 axis.plot(positions[row['mass_gev']],epsilon,marker='_',color='black',ms=17,mew=2.4,zorder=5)

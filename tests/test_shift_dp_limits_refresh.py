@@ -83,7 +83,7 @@ class RefreshInputsTest(unittest.TestCase):
 
     def dy_rate(self, mass=40., epsilon=.03, version='msht20-nnlo-v2'):
         hashes={'msht20-nnlo':'18fac0c030160c00d8fd50a3ce145a5e435546a5b3426d6caa4942af1c2384e5',
-                'msht20-nnlo-v2':'b27dd724696f8f4d72b04d94fe9c87caf61620a646ade8c7ef27ff122036f691'}
+                'msht20-nnlo-v2':'c238aaeb64640dab129cf26b101f293ddcd34357d04d852fe50dffbd3587af5c'}
         row=dict(name='physical_anchor',mass_gev=mass,epsilon=epsilon,proper_ctau_mm=.01)
         rate=dict(row,mechanism='pure-on-shell-drell-yan',dy_prescription=dict(
             name=version,epsilon_upper_bound=.1 if version.endswith('v2') else .001,
@@ -100,6 +100,9 @@ class RefreshInputsTest(unittest.TestCase):
     def test_v2_native_domain_does_not_widen_v1_or_unqualified_tables(self):
         row,rate=self.dy_rate(epsilon=.1)
         self.assertEqual(qualify_rate(row,rate)['maximum_epsilon'],.1)
+        control=copy.deepcopy(rate)
+        control['dy_prescription']['authority']['sha256']='b27dd724696f8f4d72b04d94fe9c87caf61620a646ade8c7ef27ff122036f691'
+        with self.assertRaisesRegex(ValueError,'qualified MSHT20'):qualify_rate(row,control)
         oldrow,old=self.dy_rate(epsilon=.002,version='msht20-nnlo')
         with self.assertRaisesRegex(ValueError,'epsilon domain'):qualify_rate(oldrow,old)
         for change in ['hash','mass','epsilon']:
@@ -160,6 +163,10 @@ class RefreshInputsTest(unittest.TestCase):
             self.assertNotEqual(original,mass_fingerprint(changed,.7))
         changed=copy.deepcopy(model);changed.arrays['point_sumw2'][0,1]=5.
         self.assertNotEqual(original,mass_fingerprint(changed,.7))
+        for field,value in [('name','new_independent_anchor'),('sha256','f'*64),
+                            ('rate_authority_sha256','e'*64)]:
+            changed=copy.deepcopy(model);changed.signals[.7][0][field]=value
+            self.assertNotEqual(original,mass_fingerprint(changed,.7))
 
     def test_frozen_figure_location_avoids_live_configuration(self):
         expected=Path('/tmp/frozen-figure').resolve()
