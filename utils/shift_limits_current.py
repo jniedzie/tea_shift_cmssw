@@ -161,6 +161,8 @@ def snapshot(config):
                         normalization_source='histogram_full_GEN' if preserved else 'published_full_GEN_sidecar',
                         mean_lab_flight_m=item.get('mean_lab_flight_m'),input_role=item.get('input_role','current'),
                         production_rate_validated=authority.get('production_rate_validated'))
+                    if 'epsilon_domain' in item:
+                        source['epsilon_domain']=copy.deepcopy(item['epsilon_domain'])
                 else:
                     sigma=item.cross_section;denominator=item.initial_weight_sum if item.initial_weight_sum>0 else initial
                 if not sigma>0 or not denominator>0:raise ValueError('Invalid normalization: '+name)
@@ -185,6 +187,7 @@ def snapshot(config):
         histogram_cache=str(target),histogram_cache_sha256=digest(target),flow_policy='Underflow and overflow folded into first and last mass bin',
         background_policy='Only published QCD/DY/Jpsi; no tail interpolation, smoothing, floor or truth removal',
         lifetime_policy='Convex interpolation of rate-weighted reconstructed shapes in log epsilon between generated anchors; prompt-only continuation towards shorter lifetimes',
+        response_anchor_names=getattr(config,'response_anchor_names',None),
         **provenance,**records))
     print('Frozen',len(records['backgrounds']),'backgrounds and',len(points),'signals.',flush=True)
 
@@ -210,8 +213,12 @@ class Model:
         self.background_components=np.asarray(self.background_components).reshape((-1,)+self.background.shape)
         self.background_variances=np.asarray(self.background_variances).reshape((-1,)+self.background.shape)
         self.unused_signals=[]
+        anchor_names=self.snapshot.get('response_anchor_names')
+        suffixes=getattr(config,'response_anchors',None)
         for row in self.snapshot['signals']:
-            if not any(row['name'].endswith('_'+anchor) for anchor in config.response_anchors):
+            if ((anchor_names is not None and row['name'] not in anchor_names)
+                    or (anchor_names is None and suffixes is not None
+                        and not any(row['name'].endswith('_'+anchor) for anchor in suffixes))):
                 self.unused_signals.append(dict(row,unused_reason='Not a configured lifetime anchor'))
                 continue
             channel=getattr(config,'primary_channel','Both-Both')
@@ -228,6 +235,8 @@ class Model:
 
     def signal_moments(self,mass,epsilon):
         rows=self.signals[mass]
+        if epsilon > rows[-1].get('epsilon_domain',{}).get('maximum_epsilon',math.inf):
+            return None,None
         if epsilon<rows[0]['epsilon'] and math.isclose(epsilon,rows[0]['epsilon'],rel_tol=1e-12):epsilon=rows[0]['epsilon']
         if epsilon>rows[-1]['epsilon'] and math.isclose(epsilon,rows[-1]['epsilon'],rel_tol=1e-12):epsilon=rows[-1]['epsilon']
         x=math.log(epsilon)
@@ -312,6 +321,16 @@ class Model:
         return signal[known],variance[known],backgrounds[:,known],background_variances[:,known],report
 
 
+def epsilon_support(anchors, maximum):
+    """Prompt continuation stays inside its own qualified model domain."""
+    high=min(maximum,anchors[-1].get('epsilon_domain',{}).get('maximum_epsilon',maximum))
+    if not anchors[-1]['prompt']:high=min(high,anchors[-1]['epsilon'])
+    low=anchors[0]['epsilon']
+    if not math.isfinite(low+high) or not 0 < low <= high:
+        raise ValueError('Generated response anchors exceed their qualified epsilon scan domain')
+    return low,high
+
+
 def scan(config):
     model=Model(config);records=[]
     metadata={'snapshot_sha256':digest(model.output/'snapshot.json'),
@@ -331,8 +350,8 @@ def scan(config):
         records=saved['records']
     done={(r['mass_gev'],r['mode'],r['channel'],r['confidence_level']) for r in records}
     for mass,anchors in sorted(model.signals.items()):
-        low=anchors[0]['epsilon'];high=config.epsilon_max if anchors[-1]['prompt'] else anchors[-1]['epsilon']
-        grid=sorted(set(np.geomspace(low,high,config.scan_grid_points).tolist()+[r['epsilon'] for r in anchors]))
+        low,high=epsilon_support(anchors,config.epsilon_max)
+        grid=sorted(set(np.geomspace(low,high,config.scan_grid_points).tolist()+[r['epsilon'] for r in anchors if low<=r['epsilon']<=high]))
         for mode in config.background_modes:
             for channel in config.channel_names:
                 if all((mass,mode,channel,level) in done for level in config.confidence_levels):continue
@@ -541,7 +560,8 @@ def mc_statistics_study(config,masses=(.7,2.,5.)):
     threshold=float(norm.ppf(.975)**2);records=[];original=original['records']
     for mass in masses:
         anchors=nominal.signals[mass]
-        low=anchors[0]['epsilon'];high=min(config.small_mixing_max,config.epsilon_max) if anchors[-1]['prompt'] else anchors[-1]['epsilon']
+        low,high=epsilon_support(anchors,config.epsilon_max)
+        if anchors[-1]['prompt']:high=min(config.small_mixing_max,high)
         grid=sorted(set(np.geomspace(low,high,config.scan_grid_points).tolist()+[r['epsilon'] for r in anchors if low<=r['epsilon']<=high]))
         for mode in config.background_modes:
             nominal_values=[nominal.q(mass,e,config.primary_channel,mode) for e in grid]

@@ -156,7 +156,7 @@ def draw_comparisons(config,model):
             checked=sum(source=='native_tea_AsymptoticLimits' for row in rows for source in row['boundary_sources']);total=sum(len(row['roots']) for row in rows)
             note+=f'Published QCD + DY + J/psi only; empty MC bins stay empty. Asimov profile; {checked}/{total} boundaries checked with native TEA/Combine.\n'
             note+=('External curves: briefing-book Fig. 8.15; mostly 90% CL, FCC curves 95% CL. Production/response remain provisional.' if external else 'Open upper endpoints mark missing lifetime coverage, not physical exclusion edges. Sparse MC and missing background tails remain provisional.')
-            note+='\nDiamonds test one lifetime only; filled/open means excluded/not excluded at that point. No lifetime interval is inferred.'
+            note+='\nOnly boundaries bracketed by generated positive-response anchors are drawn.'
             name=f'limits_current_cl{round(100*level)}'+('_comparison' if external else '')+'.pdf';finish(fig,output/name,note,plt)
 
 

@@ -68,7 +68,7 @@ def select_signals(catalog, baseline):
             raise ValueError('Catalog repeats a physical point: ' + name)
         names.add(name)
         if (not 2 * .1056583755 < row['mass_gev'] < 91.1876
-                or not 0 < row['epsilon'] <= .001
+                or not math.isfinite(row['epsilon']) or not 0 < row['epsilon'] <= .1
                 or not row.get('full_benchmark_components')):
             raise ValueError('Point is outside the qualified complete benchmark: ' + name)
         if not row.get('cumulative_compatible_inputs_included'):
@@ -150,6 +150,50 @@ def qualify_row(row, qualification, baseline_sha):
         raise ValueError('New source lacks complete cumulative component qualification: ' + row['name'])
 
 
+def photon_benchmark_domain(rate):
+    """Require the explicit comparison approximation before widening photon rates."""
+    approximation = rate.get('photon_benchmark_approximation')
+    if rate.get('experimental_photon_benchmark') is not True:
+        if approximation is not None:
+            raise ValueError('Photon benchmark metadata requires its explicit experimental flag')
+        return None
+    expected = dict(schema='shift-experimental-photon-benchmark-epsilon-v1',
+        maximum_epsilon=.03, source_scaling='epsilon squared',
+        physical_width='Unchanged pinned DarkCast photon-like spectral widths',
+        neutral_current_width_included=False)
+    if (not isinstance(approximation, dict)
+            or any(approximation.get(k) != v for k, v in expected.items())
+            or approximation.get('neutral_current_width_included') is not False):
+        raise ValueError('Unqualified experimental photon-benchmark approximation')
+    return dict(maximum_epsilon=.03, prescription='experimental-photon-benchmark',
+                experimental_photon_benchmark=True, approximation=copy.deepcopy(approximation))
+
+
+def rate_epsilon_domain(rate):
+    """Read each pinned rate's qualified domain; a v2 point never widens v1."""
+    if rate.get('schema') == 'shift-dark-photon-senscalc-dy-component-rates-v1':
+        domains = [rate_epsilon_domain(component['rate']) for component in rate['components']]
+        return dict(maximum_epsilon=min(d['maximum_epsilon'] for d in domains),
+                    prescription='qualified-component-intersection', components=domains)
+    photon = photon_benchmark_domain(rate)
+    if rate.get('mechanism') == 'senscalc-meson-fragmentation-bremsstrahlung':
+        return photon or dict(maximum_epsilon=.01, prescription='SensCalc-photon-benchmark')
+    prescription = rate.get('dy_prescription', {})
+    name = prescription.get('name')
+    hashes = {
+        'msht20-nnlo': '18fac0c030160c00d8fd50a3ce145a5e435546a5b3426d6caa4942af1c2384e5',
+        'msht20-nnlo-v2': 'b27dd724696f8f4d72b04d94fe9c87caf61620a646ade8c7ef27ff122036f691'}
+    if name not in hashes or prescription.get('authority', {}).get('sha256') != hashes[name]:
+        raise ValueError('Old NNPDF DY is not a qualified MSHT20 response')
+    if name == 'msht20-nnlo':
+        return dict(maximum_epsilon=.001, prescription=name)
+    if (prescription.get('epsilon_upper_bound') != .1
+            or rate['mass_gev'] not in (1.5, 1.8, 2, 5, 10, 15, 40, 70)):
+        raise ValueError('Unqualified MSHT20-v2 mass or epsilon domain')
+    return photon or dict(maximum_epsilon=.1 if rate['mass_gev'] >= 12 else .01,
+                          prescription=name, spectral_photon_width=rate['mass_gev'] < 12)
+
+
 def qualify_rate(row, rate):
     from shift_limits_current import signal_physical_point
     physical, mechanism = signal_physical_point(rate)
@@ -164,16 +208,19 @@ def qualify_rate(row, rate):
     elif row['mass_gev'] < 1.5:
         if mechanism != 'senscalc-meson-fragmentation-bremsstrahlung':
             raise ValueError('An old custom meson model cannot enter the pinned benchmark')
+    # Selection admits candidates up to the largest qualified domain. Only this
+    # hash-pinned authority check can grant a particular point's wider domain.
     if row['mass_gev'] >= 1.5:
-        prescription = dy.get('dy_prescription', {})
-        if (prescription.get('name') != 'msht20-nnlo'
-                or prescription.get('authority', {}).get('sha256') !=
-                '18fac0c030160c00d8fd50a3ce145a5e435546a5b3426d6caa4942af1c2384e5'):
-            raise ValueError('Old NNPDF DY is not a qualified MSHT20 response')
+        rate_epsilon_domain(dy)
+    domain = rate_epsilon_domain(rate)
+    if not 0 < row['epsilon'] <= domain['maximum_epsilon']:
+        raise ValueError('Point exceeds its qualified epsilon domain: ' + row['name'])
+    return domain
 
 
 def settings(output, background, inventory, figure_directory):
     # These are the reviewed November 10 defaults consumed by snapshot/Model/scan.
+    rows = read(inventory)['signals']
     return SimpleNamespace(output_path=str(output), background_snapshot=str(background),
         signal_input_inventory=str(inventory), signal_campaign='Qualified PBC/SensCalc/MSHT20 ready increments',
         campaign='20261016_mu_enriched_weekend_v1', base_path='', cross_sections={},
@@ -182,8 +229,8 @@ def settings(output, background, inventory, figure_directory):
         channel_names=('Both-Both',), primary_channel='Both-Both',
         mass_resolution_fraction=.02, mass_minimum_bin_gev=.1,
         include_mc_stat_uncertainties=False, scan_grid_points=65,
-        epsilon_min=1.e-10, epsilon_max=.001,
-        response_anchors=('prompt', 'lab_0p01m', 'lab_0p1m', 'lab_1m', 'lab_5m', 'lab_30m', 'lab_100m', 'lab_1000m'),
+        epsilon_min=1.e-10, epsilon_max=max(r['epsilon_domain']['maximum_epsilon'] for r in rows),
+        response_anchors=None, response_anchor_names=tuple(r['name'] for r in rows),
         plot_omitted_masses_gev=(), comparison_figure_directory=str(figure_directory))
 
 
@@ -225,8 +272,8 @@ def mass_fingerprint(model, mass):
 
 
 def same_scan_support(row, anchors, epsilon_max):
-    low=anchors[0]['epsilon']
-    high=epsilon_max if anchors[-1]['prompt'] else anchors[-1]['epsilon']
+    from shift_limits_current import epsilon_support
+    low, high = epsilon_support(anchors, epsilon_max)
     return all(math.isclose(left,right,rel_tol=1.e-12,abs_tol=0.)
                for left,right in zip(row['epsilon_support'],[low,high]))
 
@@ -307,7 +354,7 @@ def finite_mc_diagnostics(config, model):
 def render(config, model, legacy, before, output, cutoff, before_event_statistics):
     from shift_limits_current import Model
     from shift_limits_current_plots import draw_original_comparisons, draw_model_update, draw_inputs
-    from shift_dp_progress_plots import draw_limits,draw_snapshot_statistics
+    from shift_dp_progress_plots import draw_limits,draw_snapshot_statistics,with_retained_statistics
     reference = output / 'legacy_reference'
     reference.mkdir()
     for name in ('snapshot.json', 'scan.json'):
@@ -339,8 +386,14 @@ def render(config, model, legacy, before, output, cutoff, before_event_statistic
         draw_model_update(current, model, reference)
     draw_inputs(config, model)
     progress=draw_limits(before, legacy, output, output)
+    current_statistics=output/'event_statistics.json'
+    retained_statistics=legacy/'event_statistics.json'
+    if retained_statistics.exists():
+        total=with_retained_statistics(read(current_statistics),read(retained_statistics))
+        current_statistics=output/'current_total_event_statistics.json'
+        write(current_statistics,total)
     progress['statistics_map']=draw_snapshot_statistics(before_event_statistics,
-        output/'event_statistics.json',output,cutoff)
+        current_statistics,output,cutoff)
     return progress
 
 
@@ -392,7 +445,7 @@ def refresh(args):
             histogram = stager.stage(row['histogram_path'], row['histogram_sha256'],
                                      size=row['histogram_bytes'], url=row.get('histogram_url'))
             rate = stager.stage(row['rate_path'], row['rate_sha256'], url=row.get('rate_url'))
-            qualify_rate(row, read(rate))
+            domain = qualify_rate(row, read(rate))
             event_statistics.append(dict(name=row['name'],mass_gev=row['mass_gev'],
                 mean_lab_flight_m=row.get('mean_lab_flight_m'),
                 mechanism=read(rate).get('mechanism','senscalc-meson-fragmentation-bremsstrahlung-plus-DY'),
@@ -401,7 +454,8 @@ def refresh(args):
             inventory.append(dict(name=row['name'], histogram_path=row['histogram_path'],
                 local_histogram_path=str(histogram), sha256=row['histogram_sha256'],
                 rate_path=row['rate_path'], local_rate_path=str(rate), rate_sha256=row['rate_sha256'],
-                mean_lab_flight_m=row.get('mean_lab_flight_m'), input_role='qualified ready cumulative benchmark'))
+                mean_lab_flight_m=row.get('mean_lab_flight_m'), epsilon_domain=domain,
+                input_role='qualified ready cumulative benchmark'))
         local_inventory = scratch / 'local_inventory.json'
         write(local_inventory, dict(signals=inventory))
         write(output / 'signal_input_inventory.json', dict(signals=[
@@ -443,7 +497,8 @@ def refresh(args):
             'or the separately named background/zero-background PDFs. `limits_before_after.pdf` compares to 29 October.\n\n'
             'Same 0.3 fb^-1, Both-Both, literal 19 SM templates and provisional 2% mass resolution; independent 30% normalization nuisances.\n'
             'Nominal curves omit finite-MC uncertainty. Missing lifetime support is not a physical exclusion edge.\n'
-            'No old NNPDF detector response is used for the revised benchmark. Grey curves retain the explicitly named older model.\n\n'
+            'No old NNPDF detector response is used for the revised benchmark. Grey curves retain the explicitly named older model.\n'
+            'Each signal retains its qualified epsilon domain. Photon continuations above 0.01 require the explicit experimental approximation; v1 DY remains capped at 0.001.\n\n'
             '`catalog_snapshot.json`, `signal_input_inventory.json`, `snapshot.json`, `histograms.npz`, `scan.json` and\n'
             '`refresh_status.json` preserve inputs, full original exposure, variances, qualification and exact cached-fit reuse.\n')
     print(json.dumps(dict(complete=True, output=str(output), signals=len(selected),

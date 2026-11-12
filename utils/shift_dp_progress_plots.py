@@ -106,7 +106,7 @@ def draw_limits(before, legacy, after, output, zoom=False):
                   label=r'Pheno SHIFT reference: 30 fb$^{-1}$')
         draw_regions(axis, previous_reference, mode, '#929292', 'Previous prescription, including prompt extrapolation',
                      fill=False, linewidth=2.2, linestyle='--')
-        draw_regions(axis, rows[2], mode, color, r'Updated prescription: $\epsilon\leq10^{-3}$',
+        draw_regions(axis, rows[2], mode, color, 'Updated prescription: qualified generated anchors',
                      fill=False, linewidth=2.6, linestyle='-', point_marker_size=38)
         axis.axhspan(.1, 1, color='#eeeeee', zorder=-10)
         axis.set(xscale='log', yscale='log', xlim=(.2, 100), ylim=((1.e-6, .3) if zoom else (1.e-7, 1)),
@@ -119,7 +119,7 @@ def draw_limits(before, legacy, after, output, zoom=False):
                 'Matched assumptions: Both-Both, same 19 SM templates, no BDT/additional cuts; trigger/SFs = 1.\n'
                 'Provisional 2% mass resolution; independent 30% signal/background normalization uncertainties; finite-MC uncertainty omitted.\n'
                 'Grey: previous signal prescription, with epsilon-squared rate extrapolation of prompt templates beyond generated epsilon.\n'
-                'Coloured: updated prescription only within epsilon <= 0.001; masses without a bracketed boundary are omitted. Endpoints are not physical thresholds.\n'
+                'Coloured: source-specific qualified epsilon domains; masses without a generated-anchor bracket are omitted. Endpoints are not physical thresholds.\n'
                 'Mass interpolation connects retained points. Grey band: epsilon > 0.1 extrapolation. No diamonds or vertical closures.',
                 fontsize=8.1, va='bottom')
     figure.tight_layout(rect=(0, .20, 1, .94))
@@ -242,6 +242,22 @@ def draw_grid(census_path, output):
                 missing_is_zero=False, counts_normalized_to_luminosity=False,
                 outputs=[dict(path=str(path), sha256=digest(path))
                          for path in [destination, benchmark]])
+
+
+def with_retained_statistics(current, retained):
+    """Keep unchanged references; replace, never add, different model populations."""
+    selected={}
+    for group,reference in [(retained['rows'],True),(current['rows'],False)]:
+        seen=set()
+        for original in group:
+            name=original.get('name',original.get('point'))
+            if not name or name in seen:raise ValueError('Repeated or missing statistics point name')
+            if original['event_histogram_readback']!='passed':raise ValueError('Unverified statistics input: '+name)
+            seen.add(name)
+            selected[name]=dict(original,retained_reference=reference)
+    return dict(current,rows=list(selected.values()),title='Now: total available inputs',
+                qualified_anchors=len(current['rows']),
+                retained_reference_anchors=sum(r['retained_reference'] for r in selected.values()))
 
 
 def draw_snapshot_statistics(before, current, output, cutoff):

@@ -10,7 +10,7 @@ import numpy as np
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'bin'))
 from shift_limits import digest
-from shift_limits_current import Model,cached_backgrounds,signal_normalization,signal_physical_point
+from shift_limits_current import Model,cached_backgrounds,signal_normalization,signal_physical_point,epsilon_support
 
 
 class PublishedLimitsTest(unittest.TestCase):
@@ -142,6 +142,40 @@ class PublishedLimitsTest(unittest.TestCase):
             self.assertTrue(single_lifetime(result))
             self.assertEqual(result['roots'],[])
             self.assertEqual(result['epsilon_grid'],[.001])
+
+    def test_qualified_inventory_uses_epsilon_named_anchors_without_lifetime_suffixes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            model=self.make_model(directory,['new_DY'])
+            path=Path(directory)/'snapshot.json';snapshot=json.loads(path.read_text())
+            row=snapshot['signals'][0]
+            row.update(name='m40_epsilon_0p03',mass_gev=40.,epsilon=.03,
+                       epsilon_domain=dict(maximum_epsilon=.1))
+            snapshot['response_anchor_names']=[row['name']]
+            path.write_text(json.dumps(snapshot))
+            qualified=Model(model.config)
+            self.assertEqual(qualified.unused_signals,[])
+            self.assertIsNotNone(qualified.signal(40.,.03))
+            self.assertIsNone(qualified.signal(40.,.04))  # No displaced extrapolation.
+
+    def test_wider_v2_scan_keeps_old_prompt_domain_and_unknown_response(self):
+        from shift_limits_current import scan
+        with tempfile.TemporaryDirectory() as directory:
+            model=self.make_model(directory,['new_DY'])
+            path=Path(directory)/'snapshot.json';snapshot=json.loads(path.read_text())
+            row=snapshot['signals'][0]
+            row.update(name='m70_prompt',mass_gev=70.,epsilon=.001,prompt=True,
+                       epsilon_domain=dict(maximum_epsilon=.001))
+            path.write_text(json.dumps(snapshot));config=model.config
+            config.epsilon_max=.1;config.confidence_levels=(.9,)
+            config.background_modes=('zero_background',);config.channel_names=('Both-Both',)
+            config.scan_grid_points=65
+            self.assertIsNone(Model(config).signal(70.,.002))
+            scan(config)
+            result=json.loads((Path(directory)/'scan.json').read_text())['records'][0]
+            self.assertEqual(result['epsilon_support'],[.001,.001])
+            self.assertEqual(result['epsilon_grid'],[.001])
+            newer=dict(row,epsilon=.03,prompt=False,epsilon_domain=dict(maximum_epsilon=.1))
+            self.assertEqual(epsilon_support([row,newer],.1),(.001,.03))
 
     def test_old_eta_and_new_senscalc_lifetimes_cannot_be_interpolated_together(self):
         with tempfile.TemporaryDirectory() as directory:
