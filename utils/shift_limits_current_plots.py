@@ -51,7 +51,7 @@ def boundaries(model,level,channel,omitted_masses=()):
         mapping=dict(zip(row['roots'],roots))
         row['excluded_intervals']=[[mapping.get(a,a),mapping.get(b,b)] for a,b in row['excluded_intervals']]
         row['roots']=roots;row['boundary_sources']=sources;result.append(row)
-    return result
+    return supported_contour_rows(result,model.snapshot['signals'])
 
 
 def single_lifetime(row):
@@ -59,55 +59,56 @@ def single_lifetime(row):
     return math.isclose(low,high,rel_tol=1.e-12)
 
 
+def supported_contour_rows(rows, signals):
+    """Keep lower boundaries bracketed by generated, positive-response anchors."""
+    from scipy.stats import norm
+    result=[]
+    for row in rows:
+        if single_lifetime(row) or not row['excluded_intervals']:continue
+        usable=[]
+        for signal in signals:
+            if signal['mass_gev']!=row['mass_gev']:continue
+            counts=signal.get('counts')
+            if counts is not None:
+                selected=(sum(c['sumw'] for c in counts.values()) if row['channel']=='combined'
+                          else counts[row['channel']]['sumw'])
+                if selected<=0:continue
+            usable.append(signal['epsilon'])
+        epsilons=sorted(set(usable))
+        anchors=[]
+        for epsilon in epsilons:
+            values=[q for e,q in zip(row['epsilon_grid'],row['q_grid'])
+                    if math.isclose(e,epsilon,rel_tol=1.e-12)]
+            if values:anchors.append((epsilon,values[0]))
+        threshold=norm.ppf((1+row['confidence_level'])/2)**2
+        brackets=[(a,b) for (a,qa),(b,qb) in zip(anchors,anchors[1:])
+                  if (qa-threshold)*(qb-threshold)<0]
+        intervals=[(low,high) for low,high in row['excluded_intervals']
+                   if any(math.isclose(low,root,rel_tol=1.e-7) for root in row['roots'])
+                   and any(a<=low<=b for a,b in brackets)]
+        if intervals:
+            current=copy.deepcopy(row);current['excluded_intervals']=intervals;result.append(current)
+    return result
+
+
 def draw_regions(axis,rows,mode,color,label,fill=True,linewidth=2,linestyle=None,point_marker_size=28):
-    nodes=sorted((r for r in rows if r['mode']==mode),key=lambda r:r['mass_gev']);labelled=False
-    # Isolated tests interrupt mass interpolation: a joining line can otherwise
-    # pass above an excluded point at an intervening unsupported mass.
-    runs=[];run=[]
-    for row in nodes:
-        if single_lifetime(row):
-            if run:runs.append(run);run=[]
-            axis.scatter([row['mass_gev']],[row['epsilon_support'][0]],marker='D',
-                         facecolors=color if row['excluded_intervals'] else 'white',
-                         edgecolors=color,s=point_marker_size,zorder=8)
-            continue
-        if not row['excluded_intervals']:
-            if run:runs.append(run);run=[]
-            continue
-        row=copy.deepcopy(row)
-        # Extra islands have no established correspondence at neighbouring
-        # masses. Draw them at the simulated mass; never fill a nonexcluded gap.
-        for low,high in row['excluded_intervals'][:-1]:
-            axis.plot([row['mass_gev']]*2,[low,high],color=color,lw=linewidth,
-                      ls='-' if mode=='background' else '--',marker='o',ms=3)
-        row['excluded_intervals']=[row['excluded_intervals'][-1]]
-        run.append(row)
-    if run:runs.append(run)
-    for run in runs:
-        masses=[r['mass_gev'] for r in run]
-        for index in range(len(run[0]['excluded_intervals'])):
-            low=[r['excluded_intervals'][index][0] for r in run];high=[r['excluded_intervals'][index][1] for r in run]
-            style=linestyle or ('-' if mode=='background' else '--')
-            if len(run)==1:
-                axis.plot([masses[0]]*2,[low[0],high[0]],color=color,ls=style,lw=linewidth)
-                axis.scatter(masses,low,color=color,s=22,marker='o',label=label if not labelled else None);labelled=True
-                continue
-            axis.plot(masses,low,color=color,ls=style,lw=linewidth,label=label if not labelled else None);labelled=True
-            axis.scatter(masses,low,color=color,s=12,zorder=6)
-            for i,row in enumerate(run):
-                if not any(math.isclose(low[i],root,rel_tol=1e-7) for root in row['roots']):
-                    axis.scatter([masses[i]],[low[i]],facecolors='white',edgecolors=color,s=25,zorder=7)
-            for left,right in zip(range(len(run)-1),range(1,len(run))):
-                if all(any(math.isclose(high[i],root,rel_tol=1e-7) for root in run[i]['roots']) for i in [left,right]):
-                    axis.plot(masses[left:right+1],high[left:right+1],color=color,ls=style,lw=linewidth)
-            for i,row in enumerate(run):
-                if not row['upper_prompt_continuation'] and math.isclose(high[i],row['epsilon_support'][1],rel_tol=1e-7):
-                    axis.scatter([masses[i]],[high[i]],facecolors='white',edgecolors=color,s=25,zorder=7)
-            if fill:axis.fill_between(masses,low,high,color=color,alpha=.13)
-            # Close only at the support edge. The first vertical segment starts
-            # at the top rather than cutting diagonally through later masses.
-            axis.plot([masses[0]]*2,[high[0],low[0]],color=color,lw=.9,ls=style,alpha=.7)
-            axis.plot([masses[-1]]*2,[low[-1],high[-1]],color=color,lw=.9,ls=style,alpha=.7)
+    # Presentation rule: omit unsupported masses, then connect supported lower
+    # boundaries. No diamonds, support-edge closures or vertical island lines.
+    nodes=sorted((r for r in rows if r['mode']==mode and not single_lifetime(r)
+                  and r['excluded_intervals']),key=lambda r:r['mass_gev'])
+    nodes=[r for r in nodes if any(math.isclose(r['excluded_intervals'][-1][0],root,rel_tol=1.e-7)
+                                  for root in r['roots'])]
+    if not nodes:return
+    masses=[r['mass_gev'] for r in nodes]
+    low=[r['excluded_intervals'][-1][0] for r in nodes]
+    high=[r['excluded_intervals'][-1][1] for r in nodes]
+    style=linestyle or ('-' if mode=='background' else '--')
+    axis.plot(masses,low,color=color,ls=style,lw=linewidth,label=label)
+    for left,right in zip(range(len(nodes)-1),range(1,len(nodes))):
+        if all(any(math.isclose(high[i],root,rel_tol=1.e-7) for root in nodes[i]['roots'])
+               for i in (left,right)):
+            axis.plot(masses[left:right+1],high[left:right+1],color=color,ls=style,lw=linewidth)
+    if fill and len(nodes)>1:axis.fill_between(masses,low,high,color=color,alpha=.13)
 
 
 def select_projections(config,output):
@@ -235,18 +236,9 @@ def draw_original_comparisons(config,model):
         rows=boundaries(model,level,config.primary_channel,omitted_masses);counts=[]
         for mode,color,label,dashed in mode_styles:
             if mode not in config.background_modes:continue
-            tested=[r for r in rows if r['mode']==mode and single_lifetime(r)]
-            for row in tested:
-                xy=point(row['mass_gev'],row['epsilon_support'][0]);radius=4 if mode=='background' else 2.5
-                diamond=[xy+(-radius,0),xy+(0,-radius),xy+(radius,0),xy+(0,radius)]
-                shape=page.new_shape();shape.draw_polyline(diamond)
-                shape.finish(color=color,fill=color if row['excluded_intervals'] else (1,1,1),
-                             width=1.3,closePath=True);shape.commit()
+            tested=[]  # Unsupported single-epsilon tests are omitted from contours.
             nodes=sorted((r for r in rows if r['mode']==mode and r['excluded_intervals'] and not single_lifetime(r)),key=lambda r:r['mass_gev'])
             if not nodes:continue
-            for row in nodes:
-                for low,high in row['excluded_intervals'][:-1]:
-                    page.draw_line(point(row['mass_gev'],low),point(row['mass_gev'],high),color=color,width=2.5)
             nodes=[dict(row,excluded_intervals=[row['excluded_intervals'][-1]]) for row in nodes]
             lower=[point(r['mass_gev'],min(a for a,b in r['excluded_intervals'])) for r in nodes]
             upper=[point(r['mass_gev'],max(b for a,b in r['excluded_intervals'])) for r in nodes]
@@ -255,7 +247,7 @@ def draw_original_comparisons(config,model):
             # The plot-top caps are drawing closures, not measured upper limits.
             # Do not join the isolated finite upper edge to those artificial
             # caps: that produced the sharp V in the zero-background outline.
-            shape=page.new_shape();shape.draw_polyline([upper[0]]+lower+[upper[-1]])
+            shape=page.new_shape();shape.draw_polyline(lower)
             shape.finish(color=color,width=2.5,dashes='[6 3] 0' if dashed else None,closePath=False);shape.commit()
             finite=[]
             for row,xy in zip(nodes,upper):

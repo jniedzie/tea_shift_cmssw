@@ -17,7 +17,7 @@ import numpy as np
 
 ANALYSIS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ANALYSIS / 'bin'))
-from shift_limits_current_plots import draw_regions
+from shift_limits_current_plots import draw_regions, supported_contour_rows
 from shift_limits_lifetime import plotting
 
 
@@ -83,7 +83,7 @@ def draw_limits(before, legacy, after, output, zoom=False):
     directories = [before, legacy, after]
     loaded = [checked_snapshot(path) for path in directories]
     closure = background_closure([item[0] for item in loaded])
-    rows = [selected_rows(item[1]) for item in loaded]
+    rows = [supported_contour_rows(selected_rows(scan), snapshot['signals']) for snapshot,scan in loaded]
     plt = plotting()
     from matplotlib.lines import Line2D
     figure, axes = plt.subplots(1, 2, figsize=(13.5, 6.2), sharex=True, sharey=True)
@@ -110,15 +110,11 @@ def draw_limits(before, legacy, after, output, zoom=False):
         axis.legend(loc='lower right', fontsize=8.2)
     axes[0].set_ylabel(r'Kinetic mixing $\epsilon$')
     figure.suptitle(r'DP sensitivity progress: expected 90% CLs, 0.3 fb$^{-1}$', fontsize=14)
-    figure.legend(handles=[
-        Line2D([], [], marker='D', markerfacecolor='white', markeredgecolor='black',
-               color='none', label='Diamond: tested lifetime only; open = not excluded, filled = excluded')],
-        loc='lower center', bbox_to_anchor=(.5, .115), fontsize=9, frameon=False)
     figure.text(.035, .02,
                 'Matched assumptions: Both-Both, same 19 SM templates, no BDT/additional cuts; trigger/SFs = 1.\n'
                 'Provisional 2% mass resolution; independent 30% signal/background normalization uncertainties; finite-MC uncertainty omitted.\n'
                 'New-model lifetime support comes from the qualified published anchors; missing responses are not supplied by the previous DY model.\n'
-                'Mass connections are interpolation; support endpoints are not physical boundaries. Grey band: epsilon > 0.1 extrapolation.',
+                'Only generated-anchor brackets enter the curves; omitted masses are bridged by mass interpolation. No support-edge vertical lines.',
                 fontsize=8.1, va='bottom')
     figure.tight_layout(rect=(0, .18, 1, .94))
     destination = output / ('limits_before_after_zoom.pdf' if zoom else 'limits_before_after.pdf')

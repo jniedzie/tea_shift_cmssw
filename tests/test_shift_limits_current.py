@@ -14,7 +14,7 @@ from shift_limits_current import Model,cached_backgrounds,signal_normalization,s
 
 
 class PublishedLimitsTest(unittest.TestCase):
-    def test_single_lifetime_is_drawn_as_a_tested_point_without_a_contour(self):
+    def test_single_lifetime_is_omitted_from_contour_presentation(self):
         import matplotlib
         matplotlib.use('Agg')
         import matplotlib.pyplot as plt
@@ -26,8 +26,7 @@ class PublishedLimitsTest(unittest.TestCase):
                 fig,axis=plt.subplots()
                 draw_regions(axis,[row],'background','red','test')
                 self.assertEqual(len(axis.lines),0)
-                self.assertEqual(len(axis.collections),1)
-                np.testing.assert_allclose(axis.collections[0].get_offsets(),[[.212,1.e-5]])
+                self.assertEqual(len(axis.collections),0)
                 plt.close(fig)
 
     def test_full_gen_normalization_does_not_use_sampled_cutflow_or_repeat_branching(self):

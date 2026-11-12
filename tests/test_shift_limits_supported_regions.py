@@ -5,7 +5,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'bin'))
-from shift_limits_current_plots import draw_regions
+from shift_limits_current_plots import draw_regions, supported_contour_rows
 from shift_limits_profile import expected_limit, profile_q
 
 
@@ -37,17 +37,18 @@ class SupportedRegionsTest(unittest.TestCase):
         saved = copy.deepcopy(rows)
         draw_regions(axis, rows, 'zero_background', 'blue', 'test')
         self.assertEqual(rows, saved)
-        self.assertFalse(any(min(x) < 1.02 < max(x) for x, y in axis.lines))
+        self.assertTrue(any(x == [.9, 1.5] for x, y in axis.lines))
+        self.assertFalse(any(len(x)>1 and min(x)==max(x) for x,y in axis.lines))
         return axis
 
-    def test_excluded_isolated_anchor_interrupts_boundary(self):
+    def test_isolated_anchor_is_omitted_from_continuous_curve(self):
         middle = boundary(1.02)
         middle.update(epsilon_support=[3.e-6, 3.e-6],
                       excluded_intervals=[[3.e-6, 3.e-6]], roots=[])
         axis = self.check_gap(middle)
-        self.assertTrue(any(x == [1.02] and y == [3.e-6] for x, y, options in axis.points))
+        self.assertEqual(axis.points, [])
 
-    def test_unexcluded_mass_interrupts_boundary(self):
+    def test_unexcluded_mass_is_omitted_without_vertical_lines(self):
         middle = boundary(1.02)
         middle['excluded_intervals'] = []
         self.check_gap(middle)
@@ -56,6 +57,18 @@ class SupportedRegionsTest(unittest.TestCase):
         axis = RecordingAxis()
         draw_regions(axis, [boundary(.9), boundary(1.5)], 'zero_background', 'blue', 'test')
         self.assertTrue(any(x == [.9, 1.5] for x, y in axis.lines))
+
+    def test_interpolation_island_without_generated_bracket_is_omitted(self):
+        row=boundary(1.02)
+        row.update(confidence_level=.9, epsilon_grid=[1.e-6,1.e-5,1.e-4,1.e-3],
+                   q_grid=[0.,5.,5.,0.])
+        endpoints=[dict(mass_gev=1.02,epsilon=e) for e in [1.e-6,1.e-3]]
+        self.assertEqual(supported_contour_rows([row],endpoints),[])
+        anchors=endpoints+[dict(mass_gev=1.02,epsilon=1.e-4)]
+        self.assertEqual(len(supported_contour_rows([row],anchors)),1)
+        row['channel']='Both-Both'
+        anchors[-1]['counts']={'Both-Both': {'sumw': 0.}}
+        self.assertEqual(supported_contour_rows([row],anchors),[])
 
     def test_r_scales_inversely_with_model_signal(self):
         signal_limit, threshold = expected_limit([1.], [0.], .9)

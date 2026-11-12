@@ -183,7 +183,7 @@ def settings(output, background, inventory, figure_directory):
         mass_resolution_fraction=.02, mass_minimum_bin_gev=.1,
         include_mc_stat_uncertainties=False, scan_grid_points=65,
         epsilon_min=1.e-10, epsilon_max=.001,
-        response_anchors=('prompt', 'lab_0p01m', 'lab_1m', 'lab_5m', 'lab_30m', 'lab_100m', 'lab_1000m'),
+        response_anchors=('prompt', 'lab_0p01m', 'lab_0p1m', 'lab_1m', 'lab_5m', 'lab_30m', 'lab_100m', 'lab_1000m'),
         plot_omitted_masses_gev=(), comparison_figure_directory=str(figure_directory))
 
 
@@ -318,7 +318,7 @@ def render(config, model, legacy, before, output, cutoff, before_event_statistic
         'Catalog cutoff: ' + cutoff + '. Missing lifetimes and support endpoints are not physical exclusion edges.',
         'Independent 30% signal/background normalization uncertainties; finite-MC uncertainty omitted from these matched curves.',
         'Provisional 2% mass resolution. Literal SM histogram bins; no invented background tail or interpolation.',
-        'Pheno SHIFT: 30 fb^-1. Most reference curves: 90% CL; FCC: 95% CL. Pointwise diamonds do not define contours.']
+        'Pheno SHIFT: 30 fb^-1. Most reference curves: 90% CL; FCC: 95% CL. Only masses with generated-anchor brackets enter the continuous curves.']
     for modes in [('background', 'zero_background'), ('background',), ('zero_background',)]:
         old = copy.copy(config)
         old.output_path = str(reference)
