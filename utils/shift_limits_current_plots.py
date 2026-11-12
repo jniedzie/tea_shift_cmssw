@@ -51,7 +51,12 @@ def boundaries(model,level,channel,omitted_masses=()):
         mapping=dict(zip(row['roots'],roots))
         row['excluded_intervals']=[[mapping.get(a,a),mapping.get(b,b)] for a,b in row['excluded_intervals']]
         row['roots']=roots;row['boundary_sources']=sources;result.append(row)
-    return supported_contour_rows(result,model.snapshot['signals'])
+    supported=supported_contour_rows(result,model.snapshot['signals'])
+    if getattr(model.config,'include_prompt_reference_extrapolation',False):
+        keys={(r['mass_gev'],r['mode']) for r in supported}
+        supported.extend(row for row in result if (row['mass_gev'],row['mode']) not in keys
+                         and row['upper_prompt_continuation'] and row['roots'] and row['excluded_intervals'])
+    return supported
 
 
 def single_lifetime(row):

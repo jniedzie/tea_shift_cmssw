@@ -325,7 +325,8 @@ def render(config, model, legacy, before, output, cutoff, before_event_statistic
         old.background_modes = modes
         old.epsilon_max = 1.
         old.plot_omitted_masses_gev = (1.5,)
-        old.signal_model_label = 'Previous MC'
+        old.signal_model_label = 'Previous DY (NNPDF)'
+        old.include_prompt_reference_extrapolation = True
         old.comparison_legend_fontsize = 10
         old.comparison_mode_styles = [
             ('background', (.5, .5, .5), ': background', True),

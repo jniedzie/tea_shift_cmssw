@@ -84,8 +84,15 @@ def draw_limits(before, legacy, after, output, zoom=False):
     loaded = [checked_snapshot(path) for path in directories]
     closure = background_closure([item[0] for item in loaded])
     rows = [supported_contour_rows(selected_rows(scan), snapshot['signals']) for snapshot,scan in loaded]
+    # Keep the older full-range reference, whose saved prompt continuation goes
+    # beyond its generated anchors. It is explicitly distinct from the update.
+    previous_reference=[]
+    for row in selected_rows(loaded[1][1]):
+        if row['upper_prompt_continuation'] and row['excluded_intervals'] and row['roots']:
+            previous_reference.append(row)
+        elif any(row['mass_gev']==r['mass_gev'] and row['mode']==r['mode'] for r in rows[1]):
+            previous_reference.append(row)
     plt = plotting()
-    from matplotlib.lines import Line2D
     figure, axes = plt.subplots(1, 2, figsize=(13.5, 6.2), sharex=True, sharey=True)
     colors = ['#b33636', '#176b9c']
     projections = read_json(before / 'projection_inventory.json')
@@ -97,14 +104,12 @@ def draw_limits(before, legacy, after, output, zoom=False):
         points = np.asarray(pheno[0]['points'])
         axis.plot(points[:, 0], points[:, 1], color='#168c76', lw=1.6,
                   label=r'Pheno SHIFT reference: 30 fb$^{-1}$')
-        draw_regions(axis, rows[0], mode, '#202020', '29 Oct: then-available samples',
-                     fill=False, linewidth=1.8, linestyle=':')
-        draw_regions(axis, rows[1], mode, '#929292', 'Now: completed grid, previous DY',
+        draw_regions(axis, previous_reference, mode, '#929292', 'Previous prescription, including prompt extrapolation',
                      fill=False, linewidth=2.2, linestyle='--')
-        draw_regions(axis, rows[2], mode, color, 'Now: qualified benchmark support',
+        draw_regions(axis, rows[2], mode, color, r'Updated prescription: $\epsilon\leq10^{-3}$',
                      fill=False, linewidth=2.6, linestyle='-', point_marker_size=38)
         axis.axhspan(.1, 1, color='#eeeeee', zorder=-10)
-        axis.set(xscale='log', yscale='log', xlim=(.2, 100), ylim=((1.e-6, .03) if zoom else (1.e-7, 1)),
+        axis.set(xscale='log', yscale='log', xlim=(.2, 100), ylim=((1.e-6, .3) if zoom else (1.e-7, 1)),
                  xlabel=r'$m_{A\prime}$ [GeV]',
                  title='SM background' if mode == 'background' else 'Zero background')
         axis.legend(loc='lower right', fontsize=8.2)
@@ -113,15 +118,18 @@ def draw_limits(before, legacy, after, output, zoom=False):
     figure.text(.035, .02,
                 'Matched assumptions: Both-Both, same 19 SM templates, no BDT/additional cuts; trigger/SFs = 1.\n'
                 'Provisional 2% mass resolution; independent 30% signal/background normalization uncertainties; finite-MC uncertainty omitted.\n'
-                'New-model lifetime support comes from the qualified published anchors; missing responses are not supplied by the previous DY model.\n'
-                'Only generated-anchor brackets enter the curves; omitted masses are bridged by mass interpolation. No support-edge vertical lines.',
+                'Grey: previous signal prescription, with epsilon-squared rate extrapolation of prompt templates beyond generated epsilon.\n'
+                'Coloured: updated prescription only within epsilon <= 0.001; masses without a bracketed boundary are omitted. Endpoints are not physical thresholds.\n'
+                'Mass interpolation connects retained points. Grey band: epsilon > 0.1 extrapolation. No diamonds or vertical closures.',
                 fontsize=8.1, va='bottom')
-    figure.tight_layout(rect=(0, .18, 1, .94))
+    figure.tight_layout(rect=(0, .20, 1, .94))
     destination = output / ('limits_before_after_zoom.pdf' if zoom else 'limits_before_after.pdf')
     figure.savefig(destination)
     plt.close(figure)
     return dict(inputs=[dict(directory=str(path), snapshot_sha256=digest(path / 'snapshot.json'),
                              scan_sha256=digest(path / 'scan.json')) for path in directories],
+                displayed_reference_includes_saved_prompt_extrapolation=True,
+                omitted_historical_curve=str(before),
                 matched_backgrounds=closure, confidence_level=.9, channel='Both-Both',
                 luminosity_pb=loaded[0][0]['luminosity_pb'], fits_rerun=False,
                 include_mc_stat_uncertainties=False,

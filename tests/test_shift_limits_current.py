@@ -29,6 +29,22 @@ class PublishedLimitsTest(unittest.TestCase):
                 self.assertEqual(len(axis.collections),0)
                 plt.close(fig)
 
+    def test_prompt_extrapolation_is_only_available_for_explicit_reference(self):
+        from shift_limits_current_plots import boundaries
+        with tempfile.TemporaryDirectory() as temporary:
+            output=Path(temporary)
+            row=dict(mass_gev=15.,mode='zero_background',channel='Both-Both',confidence_level=.9,
+                     epsilon_support=[1.e-6,1.],roots=[.02],excluded_intervals=[[.02,1.]],
+                     epsilon_grid=[1.e-6,.001,1.],q_grid=[0.,0.,10.],upper_prompt_continuation=True)
+            (output/'scan.json').write_text(json.dumps(dict(records=[row])))
+            model=SimpleNamespace(output=output,config=SimpleNamespace(),snapshot=dict(signals=[
+                dict(mass_gev=15.,epsilon=.001)]))
+            self.assertEqual(boundaries(model,.9,'Both-Both'),[])
+            model.config.include_prompt_reference_extrapolation=True
+            reference=boundaries(model,.9,'Both-Both')
+            self.assertEqual(len(reference),1)
+            self.assertEqual(reference[0]['roots'],[.02])
+
     def test_full_gen_normalization_does_not_use_sampled_cutflow_or_repeat_branching(self):
         # A sampled cutflow may be 3225.4 while the original exposure is 3196.
         rate={'physical_selected_cross_sections_pb':[{'value_pb':2.},{'value_pb':1.}],
