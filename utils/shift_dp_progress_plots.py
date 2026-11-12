@@ -305,18 +305,150 @@ def draw_snapshot_statistics(before, current, output, cutoff):
                 missing_is_zero=False,source_collision_correlations_generally_omitted=True)
 
 
+def draw_signal_strength_map(directory, output, confidence_level=.9, reference_directory=None):
+    """Evaluate r at generated anchors; never fill unsupported mass/epsilon gaps."""
+    import csv
+    from concurrent.futures import ThreadPoolExecutor
+    from types import SimpleNamespace
+    from shift_limits_current import Model
+    from shift_limits_profile import expected_limit, profile_q
+    snapshot, scan = checked_snapshot(directory)
+    config = SimpleNamespace(output_path=str(directory), luminosity=snapshot['luminosity_pb'],
+        categories=snapshot['categories'], primary_channel='Both-Both',
+        response_anchors=tuple(r['name'].split('_', 1)[1] for r in snapshot['signals']),
+        include_mc_stat_uncertainties=False)
+    model = Model(config)
+    modes = ('background', 'zero_background')
+    zero_limit, threshold = expected_limit(np.ones(1), np.zeros(1), confidence_level)
+
+    def evaluate(item):
+        mass, anchor = item
+        epsilon = anchor['epsilon']
+        records = []
+        for mode in modes:
+            signal, background = model.cells(mass, epsilon, 'Both-Both', mode)
+            total = float(signal.sum())
+            if total <= 0:
+                raise ValueError('Selected positive-response anchor became empty')
+            # Solve in event-yield units to avoid absolute root tolerances on tiny r.
+            limit = zero_limit if mode == 'zero_background' else expected_limit(
+                signal / total, background, confidence_level)[0]
+            r = limit / total
+            q = model.q(mass, epsilon, 'Both-Both', mode)
+            if (r < 1) != (q > threshold):
+                raise ValueError('r and the saved exclusion statistic disagree')
+            if not math.isclose(profile_q(limit, signal / total, background), threshold,
+                                rel_tol=2.e-5, abs_tol=2.e-6):
+                raise ValueError('Signal-strength root failed likelihood readback')
+            records.append(dict(name=anchor['name'], mass_gev=mass, epsilon=epsilon,
+                mode=mode, r=r, predicted_events_normalized_to_lumi=total,
+                excluded=r < 1, q=q, histogram_sha256=anchor['sha256']))
+        return records
+
+    items = [(mass, anchor) for mass, anchors in sorted(model.signals.items()) for anchor in anchors]
+    records = []
+    with ThreadPoolExecutor(max_workers=4) as workers:
+        for result in workers.map(evaluate, items):
+            records.extend(result)
+    for record in records:
+        saved=next(row for row in selected_rows(scan) if row['mass_gev']==record['mass_gev']
+                   and row['mode']==record['mode'])
+        matches=[q for epsilon,q in zip(saved['epsilon_grid'],saved['q_grid'])
+                 if math.isclose(epsilon,record['epsilon'],rel_tol=1.e-12)]
+        if not matches or not all(math.isclose(q,record['q'],rel_tol=1.e-7,abs_tol=1.e-8) for q in matches):
+            raise ValueError('Anchor does not reproduce saved exclusion scan: '+record['name'])
+    masses=sorted({r['mass_gev'] for r in snapshot['signals']})
+    if reference_directory is not None:
+        reference=read_json(reference_directory/'snapshot.json')
+        masses=sorted(set(masses) | {r['mass_gev'] for r in reference['signals']})
+    gaps = []
+    for mass in masses:
+        for mode in modes:
+            anchors = sorted((r for r in records if r['mass_gev']==mass and r['mode']==mode),
+                             key=lambda r:r['epsilon'])
+            brackets = [[a['epsilon'], b['epsilon']] for a,b in zip(anchors, anchors[1:])
+                        if (a['r']-1)*(b['r']-1)<0]
+            status = ('no positive-response new-model anchor' if not anchors else
+                      'bracketed' if brackets else 'need smaller epsilon' if all(r['r']<1 for r in anchors)
+                      else 'no excluded anchor; extend coverage or improve sensitivity')
+            saved=next((r for r in selected_rows(scan) if r['mass_gev']==mass and r['mode']==mode),None)
+            gaps.append(dict(mass_gev=mass, mode=mode, anchors=len(anchors),
+                             r1_brackets=brackets, interpolated_roots=saved['roots'] if saved else [],
+                             bracket_epsilon_ratios=[b/a for a,b in brackets], status=status))
+    excluded_masses = sorted({r['mass_gev'] for r in snapshot['signals']} - set(model.signals))
+    report = dict(definition='r = expected signal-yield upper limit / predicted signal yield',
+        confidence_level=confidence_level, luminosity_pb=snapshot['luminosity_pb'], channel='Both-Both',
+        snapshot_sha256=digest(directory/'snapshot.json'), scan_sha256=digest(directory/'scan.json'),
+        include_mc_stat_uncertainties=False, mass_interpolation=False,
+        unknown_response_masses=excluded_masses, zero_observed_mc=model.unused_signals,
+        records=records, coverage=gaps)
+    save_json(output/'signal_strength_map.json', report)
+    with (output/'signal_strength_anchors.csv').open('w') as stream:
+        writer=csv.DictWriter(stream, fieldnames=list(records[0]));writer.writeheader();writer.writerows(records)
+    plt=plotting()
+    from matplotlib.colors import LogNorm
+    from matplotlib.lines import Line2D
+    positions={mass:i for i,mass in enumerate(masses)}
+    figure,axes=plt.subplots(1,2,figsize=(17,8),sharey=True)
+    norm=LogNorm(1.e-3,1.e3)
+    for axis,mode in zip(axes,modes):
+        selected=[r for r in records if r['mode']==mode]
+        for mass in masses:
+            local=sorted((r for r in selected if r['mass_gev']==mass),key=lambda r:r['epsilon'])
+            if len(local)>1:
+                axis.plot([positions[mass]]*len(local),[r['epsilon'] for r in local],
+                          color='#b0b0b0',lw=1,zorder=1)
+        scatter=axis.scatter([positions[r['mass_gev']] for r in selected],
+            [r['epsilon'] for r in selected],c=[r['r'] for r in selected],
+            norm=norm,cmap='coolwarm',s=95,edgecolors='black',linewidths=.4,zorder=3)
+        for r in selected:
+            axis.annotate(f"{r['r']:.2g}",(positions[r['mass_gev']],r['epsilon']),
+                          xytext=(5,3),textcoords='offset points',fontsize=6.3,zorder=4)
+        for row in model.unused_signals:
+            axis.scatter([positions[row['mass_gev']]],[row['epsilon']],marker='x',color='#777777',s=45)
+        for row in selected_rows(scan):
+            if row['mode']!=mode:continue
+            for epsilon in row['roots']:
+                axis.plot(positions[row['mass_gev']],epsilon,marker='_',color='black',ms=17,mew=2.4,zorder=5)
+        axis.set(yscale='log',xlim=(-.6,len(masses)-.15),xticks=range(len(masses)),
+                 xlabel=r'$m_{A\prime}$ [GeV] (generated mass columns)',
+                 title='SM background' if mode=='background' else 'Zero background')
+        axis.set_xticklabels([f'{mass:g}' for mass in masses],rotation=60,ha='right')
+    axes[0].set_ylabel(r'Kinetic mixing $\epsilon$')
+    figure.suptitle(r'Expected signal-strength limit $r$: Both-Both, 90% CLs, 0.3 fb$^{-1}$',fontsize=15)
+    figure.subplots_adjust(left=.07,right=.90,bottom=.29,top=.90,wspace=.08)
+    colorbar_axis=figure.add_axes([.925,.26,.012,.60])
+    figure.colorbar(scatter,cax=colorbar_axis,extend='both',label=r'$r$ (blue: $r<1$, red: $r>1$)')
+    figure.legend(handles=[Line2D([],[],marker='o',color='none',markerfacecolor='white',markeredgecolor='black',label='Generated positive-response anchor; label = r'),
+        Line2D([],[],marker='_',color='none',markeredgecolor='black',markersize=17,label='Interpolated r = 1 within generated epsilon support'),
+        Line2D([],[],marker='x',color='#777',linestyle='none',label='Zero observed MC response: unknown')],
+        loc='lower center',bbox_to_anchor=(.5,.15),ncol=3,frameon=False,fontsize=8)
+    figure.text(.035,.025,
+        'Blank space = no evaluated anchor; grey vertical lines show available lifetime spans, not an exclusion contour. No interpolation between masses.\n'
+        'Blue anchors are excluded at their tested epsilon. Without an r > 1 anchor below, the lower boundary remains unbracketed.\n'
+        'Same likelihood, 19 SM templates, provisional mass resolution and 30% normalization uncertainties as the saved limit scan.\n'
+        'Finite-MC and source-collision covariance omitted; sparse-MC values are provisional. Counts are events normalized to lumi, not raw MC events.',fontsize=8.5)
+    target=output/'signal_strength_map.pdf';figure.savefig(target);plt.close(figure)
+    report['figure']=dict(path=str(target),sha256=digest(target))
+    save_json(output/'signal_strength_map.json',report)
+    return report
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--before', type=Path, required=True)
     parser.add_argument('--legacy', type=Path, required=True)
     parser.add_argument('--after', type=Path, required=True)
     parser.add_argument('--census', type=Path)
+    parser.add_argument('--signal-strength-map', action='store_true', help='Evaluate r at every generated anchor')
     parser.add_argument('--zoom', action='store_true', help='Focus the epsilon axis on SHIFT sensitivity')
     parser.add_argument('--output', type=Path, required=True)
     arguments = parser.parse_args()
     arguments.output.mkdir(parents=True, exist_ok=True)
     report = draw_limits(arguments.before.resolve(), arguments.legacy.resolve(),
                          arguments.after.resolve(), arguments.output.resolve(), zoom=arguments.zoom)
+    if arguments.signal_strength_map:
+        report['signal_strength'] = draw_signal_strength_map(arguments.after.resolve(), arguments.output.resolve(), reference_directory=arguments.legacy.resolve())
     if arguments.census:
         report['grid'] = draw_grid(arguments.census.resolve(), arguments.output.resolve())
     report['source'] = dict(path=str(Path(__file__).resolve()), sha256=digest(__file__))

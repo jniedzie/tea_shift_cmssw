@@ -61,16 +61,19 @@ def single_lifetime(row):
 
 def draw_regions(axis,rows,mode,color,label,fill=True,linewidth=2,linestyle=None,point_marker_size=28):
     nodes=sorted((r for r in rows if r['mode']==mode),key=lambda r:r['mass_gev']);labelled=False
-    # Requested presentation: connect every available mass boundary, including
-    # across gaps in generated response coverage. This is plot interpolation.
-    run=[]
+    # Isolated tests interrupt mass interpolation: a joining line can otherwise
+    # pass above an excluded point at an intervening unsupported mass.
+    runs=[];run=[]
     for row in nodes:
         if single_lifetime(row):
+            if run:runs.append(run);run=[]
             axis.scatter([row['mass_gev']],[row['epsilon_support'][0]],marker='D',
                          facecolors=color if row['excluded_intervals'] else 'white',
                          edgecolors=color,s=point_marker_size,zorder=8)
             continue
-        if not row['excluded_intervals']:continue
+        if not row['excluded_intervals']:
+            if run:runs.append(run);run=[]
+            continue
         row=copy.deepcopy(row)
         # Extra islands have no established correspondence at neighbouring
         # masses. Draw them at the simulated mass; never fill a nonexcluded gap.
@@ -79,7 +82,7 @@ def draw_regions(axis,rows,mode,color,label,fill=True,linewidth=2,linestyle=None
                       ls='-' if mode=='background' else '--',marker='o',ms=3)
         row['excluded_intervals']=[row['excluded_intervals'][-1]]
         run.append(row)
-    runs=[run] if run else []
+    if run:runs.append(run)
     for run in runs:
         masses=[r['mass_gev'] for r in run]
         for index in range(len(run[0]['excluded_intervals'])):
