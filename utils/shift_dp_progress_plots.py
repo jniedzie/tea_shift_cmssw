@@ -79,7 +79,7 @@ def selected_rows(scan):
     return rows
 
 
-def draw_limits(before, legacy, after, output):
+def draw_limits(before, legacy, after, output, zoom=False):
     directories = [before, legacy, after]
     loaded = [checked_snapshot(path) for path in directories]
     closure = background_closure([item[0] for item in loaded])
@@ -104,7 +104,7 @@ def draw_limits(before, legacy, after, output):
         draw_regions(axis, rows[2], mode, color, 'Now: qualified benchmark support',
                      fill=False, linewidth=2.6, linestyle='-', point_marker_size=38)
         axis.axhspan(.1, 1, color='#eeeeee', zorder=-10)
-        axis.set(xscale='log', yscale='log', xlim=(.2, 100), ylim=(1.e-7, 1),
+        axis.set(xscale='log', yscale='log', xlim=(.2, 100), ylim=((1.e-6, .03) if zoom else (1.e-7, 1)),
                  xlabel=r'$m_{A\prime}$ [GeV]',
                  title='SM background' if mode == 'background' else 'Zero background')
         axis.legend(loc='lower right', fontsize=8.2)
@@ -121,7 +121,7 @@ def draw_limits(before, legacy, after, output):
                 'Mass connections are interpolation; support endpoints are not physical boundaries. Grey band: epsilon > 0.1 extrapolation.',
                 fontsize=8.1, va='bottom')
     figure.tight_layout(rect=(0, .18, 1, .94))
-    destination = output / 'limits_before_after.pdf'
+    destination = output / ('limits_before_after_zoom.pdf' if zoom else 'limits_before_after.pdf')
     figure.savefig(destination)
     plt.close(figure)
     return dict(inputs=[dict(directory=str(path), snapshot_sha256=digest(path / 'snapshot.json'),
@@ -274,7 +274,8 @@ def draw_snapshot_statistics(before, current, output, cutoff):
                 cell=lookup.get((mass,flight));value=cell[0] if cell else None
                 color='white' if value is None else '#dddddd' if value==0 else cmap(norm(value))
                 axis.add_patch(Rectangle((i-.5,j-.5),1,1,facecolor=color,edgecolor='#cccccc',linewidth=.5))
-                if epoch==0 and cell and 'drell-yan' in cell[1]['mechanism']:
+                if cell and (cell[1].get('retained_reference', False) or
+                             (epoch==0 and 'drell-yan' in cell[1]['mechanism'])):
                     axis.add_patch(Rectangle((i-.5,j-.5),1,1,facecolor='none',edgecolor='#999999',
                                              hatch='///',linewidth=.1,alpha=.6))
                 label='\u2014' if value is None else '0' if value==0 else f'{value:.1f}' if value<10 else f'{value:.0f}'
@@ -282,7 +283,7 @@ def draw_snapshot_statistics(before, current, output, cutoff):
                           color='white' if value is not None and 0<value<100 else '#111111')
         axis.set(xlim=(-.5,len(masses)-.5),ylim=(len(flights)-.5,-.5),
                  xticks=range(len(masses)),yticks=range(len(flights)),xlabel=r'$m_{A\prime}$ [GeV]',
-                 title=('29 October: available inputs' if epoch==0 else 'Now: qualified benchmark')+f' ({len(group)} anchors)')
+                 title=('29 October: available inputs' if epoch==0 else snapshots[1].get('title', 'Now: qualified benchmark'))+f' ({len(group)} anchors)')
         axis.set_xticklabels([f'{mass:g}' for mass in masses],rotation=60,ha='right',fontsize=8)
         axis.set_yticklabels(['prompt' if flight is None else f'{flight:g} m' for flight in flights]);axis.grid(False)
     axes[0].set_ylabel('Nominal mean lab-flight label')
@@ -291,13 +292,13 @@ def draw_snapshot_statistics(before, current, output, cutoff):
     bar=figure.add_axes([.935,.30,.012,.55]);figure.colorbar(plt.cm.ScalarMappable(norm=norm,cmap=cmap),cax=bar,label='Effective weighted passing events')
     figure.legend(handles=[Patch(facecolor='white',edgecolor='#aaa',label='Dash: no input in this snapshot'),
         Patch(facecolor='#ddd',edgecolor='#aaa',label='0: no passing MC event observed'),
-        Patch(facecolor='white',edgecolor='#999',hatch='///',label='Previous DY prescription')],
+        Patch(facecolor='white',edgecolor='#999',hatch='///',label='Retained previous-model reference (not pooled with new model)')],
         loc='lower center',bbox_to_anchor=(.5,.16),ncol=3,frameon=False,fontsize=8.5)
     figure.text(.035,.025,
         'Current catalog cutoff: '+cutoff+'. Same axes and colour scale; weights and original GEN exposure are preserved.\n'
         'N_eff = (sum w)^2 / sum w^2 from positive event-multiplicity bins, including overflow; each event is counted once.\n'
         'These are MC statistics, not raw event counts or events normalized to lumi; source-collision correlations can reduce independent precision.\n'
-        'Previous DY samples remain available. Missing new-model replacements are not deleted samples; models/populations are not interchangeable.\n'
+        'Current totals retain previous-model inputs where no replacement exists; hatching identifies retained references, not new-model qualification.\n'
         'Lab-flight rows use the nominal sample labels; exact epsilon, proper lifetime and reference boost remain in the saved inputs.',fontsize=8.1,va='bottom')
     path=output/'signal_statistics_before_after.pdf';figure.savefig(path);plt.close(figure)
     return dict(path=str(path),sha256=digest(path),before_anchors=len(rows[0]),current_anchors=len(rows[1]),
@@ -310,11 +311,12 @@ def main():
     parser.add_argument('--legacy', type=Path, required=True)
     parser.add_argument('--after', type=Path, required=True)
     parser.add_argument('--census', type=Path)
+    parser.add_argument('--zoom', action='store_true', help='Focus the epsilon axis on SHIFT sensitivity')
     parser.add_argument('--output', type=Path, required=True)
     arguments = parser.parse_args()
     arguments.output.mkdir(parents=True, exist_ok=True)
     report = draw_limits(arguments.before.resolve(), arguments.legacy.resolve(),
-                         arguments.after.resolve(), arguments.output.resolve())
+                         arguments.after.resolve(), arguments.output.resolve(), zoom=arguments.zoom)
     if arguments.census:
         report['grid'] = draw_grid(arguments.census.resolve(), arguments.output.resolve())
     report['source'] = dict(path=str(Path(__file__).resolve()), sha256=digest(__file__))
