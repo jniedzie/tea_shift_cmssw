@@ -402,13 +402,19 @@ def render(config, model, legacy, before, output, cutoff, before_event_statistic
 
 def check_pdfs(output):
     import fitz
+    required={'limits_current_cl90_comparison.pdf',
+        'limits_current_cl90_background_comparison.pdf',
+        'limits_current_cl90_zero_background_comparison.pdf',
+        'background_mass_templates.pdf','signal_coverage.pdf','limits_before_after.pdf',
+        'limits_before_after_zoom.pdf','signal_strength_map.pdf','signal_statistics_before_after.pdf'}
+    missing=required-{path.name for path in output.glob('*.pdf')}
+    if missing:raise ValueError('Missing expected final figures: '+', '.join(sorted(missing)))
     records=[]
     for path in sorted(output.glob('*.pdf')):
         with fitz.open(path) as document:
             if len(document)!=1 or document[0].rect.width<300 or not document[0].get_drawings():
                 raise ValueError('Final figure is missing its expected single plotted page: '+path.name)
             records.append(dict(path=str(path),sha256=digest(path),pages=len(document)))
-    if len(records)!=7:raise ValueError('Expected comparison variants, before/after, inputs and statistics map')
     return records
 
 

@@ -12,7 +12,7 @@ import numpy as np
 ANALYSIS=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ANALYSIS/'utils'),str(ANALYSIS/'bin')]
 from shift_dp_limits_refresh import (mass_fingerprint,qualify_rate,qualify_row,select_signals,
-                                    same_scan_support,passing_event_statistics,settings)
+                                    same_scan_support,passing_event_statistics,settings,check_pdfs)
 from shift_limits_current_plots import comparison_figure_directory
 from shift_dp_progress_plots import with_retained_statistics
 
@@ -187,6 +187,27 @@ class RefreshInputsTest(unittest.TestCase):
         self.assertEqual(result['event_passing_sumw'],7.)
         self.assertEqual(result['event_passing_sumw2'],21.)
         self.assertAlmostEqual(result['event_neff'],49./21.)
+
+    def test_final_figures_are_checked_by_name_including_zoom_and_strength_map(self):
+        names=['limits_current_cl90_comparison.pdf','limits_current_cl90_background_comparison.pdf',
+               'limits_current_cl90_zero_background_comparison.pdf','background_mass_templates.pdf',
+               'signal_coverage.pdf','limits_before_after.pdf','limits_before_after_zoom.pdf',
+               'signal_strength_map.pdf','signal_statistics_before_after.pdf']
+        class Document:
+            def __enter__(self):return self
+            def __exit__(self,*args):pass
+            def __len__(self):return 1
+            def __getitem__(self,index):
+                return SimpleNamespace(rect=SimpleNamespace(width=600),get_drawings=lambda:[1])
+        with tempfile.TemporaryDirectory() as temporary:
+            output=Path(temporary)
+            for name in names:(output/name).write_bytes(b'figure bytes')
+            with patch.dict(sys.modules,fitz=SimpleNamespace(open=lambda path:Document())):
+                self.assertEqual(len(check_pdfs(output)),9)
+                (output/'extra_diagnostic.pdf').write_bytes(b'extra figure')
+                self.assertEqual(len(check_pdfs(output)),10)
+                (output/'signal_strength_map.pdf').unlink()
+                with self.assertRaisesRegex(ValueError,'signal_strength_map.pdf'):check_pdfs(output)
 
 
 if __name__=='__main__':unittest.main()
