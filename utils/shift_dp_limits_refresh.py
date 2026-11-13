@@ -181,14 +181,15 @@ def rate_epsilon_domain(rate):
     prescription = rate.get('dy_prescription', {})
     name = prescription.get('name')
     hashes = {
-        'msht20-nnlo': '18fac0c030160c00d8fd50a3ce145a5e435546a5b3426d6caa4942af1c2384e5',
-        'msht20-nnlo-v2': 'c238aaeb64640dab129cf26b101f293ddcd34357d04d852fe50dffbd3587af5c'}
-    if name not in hashes or prescription.get('authority', {}).get('sha256') != hashes[name]:
+        'msht20-nnlo': ('18fac0c030160c00d8fd50a3ce145a5e435546a5b3426d6caa4942af1c2384e5',),
+        'msht20-nnlo-v2': ('c238aaeb64640dab129cf26b101f293ddcd34357d04d852fe50dffbd3587af5c',
+                           '38a24e4a1c2533f2d306d815fa15114dac5f99f84c9bea6a98bb1228a8c0c44e')}
+    if name not in hashes or prescription.get('authority', {}).get('sha256') not in hashes[name]:
         raise ValueError('Old NNPDF DY is not a qualified MSHT20 response')
     if name == 'msht20-nnlo':
         return dict(maximum_epsilon=.001, prescription=name)
-    if (prescription.get('epsilon_upper_bound') != .1
-            or rate['mass_gev'] not in (1.5, 1.8, 2, 5, 10, 15, 40, 70)):
+    masses = (20, 30, 50) if prescription['authority']['sha256'] == hashes[name][-1] else (1.5, 1.8, 2, 5, 10, 15, 40, 70)
+    if (prescription.get('epsilon_upper_bound') != .1 or rate['mass_gev'] not in masses):
         raise ValueError('Unqualified MSHT20-v2 mass or epsilon domain')
     return photon or dict(maximum_epsilon=.1 if rate['mass_gev'] >= 12 else .01,
                           prescription=name, spectral_photon_width=rate['mass_gev'] < 12)

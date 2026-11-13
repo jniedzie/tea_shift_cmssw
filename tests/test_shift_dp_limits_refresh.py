@@ -112,6 +112,18 @@ class RefreshInputsTest(unittest.TestCase):
             if change=='epsilon':bad['epsilon']=point['epsilon']=.10001
             with self.subTest(change=change),self.assertRaises(ValueError):qualify_rate(point,bad)
 
+    def test_exact_mass_extension_does_not_widen_the_original_authority(self):
+        extension='38a24e4a1c2533f2d306d815fa15114dac5f99f84c9bea6a98bb1228a8c0c44e'
+        for mass in (20.,30.,50.):
+            row,rate=self.dy_rate(mass=mass,epsilon=.1)
+            with self.assertRaises(ValueError):qualify_rate(row,rate)
+            rate['dy_prescription']['authority']['sha256']=extension
+            self.assertEqual(qualify_rate(row,rate)['maximum_epsilon'],.1)
+        for mass in (15.,40.,70.,25.):
+            row,rate=self.dy_rate(mass=mass)
+            rate['dy_prescription']['authority']['sha256']=extension
+            with self.assertRaises(ValueError):qualify_rate(row,rate)
+
     def test_large_photon_epsilon_requires_the_exact_experimental_approximation(self):
         row,rate=self.dy_rate(mass=5.,epsilon=.03)
         with self.assertRaisesRegex(ValueError,'epsilon domain'):qualify_rate(row,rate)
