@@ -450,6 +450,7 @@ def draw_root_strength_map(report, output):
     root_path = output/'signal_strength_map.root'
     root_file = ROOT.TFile(str(root_path), 'RECREATE')
     canvas = ROOT.TCanvas('signal_strength', 'Expected signal-strength limit', 1500, 750)
+    canvas.SetCanvasSize(1500, 750)
     canvas.Divide(2, 1)
     keep = []
     contour_counts = {}
@@ -503,7 +504,7 @@ def draw_root_strength_map(report, output):
     canvas.cd()
     label = ROOT.TLatex(); label.SetNDC(); label.SetTextSize(.025)
     label.DrawLatex(.12, .975, 'Both-Both, 90% CLs, '+str(report['luminosity_pb']/1000)+' fb^{-1}')
-    ROOT.gStyle.SetPaperSize(40., 20.)
+    ROOT.gStyle.SetPaperSize(26., 13.)
     canvas.SaveAs(str(target)); canvas.Write()
     metadata = dict(interpolation='linear log10(r) in log10(mass), log10(epsilon)',
                     extrapolation=False, blank_bins='Outside positive-anchor convex hull',
