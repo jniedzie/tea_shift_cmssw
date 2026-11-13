@@ -97,7 +97,7 @@ class StrengthSurfaceTest(unittest.TestCase):
     def test_log_plane_and_no_extrapolation(self):
         import numpy as np
         rows = [dict(mode='background', mass_gev=m, epsilon=e, r=m*e)
-                for m,e in [(1.,.001),(10.,.001),(1.,.1)]]
+                for m,e in [(1.,.001),(10.,.001),(1.,.1),(10.,.01)]]
         edges, centres, z = strength_surface(rows, 'background', bins=12)
         xx, yy = np.meshgrid(*[np.log10(c) for c in centres])
         finite = np.isfinite(z)

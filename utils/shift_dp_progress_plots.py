@@ -412,34 +412,74 @@ def draw_signal_strength_map(directory, output, confidence_level=.9, reference_d
     save_json(output/'signal_strength_map.json', report)
     with (output/'signal_strength_anchors.csv').open('w') as stream:
         writer=csv.DictWriter(stream, fieldnames=list(records[0]));writer.writeheader();writer.writerows(records)
+    report['surface_records'] = likelihood_strength_records(directory, confidence_level)
     report['figure'] = draw_root_strength_map(report, output)
     save_json(output/'signal_strength_map.json', report)
     return report
 
 
+def likelihood_strength_records(directory, confidence_level=.9):
+    """Evaluate r with the saved limit likelihood, including each saved root."""
+    from concurrent.futures import ThreadPoolExecutor
+    from types import SimpleNamespace
+    from shift_limits_current import Model
+    from shift_limits_profile import expected_limit
+    snapshot, scan = checked_snapshot(directory)
+    config = SimpleNamespace(output_path=str(directory), luminosity=snapshot['luminosity_pb'],
+        categories=snapshot['categories'], primary_channel='Both-Both',
+        include_mc_stat_uncertainties=False)
+    model = Model(config)
+    zero_limit = expected_limit(np.ones(1), np.zeros(1), confidence_level)[0]
+    tasks = [(row, epsilon) for row in selected_rows(scan)
+             for epsilon in sorted(set(row['epsilon_grid']+row['roots']))]
+    def evaluate(task):
+        row, epsilon = task
+        signal, background = model.cells(row['mass_gev'], epsilon, 'Both-Both', row['mode'])
+        total = float(signal.sum())
+        limit = zero_limit if row['mode']=='zero_background' else expected_limit(
+            signal/total, background, confidence_level)[0]
+        r = limit/total
+        if any(math.isclose(epsilon, root, rel_tol=1.e-10) for root in row['roots']):
+            if not math.isclose(r, 1., rel_tol=2.e-4):
+                raise ValueError('Strength surface disagrees with saved likelihood root')
+        return dict(mass_gev=row['mass_gev'], epsilon=epsilon, mode=row['mode'], r=r)
+    with ThreadPoolExecutor(max_workers=4) as workers:
+        return list(workers.map(evaluate, tasks))
+
+
 def strength_surface(records, mode, bins=220):
-    """Interpolate log(r) inside the positive-anchor convex hull only."""
-    from scipy.interpolate import LinearNDInterpolator
+    """Interpolate adjacent mass columns only over their shared epsilon support."""
     rows = [r for r in records if r['mode'] == mode]
-    points = np.array([[math.log10(r['mass_gev']), math.log10(r['epsilon'])]
-                       for r in rows])
-    values = np.log10([r['r'] for r in rows])
-    if not np.isfinite(values).all():
-        raise ValueError('Signal-strength anchors must have finite positive r')
+    masses = sorted({r['mass_gev'] for r in rows})
     all_points = np.array([[r['mass_gev'], r['epsilon']] for r in records])
     edges = [np.geomspace(all_points[:, i].min(), all_points[:, i].max(), bins+1)
              for i in range(2)]
     centres = [np.sqrt(e[:-1]*e[1:]) for e in edges]
-    xx, yy = np.meshgrid(*[np.log10(c) for c in centres])
-    surface = LinearNDInterpolator(points, values)(xx, yy)
+    log_epsilon = np.log10(centres[1])
+    columns = []
+    for mass in masses:
+        local = sorted((r for r in rows if r['mass_gev']==mass), key=lambda r:r['epsilon'])
+        values = np.log10([r['r'] for r in local])
+        if not np.isfinite(values).all():
+            raise ValueError('Signal-strength values must have finite positive r')
+        columns.append(np.interp(log_epsilon, np.log10([r['epsilon'] for r in local]),
+                                 values, left=np.nan, right=np.nan))
+    surface = np.full((bins, bins), np.nan)
+    for ix, mass in enumerate(centres[0]):
+        right = int(np.searchsorted(masses, mass))
+        if right==0 or right==len(masses):
+            continue
+        left = right-1
+        fraction = math.log(mass/masses[left])/math.log(masses[right]/masses[left])
+        surface[:, ix] = (1-fraction)*columns[left]+fraction*columns[right]
     return edges, centres, surface
 
 
 def draw_root_strength_map(report, output):
     """ROOT COLZ display and masked r=1 contours from evaluated anchors.
 
-    Display interpolation is distinct from the likelihood interpolation used
-    for the limit curves. No extrapolation beyond the anchor hull is implied.
+    The epsilon columns use the same likelihood as the limit curves. Mass
+    interpolation is restricted to adjacent columns with common scan support.
     """
     import ROOT
     from array import array
@@ -455,7 +495,7 @@ def draw_root_strength_map(report, output):
     keep = []
     contour_counts = {}
     for index, mode in enumerate(('background', 'zero_background'), 1):
-        edges, centres, surface = strength_surface(report['records'], mode)
+        edges, centres, surface = strength_surface(report.get('surface_records', report['records']), mode)
         title = 'SM background' if mode == 'background' else 'Zero background'
         hist = ROOT.TH2D('r_'+mode, title+";m_{A'} [GeV];Kinetic mixing #epsilon;r",
                          len(edges[0])-1, array('d', edges[0]),
@@ -497,7 +537,7 @@ def draw_root_strength_map(report, output):
         markers.SetMarkerSize(.35); markers.Draw('P SAME'); markers.Write()
         label = ROOT.TLatex(); label.SetNDC(); label.SetTextSize(.028)
         label.DrawLatex(.13, .09, 'Black: r = 1; dots: evaluated anchors')
-        label.DrawLatex(.13, .05, 'Log interpolation; blank: outside anchor support')
+        label.DrawLatex(.13, .05, 'Likelihood scan; blank: outside shared support')
         hist.Write(); mask.Write()
         keep.extend([hist, mask, markers, label]+graphs)
         contour_counts[mode] = len(graphs)
@@ -506,8 +546,9 @@ def draw_root_strength_map(report, output):
     label.DrawLatex(.12, .975, 'Both-Both, 90% CLs, '+str(report['luminosity_pb']/1000)+' fb^{-1}')
     ROOT.gStyle.SetPaperSize(26., 13.)
     canvas.SaveAs(str(target)); canvas.Write()
-    metadata = dict(interpolation='linear log10(r) in log10(mass), log10(epsilon)',
-                    extrapolation=False, blank_bins='Outside positive-anchor convex hull',
+    metadata = dict(interpolation='Saved template likelihood along epsilon; log interpolation between adjacent mass columns',
+                    extrapolation='Only qualified prompt continuation from the saved scan; no mass extrapolation',
+                    blank_bins='Outside common scan support of adjacent generated masses',
                     contour='r=1 on the interpolated surface; no contours against blank bins',
                     contour_segments=contour_counts,
                     snapshot_sha256=report['snapshot_sha256'])
