@@ -12,7 +12,7 @@ import numpy as np
 ANALYSIS=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ANALYSIS/'utils'),str(ANALYSIS/'bin')]
 from shift_dp_limits_refresh import (mass_fingerprint,qualify_rate,qualify_row,select_signals,
-                                    same_scan_support,passing_event_statistics,settings,check_pdfs)
+                                    same_scan_support,passing_event_statistics,settings,check_pdfs,scan_generated_points)
 from shift_limits_current_plots import comparison_figure_directory
 from shift_dp_progress_plots import with_retained_statistics
 
@@ -215,6 +215,20 @@ class RefreshInputsTest(unittest.TestCase):
                 self.assertEqual(len(check_pdfs(output)),10)
                 (output/'signal_strength_map.pdf').unlink()
                 with self.assertRaisesRegex(ValueError,'signal_strength_map.pdf'):check_pdfs(output)
+
+    def test_scan_fits_generated_points_only(self):
+        import json
+        with tempfile.TemporaryDirectory() as temporary:
+            output=Path(temporary);(output/'snapshot.json').write_text('{}')
+            calls=[]
+            model=SimpleNamespace(output=output,signals={5.:[dict(epsilon=.001),dict(epsilon=.01)]},
+                q=lambda m,e,c,mode:calls.append((m,e,mode)) or 1.)
+            config=SimpleNamespace(background_modes=['background','zero_background'],primary_channel='Both-Both')
+            scan_generated_points(config,model)
+            self.assertEqual({e for m,e,mode in calls},{.001,.01})
+            self.assertEqual(len(calls),4)
+            report=json.loads((output/'scan.json').read_text())
+            self.assertTrue(all(row['roots']==[] for row in report['records']))
 
 
 if __name__=='__main__':unittest.main()

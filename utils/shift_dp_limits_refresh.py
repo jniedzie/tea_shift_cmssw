@@ -358,17 +358,22 @@ def render(config, model, legacy, before, output, cutoff, before_event_statistic
     from shift_limits_current_plots import draw_original_comparisons, draw_model_update, draw_inputs
     from shift_dp_progress_plots import (draw_limits,draw_snapshot_statistics,
                                          draw_signal_strength_map,with_retained_statistics)
+    progress = dict(signal_strength=draw_signal_strength_map(output,output,reference_directory=legacy))
+    from shift_dp_progress_plots import evaluated_strength_grid
+    previous_strength = dict(records=evaluated_strength_grid(legacy)[2],
+                             snapshot_sha256=digest(legacy/'snapshot.json'))
+    write(output/'previous_signal_strength.json', previous_strength)
     reference = output / 'legacy_reference'
-    reference.mkdir()
+    reference.mkdir(exist_ok=True)
     for name in ('snapshot.json', 'scan.json'):
         shutil.copy2(legacy / name, reference / name)
     notes = [
         '0.3 fb^-1, Both-Both; no BDT/additional cuts; trigger efficiency and scale factors are 1.',
-        'Grey: previous MC; epsilon > 0.1 is extrapolated. New model: qualified SensCalc plus MSHT20 NNLO anchors.',
+        'Grey: previous MC grid. New model: qualified SensCalc plus MSHT20 NNLO grid. Both interpolate fitted log(r).',
         'Catalog cutoff: ' + cutoff + '. Missing lifetimes and support endpoints are not physical exclusion edges.',
         'Independent 30% signal/background normalization uncertainties; finite-MC uncertainty omitted from these matched curves.',
         'Provisional 2% mass resolution. Literal SM histogram bins; no invented background tail or interpolation.',
-        'Pheno SHIFT: 30 fb^-1. Most reference curves: 90% CL; FCC: 95% CL. Only masses with generated-anchor brackets enter the continuous curves.']
+        'Pheno SHIFT: 30 fb^-1. Most reference curves: 90% CL; FCC: 95% CL. Contours interpolate per-point log(r) in log(mass), log(epsilon); no template morphing or extrapolation.']
     for modes in [('background', 'zero_background'), ('background',), ('zero_background',)]:
         old = copy.copy(config)
         old.output_path = str(reference)
@@ -376,7 +381,8 @@ def render(config, model, legacy, before, output, cutoff, before_event_statistic
         old.epsilon_max = 1.
         old.plot_omitted_masses_gev = (1.5,)
         old.signal_model_label = 'Previous DY (NNPDF)'
-        old.include_prompt_reference_extrapolation = True
+        old.include_prompt_reference_extrapolation = False
+        old.strength_report = previous_strength
         old.comparison_legend_fontsize = 10
         old.comparison_mode_styles = [
             ('background', (.5, .5, .5), ': background', True),
@@ -388,9 +394,8 @@ def render(config, model, legacy, before, output, cutoff, before_event_statistic
         current.background_modes = modes
         draw_model_update(current, model, reference)
     draw_inputs(config, model)
-    progress=draw_limits(before, legacy, output, output)
+    progress['limits']=draw_limits(before, legacy, output, output)
     progress['zoomed_limits']=draw_limits(before,legacy,output,output,zoom=True)
-    progress['signal_strength']=draw_signal_strength_map(output,output,reference_directory=legacy)
     current_statistics=output/'event_statistics.json'
     retained_statistics=legacy/'event_statistics.json'
     if retained_statistics.exists():
@@ -420,8 +425,25 @@ def check_pdfs(output):
     return records
 
 
+def scan_generated_points(config, model):
+    """Record likelihood checks only at the generated signal hypotheses."""
+    records = []
+    for mass, anchors in sorted(model.signals.items()):
+        epsilons = [r['epsilon'] for r in anchors]
+        for mode in config.background_modes:
+            records.append(dict(mass_gev=mass, mode=mode, channel=config.primary_channel,
+                confidence_level=.9, roots=[], excluded_intervals=[],
+                epsilon_support=[min(epsilons),max(epsilons)],
+                upper_prompt_continuation=False, epsilon_grid=epsilons,
+                q_grid=[model.q(mass,e,config.primary_channel,mode) for e in epsilons],
+                include_mc_stat_uncertainties=False, source='generated_hypotheses_only'))
+    write(model.output/'scan.json', dict(records=records,
+        snapshot_sha256=digest(model.output/'snapshot.json'),
+        include_mc_stat_uncertainties=False, interpolation='None; generated hypotheses only'))
+
+
 def refresh(args):
-    from shift_limits_current import Model, snapshot, scan
+    from shift_limits_current import Model, snapshot
     started = time.monotonic()
     reference = args.reference.resolve()
     baseline = read(reference / 'snapshot.json')
@@ -480,13 +502,8 @@ def refresh(args):
             for key in ('mass_gev', 'epsilon', 'proper_ctau_mm'):
                 if not math.isclose(source[key], row[key], rel_tol=1.e-10):
                     raise ValueError('Ordinary snapshot reader changed the catalog physical point')
-        reuse_reference=reference
-        if args.reuse_scan:
-            candidate=args.reuse_scan.resolve()
-            if (candidate/'refresh_status.json').is_file() and read(candidate/'refresh_status.json').get('complete'):
-                reuse_reference=candidate
-        reuse = reuse_scan(reuse_reference, model, config)
-        scan(config)
+        reuse = dict(method='Independent fits at generated points; no interpolated-template scans reused')
+        scan_generated_points(config, model)
         diagnostics=finite_mc_diagnostics(config,model)
         plots = render(config, model, args.legacy.resolve(), args.before.resolve(), output,
             catalog['updated_utc'],args.before_event_statistics.resolve())
@@ -511,7 +528,7 @@ def refresh(args):
             'No old NNPDF detector response is used for the revised benchmark. Grey curves retain the explicitly named older model.\n'
             'Each signal retains its qualified epsilon domain. Photon continuations above 0.01 require the explicit experimental approximation; v1 DY remains capped at 0.001.\n\n'
             '`catalog_snapshot.json`, `signal_input_inventory.json`, `snapshot.json`, `histograms.npz`, `scan.json` and\n'
-            '`refresh_status.json` preserve inputs, full original exposure, variances, qualification and exact cached-fit reuse.\n')
+            '`refresh_status.json` preserve inputs, full original exposure, variances and qualification. Limits interpolate fitted log(r) on the generated grid, never signal templates.\n')
     print(json.dumps(dict(complete=True, output=str(output), signals=len(selected),
                           elapsed_seconds=report['elapsed_seconds'], catalog_cutoff_utc=catalog['updated_utc'])), flush=True)
 

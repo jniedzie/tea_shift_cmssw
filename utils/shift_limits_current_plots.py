@@ -241,6 +241,23 @@ def draw_original_comparisons(config,model):
         rows=boundaries(model,level,config.primary_channel,omitted_masses);counts=[]
         for mode,color,label,dashed in mode_styles:
             if mode not in config.background_modes:continue
+            strength = getattr(config, 'strength_report', None)
+            if strength is not None:
+                from shift_dp_progress_plots import strength_contour_segments
+                segments = strength_contour_segments(strength, mode)
+                for segment in segments:
+                    shape = page.new_shape()
+                    shape.draw_polyline([point(mass, epsilon) for mass, epsilon in segment])
+                    shape.finish(color=color, width=2.5,
+                                 dashes='[6 3] 0' if dashed else None, closePath=False)
+                    shape.commit()
+                y=shift_legend_y+(40 if mode=='zero_background' else 20)
+                page.draw_line((640,y),(665,y),color=color,width=2.5,
+                               dashes='[6 3] 0' if dashed else None)
+                luminosity_label(page,(672,y+4),f"{getattr(config,'signal_model_label','SHIFT')}, {config.luminosity/1000:g} fb",label,color,fontsize=getattr(config,'comparison_legend_fontsize',12))
+                counts.append(dict(mode=mode, contour_segments=len(segments),
+                                   interpolation='Per-point log(r) triangulation; no template morphing'))
+                continue
             tested=[]  # Unsupported single-epsilon tests are omitted from contours.
             nodes=sorted((r for r in rows if r['mode']==mode and r['excluded_intervals'] and not single_lifetime(r)),key=lambda r:r['mass_gev'])
             if not nodes:continue
@@ -336,13 +353,14 @@ def draw_model_update(config, model, reference_directory):
         axis=figure.add_axes([left/width,1-(bottom+25)/height,(right-left)/width,(bottom-top)/height])
         axis.set(xscale='log',yscale='log',xlim=(1.e-3,1.e3),ylim=(1.e-10,1.))
         axis.set_axis_off()
-        rows=boundaries(model,level,config.primary_channel,())
+        strength=json.loads((model.output/'signal_strength_map.json').read_text())
+        from shift_dp_progress_plots import draw_strength_contours
+        rows=[]
         styles=[('background','#b43c88','New model: QCD + DY + J/psi'),
                 ('zero_background','#166db0','New model: zero background')]
         for mode,color,label in styles:
             if mode in config.background_modes:
-                draw_regions(axis,rows,mode,color,label,fill=True,linewidth=2.1,
-                             point_marker_size=52 if mode=='background' else 24)
+                draw_strength_contours(axis,strength,mode,color,label,lw=2.1)
         import io
         buffer=io.BytesIO();figure.savefig(buffer,format='pdf',transparent=True);plt.close(figure)
         layer=fitz.open(stream=buffer.getvalue(),filetype='pdf')
@@ -362,7 +380,7 @@ def draw_model_update(config, model, reference_directory):
             reference_sha256=digest(base),new_model_scan_sha256=digest(model.output/'scan.json'),
             tested_support=[{k:row[k] for k in ('mass_gev','mode','epsilon_support','excluded_intervals')}for row in rows]))
     save_json(model.output/f'model_update{suffix}_provenance.json',dict(figures=receipts,
-        new_model_support='Literal new scan support only; no old-DY lifetime interpolation',
+        new_model_support='Per-point log(r) triangulation inside the generated grid hull; no template morphing',
         reference='Older signal prescription, retained as an explicitly named comparison'))
 
 

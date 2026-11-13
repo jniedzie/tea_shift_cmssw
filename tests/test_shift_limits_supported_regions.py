@@ -8,7 +8,7 @@ ANALYSIS=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ANALYSIS/'bin'),str(ANALYSIS/'utils')]
 from shift_limits_current_plots import draw_regions, supported_contour_rows
 from shift_limits_profile import expected_limit, profile_q
-from shift_dp_progress_plots import signal_strength_contours, strength_surface
+from shift_dp_progress_plots import signal_strength_contours, strength_surface, strength_contour_segments, strength_interpolator
 
 
 class RecordingAxis:
@@ -104,6 +104,24 @@ class StrengthSurfaceTest(unittest.TestCase):
         self.assertTrue(finite.any())
         self.assertTrue((~finite).any())
         np.testing.assert_allclose(z[finite], (xx+yy)[finite], atol=1.e-12)
+
+    def test_single_point_mass_column_does_not_blank_neighbouring_hull(self):
+        import numpy as np
+        rows = [dict(mode='background', mass_gev=m, epsilon=e, r=e/1.e-4)
+                for m,e in [(1.,1.e-5),(1.,1.e-3),(10.,1.e-5),(10.,1.e-3),(3.,1.e-4)]]
+        _, _, z = strength_surface(rows, 'background', bins=30)
+        self.assertTrue(np.isfinite(z).all())
+        segments = strength_contour_segments(dict(records=rows), 'background')
+        self.assertEqual(len(segments), 1)
+        field, _, _ = strength_interpolator(rows, 'background')
+        np.testing.assert_allclose(field(np.log10(segments[0])), 0., atol=1.e-12)
+        np.testing.assert_allclose(segments[0][:, 1], 1.e-4, rtol=.002)
+
+    def test_zero_response_is_not_a_finite_interpolation_vertex(self):
+        rows = [dict(mode='background', mass_gev=m, epsilon=e, r=r)
+                for m,e,r in [(1.,.001,1.),(10.,.001,0.),(1.,.1,3.)]]
+        with self.assertRaises(ValueError):
+            strength_surface(rows, 'background')
 
 
 if __name__ == '__main__':

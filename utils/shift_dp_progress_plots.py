@@ -84,15 +84,12 @@ def draw_limits(before, legacy, after, output, zoom=False):
     directories = [before, legacy, after]
     loaded = [checked_snapshot(path) for path in directories]
     closure = background_closure([item[0] for item in loaded])
-    rows = [supported_contour_rows(selected_rows(scan), snapshot['signals']) for snapshot,scan in loaded]
-    # Keep the older full-range reference, whose saved prompt continuation goes
-    # beyond its generated anchors. It is explicitly distinct from the update.
-    previous_reference=[]
-    for row in selected_rows(loaded[1][1]):
-        if row['upper_prompt_continuation'] and row['excluded_intervals'] and row['roots']:
-            previous_reference.append(row)
-        elif any(row['mass_gev']==r['mass_gev'] and row['mode']==r['mode'] for r in rows[1]):
-            previous_reference.append(row)
+    current_strength = read_json(after/'signal_strength_map.json')
+    previous_path = after/'previous_signal_strength.json'
+    previous_strength = (read_json(previous_path) if previous_path.exists() else
+        dict(records=evaluated_strength_grid(legacy)[2], snapshot_sha256=digest(legacy/'snapshot.json')))
+    if previous_strength['snapshot_sha256'] != digest(legacy/'snapshot.json'):
+        raise ValueError('Previous strength grid belongs to another signal snapshot')
     plt = plotting()
     figure, axes = plt.subplots(1, 2, figsize=(13.5, 6.2), sharex=True, sharey=True)
     colors = ['#b33636', '#176b9c']
@@ -105,10 +102,10 @@ def draw_limits(before, legacy, after, output, zoom=False):
         points = np.asarray(pheno[0]['points'])
         axis.plot(points[:, 0], points[:, 1], color='#168c76', lw=1.6,
                   label=r'Pheno SHIFT reference: 30 fb$^{-1}$')
-        draw_regions(axis, previous_reference, mode, '#929292', 'Previous prescription, including prompt extrapolation',
-                     fill=False, linewidth=2.2, linestyle='--')
-        draw_regions(axis, rows[2], mode, color, 'Updated prescription: qualified generated anchors',
-                     fill=False, linewidth=2.6, linestyle='-', point_marker_size=38)
+        draw_strength_contours(axis, previous_strength, mode, '#929292',
+                               'Previous prescription: generated grid', lw=2.2, linestyle='--')
+        draw_strength_contours(axis, current_strength, mode, color,
+                               'Updated prescription: generated grid', lw=2.6)
         axis.axhspan(.1, 1, color='#eeeeee', zorder=-10)
         axis.set(xscale='log', yscale='log', xlim=(.2, 100), ylim=((1.e-6, .3) if zoom else (1.e-7, 1)),
                  xlabel=r'$m_{A\prime}$ [GeV]',
@@ -119,9 +116,9 @@ def draw_limits(before, legacy, after, output, zoom=False):
     figure.text(.035, .02,
                 'Matched assumptions: Both-Both, same 19 SM templates, no BDT/additional cuts; trigger/SFs = 1.\n'
                 'Provisional 2% mass resolution; independent 30% signal/background normalization uncertainties; finite-MC uncertainty omitted.\n'
-                'Grey: previous signal prescription, with epsilon-squared rate extrapolation of prompt templates beyond generated epsilon.\n'
-                'Coloured: source-specific qualified epsilon domains; masses without a generated-anchor bracket are omitted. Endpoints are not physical thresholds.\n'
-                'Mass interpolation connects retained points. Grey band: epsilon > 0.1 extrapolation. No diamonds or vertical closures.',
+                'Grey: previous prescription; coloured: updated prescription. Both use independently fitted generated points.\n'
+                'All current contours: linear log(r) interpolation in log(mass), log(epsilon), inside each generated grid hull.\n'
+                'No template morphing or extrapolation. Sparse-MC and wide-triangle contours are provisional; blank support is unknown.',
                 fontsize=8.1, va='bottom')
     figure.tight_layout(rect=(0, .20, 1, .94))
     destination = output / ('limits_before_after_zoom.pdf' if zoom else 'limits_before_after.pdf')
@@ -129,10 +126,11 @@ def draw_limits(before, legacy, after, output, zoom=False):
     plt.close(figure)
     return dict(inputs=[dict(directory=str(path), snapshot_sha256=digest(path / 'snapshot.json'),
                              scan_sha256=digest(path / 'scan.json')) for path in directories],
-                displayed_reference_includes_saved_prompt_extrapolation=True,
+                displayed_reference_includes_saved_prompt_extrapolation=False,
                 omitted_historical_curve=str(before),
                 matched_backgrounds=closure, confidence_level=.9, channel='Both-Both',
-                luminosity_pb=loaded[0][0]['luminosity_pb'], fits_rerun=False,
+                luminosity_pb=loaded[0][0]['luminosity_pb'], fits_rerun=True,
+                method='Per-point fitted r, shared logarithmic triangulation; no template morphing',
                 include_mc_stat_uncertainties=False,
                 pheno_reference=dict(path=str(before / 'projection_inventory.json'),
                                      sha256=digest(before / 'projection_inventory.json'),
@@ -331,15 +329,13 @@ def signal_strength_contours(snapshot, scan):
     return supported_contour_rows(selected_rows(scan),snapshot['signals'])
 
 
-def draw_signal_strength_map(directory, output, confidence_level=.9, reference_directory=None):
-    """Evaluate r at generated anchors and render the interpolated ROOT map."""
-    import csv
+def evaluated_strength_grid(directory, confidence_level=.9):
+    """Fit only generated hypotheses; interpolation never changes a template."""
     from concurrent.futures import ThreadPoolExecutor
     from types import SimpleNamespace
     from shift_limits_current import Model
     from shift_limits_profile import expected_limit, profile_q
     snapshot, scan = checked_snapshot(directory)
-    supported_rows=signal_strength_contours(snapshot,scan)
     config = SimpleNamespace(output_path=str(directory), luminosity=snapshot['luminosity_pb'],
         categories=snapshot['categories'], primary_channel='Both-Both',
         response_anchors=tuple(r['name'].split('_', 1)[1] for r in snapshot['signals']),
@@ -384,6 +380,14 @@ def draw_signal_strength_map(directory, output, confidence_level=.9, reference_d
                  if math.isclose(epsilon,record['epsilon'],rel_tol=1.e-12)]
         if not matches or not all(math.isclose(q,record['q'],rel_tol=1.e-7,abs_tol=1.e-8) for q in matches):
             raise ValueError('Anchor does not reproduce saved exclusion scan: '+record['name'])
+    return snapshot, scan, records, model
+
+
+def draw_signal_strength_map(directory, output, confidence_level=.9, reference_directory=None):
+    import csv
+    snapshot, scan, records, model = evaluated_strength_grid(directory, confidence_level)
+    supported_rows = []  # Contours come exclusively from the fitted-r surface.
+    modes = ('background', 'zero_background')
     masses=sorted({r['mass_gev'] for r in snapshot['signals']})
     if reference_directory is not None:
         reference=read_json(reference_directory/'snapshot.json')
@@ -412,74 +416,60 @@ def draw_signal_strength_map(directory, output, confidence_level=.9, reference_d
     save_json(output/'signal_strength_map.json', report)
     with (output/'signal_strength_anchors.csv').open('w') as stream:
         writer=csv.DictWriter(stream, fieldnames=list(records[0]));writer.writeheader();writer.writerows(records)
-    report['surface_records'] = likelihood_strength_records(directory, confidence_level)
     report['figure'] = draw_root_strength_map(report, output)
     save_json(output/'signal_strength_map.json', report)
     return report
 
 
-def likelihood_strength_records(directory, confidence_level=.9):
-    """Evaluate r with the saved limit likelihood, including each saved root."""
-    from concurrent.futures import ThreadPoolExecutor
-    from types import SimpleNamespace
-    from shift_limits_current import Model
-    from shift_limits_profile import expected_limit
-    snapshot, scan = checked_snapshot(directory)
-    config = SimpleNamespace(output_path=str(directory), luminosity=snapshot['luminosity_pb'],
-        categories=snapshot['categories'], primary_channel='Both-Both',
-        include_mc_stat_uncertainties=False)
-    model = Model(config)
-    zero_limit = expected_limit(np.ones(1), np.zeros(1), confidence_level)[0]
-    tasks = [(row, epsilon) for row in selected_rows(scan)
-             for epsilon in sorted(set(row['epsilon_grid']+row['roots']))]
-    def evaluate(task):
-        row, epsilon = task
-        signal, background = model.cells(row['mass_gev'], epsilon, 'Both-Both', row['mode'])
-        total = float(signal.sum())
-        limit = zero_limit if row['mode']=='zero_background' else expected_limit(
-            signal/total, background, confidence_level)[0]
-        r = limit/total
-        if any(math.isclose(epsilon, root, rel_tol=1.e-10) for root in row['roots']):
-            if not math.isclose(r, 1., rel_tol=2.e-4):
-                raise ValueError('Strength surface disagrees with saved likelihood root')
-        return dict(mass_gev=row['mass_gev'], epsilon=epsilon, mode=row['mode'], r=r)
-    with ThreadPoolExecutor(max_workers=4) as workers:
-        return list(workers.map(evaluate, tasks))
+def strength_interpolator(records, mode):
+    """The shared fitted-r field in logarithmic physical coordinates."""
+    from scipy.interpolate import LinearNDInterpolator
+    rows = [r for r in records if r['mode'] == mode]
+    points = np.array([[math.log10(r['mass_gev']), math.log10(r['epsilon'])] for r in rows])
+    r = np.array([row['r'] for row in rows])
+    if not np.isfinite(r).all() or np.any(r<=0):
+        raise ValueError('Signal-strength anchors must have finite positive r')
+    values = np.log10(r)
+    return LinearNDInterpolator(points, values), points, values
 
 
 def strength_surface(records, mode, bins=220):
-    """Interpolate adjacent mass columns only over their shared epsilon support."""
-    rows = [r for r in records if r['mode'] == mode]
-    masses = sorted({r['mass_gev'] for r in rows})
+    """Sample the shared field for COLZ; never extrapolate outside its hull."""
+    interpolator, _, _ = strength_interpolator(records, mode)
     all_points = np.array([[r['mass_gev'], r['epsilon']] for r in records])
     edges = [np.geomspace(all_points[:, i].min(), all_points[:, i].max(), bins+1)
              for i in range(2)]
     centres = [np.sqrt(e[:-1]*e[1:]) for e in edges]
-    log_epsilon = np.log10(centres[1])
-    columns = []
-    for mass in masses:
-        local = sorted((r for r in rows if r['mass_gev']==mass), key=lambda r:r['epsilon'])
-        values = np.log10([r['r'] for r in local])
-        if not np.isfinite(values).all():
-            raise ValueError('Signal-strength values must have finite positive r')
-        columns.append(np.interp(log_epsilon, np.log10([r['epsilon'] for r in local]),
-                                 values, left=np.nan, right=np.nan))
-    surface = np.full((bins, bins), np.nan)
-    for ix, mass in enumerate(centres[0]):
-        right = int(np.searchsorted(masses, mass))
-        if right==0 or right==len(masses):
-            continue
-        left = right-1
-        fraction = math.log(mass/masses[left])/math.log(masses[right]/masses[left])
-        surface[:, ix] = (1-fraction)*columns[left]+fraction*columns[right]
-    return edges, centres, surface
+    xx, yy = np.meshgrid(*[np.log10(c) for c in centres])
+    return edges, centres, interpolator(xx, yy)
+
+
+def strength_contour_segments(report, mode):
+    """Extract r=1 on the actual triangles, avoiding raster/hull artifacts."""
+    interpolator, points, values = strength_interpolator(report['records'], mode)
+    if values.min()>0 or values.max()<0:
+        return []
+    from matplotlib.tri import Triangulation
+    triangles = Triangulation(points[:, 0], points[:, 1], interpolator.tri.simplices)
+    plt = plotting()
+    figure, axis = plt.subplots()
+    contour = axis.tricontour(triangles, values, levels=[0.])
+    segments = [10.**segment.copy() for segment in contour.allsegs[0] if len(segment)>1]
+    plt.close(figure)
+    return segments
+
+
+def draw_strength_contours(axis, report, mode, color, label, **style):
+    for i, segment in enumerate(strength_contour_segments(report, mode)):
+        axis.plot(segment[:, 0], segment[:, 1], color=color,
+                  label=label if i==0 else None, **style)
 
 
 def draw_root_strength_map(report, output):
     """ROOT COLZ display and masked r=1 contours from evaluated anchors.
 
-    The epsilon columns use the same likelihood as the limit curves. Mass
-    interpolation is restricted to adjacent columns with common scan support.
+    Likelihoods are evaluated only at generated points. All updated figures
+    use the same triangulated strength surface and its r=1 contour.
     """
     import ROOT
     from array import array
@@ -495,7 +485,7 @@ def draw_root_strength_map(report, output):
     keep = []
     contour_counts = {}
     for index, mode in enumerate(('background', 'zero_background'), 1):
-        edges, centres, surface = strength_surface(report.get('surface_records', report['records']), mode)
+        edges, centres, surface = strength_surface(report['records'], mode)
         title = 'SM background' if mode == 'background' else 'Zero background'
         hist = ROOT.TH2D('r_'+mode, title+";m_{A'} [GeV];Kinetic mixing #epsilon;r",
                          len(edges[0])-1, array('d', edges[0]),
@@ -515,11 +505,7 @@ def draw_root_strength_map(report, output):
         hist.GetYaxis().SetTitleOffset(1.4)
         hist.Draw('COLZ')
         # A masked contour avoids spurious r=1 edges against empty ROOT bins.
-        plt = plotting()
-        fig, axis = plt.subplots()
-        contour = axis.contour(centres[0], centres[1],
-                               np.ma.masked_invalid(surface), levels=[0.])
-        segments = contour.allsegs[0]
+        segments = strength_contour_segments(report, mode)
         graphs = []
         for segment in segments:
             if len(segment) < 2:
@@ -529,15 +515,22 @@ def draw_root_strength_map(report, output):
             graph.SetName('r1_'+mode+'_'+str(len(graphs)))
             graph.SetLineWidth(3); graph.SetLineColor(ROOT.kBlack)
             graph.Draw('L SAME'); graph.Write(); graphs.append(graph)
-        plt.close(fig)
         anchors = [r for r in report['records'] if r['mode'] == mode]
         markers = ROOT.TGraph(len(anchors), array('d', [r['mass_gev'] for r in anchors]),
                              array('d', [r['epsilon'] for r in anchors]))
         markers.SetName('anchors_'+mode); markers.SetMarkerStyle(20)
         markers.SetMarkerSize(.35); markers.Draw('P SAME'); markers.Write()
         label = ROOT.TLatex(); label.SetNDC(); label.SetTextSize(.028)
-        label.DrawLatex(.13, .09, 'Black: r = 1; dots: evaluated anchors')
-        label.DrawLatex(.13, .05, 'Likelihood scan; blank: outside shared support')
+        empty = [r for r in report.get('zero_observed_mc', [])
+                 if r.get('unused_reason', '').startswith('Zero observed')]
+        unknown = ROOT.TGraph(len(empty), array('d', [r['mass_gev'] for r in empty]),
+                              array('d', [r['epsilon'] for r in empty]))
+        unknown.SetName('unknown_MC_'+mode); unknown.SetMarkerStyle(5)
+        unknown.SetMarkerColor(ROOT.kGray+2); unknown.SetMarkerSize(.7)
+        unknown.Draw('P SAME'); unknown.Write(); keep.append(unknown)
+        label.SetTextSize(.024)
+        label.DrawLatex(.13, .09, 'Black: r = 1; dots: anchors; grey x: empty MC')
+        label.DrawLatex(.13, .05, 'Log(r) interpolation; blank: outside grid hull')
         hist.Write(); mask.Write()
         keep.extend([hist, mask, markers, label]+graphs)
         contour_counts[mode] = len(graphs)
@@ -546,9 +539,9 @@ def draw_root_strength_map(report, output):
     label.DrawLatex(.12, .975, 'Both-Both, 90% CLs, '+str(report['luminosity_pb']/1000)+' fb^{-1}')
     ROOT.gStyle.SetPaperSize(26., 13.)
     canvas.SaveAs(str(target)); canvas.Write()
-    metadata = dict(interpolation='Saved template likelihood along epsilon; log interpolation between adjacent mass columns',
-                    extrapolation='Only qualified prompt continuation from the saved scan; no mass extrapolation',
-                    blank_bins='Outside common scan support of adjacent generated masses',
+    metadata = dict(interpolation='Per-point likelihood fits, then linear log10(r) on the log10(mass), log10(epsilon) triangulation',
+                    extrapolation=False,
+                    blank_bins='Outside the positive-response generated grid convex hull',
                     contour='r=1 on the interpolated surface; no contours against blank bins',
                     contour_segments=contour_counts,
                     snapshot_sha256=report['snapshot_sha256'])
@@ -572,6 +565,8 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     arguments = parser.parse_args()
     arguments.output.mkdir(parents=True, exist_ok=True)
+    if arguments.signal_strength_map:
+        draw_signal_strength_map(arguments.after.resolve(), arguments.output.resolve(), reference_directory=arguments.legacy.resolve())
     report = draw_limits(arguments.before.resolve(), arguments.legacy.resolve(),
                          arguments.after.resolve(), arguments.output.resolve(), zoom=arguments.zoom)
     if arguments.signal_strength_map:
