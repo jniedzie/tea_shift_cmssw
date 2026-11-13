@@ -412,7 +412,8 @@ def draw_signal_strength_map(directory, output, confidence_level=.9, reference_d
         snapshot_sha256=digest(directory/'snapshot.json'), scan_sha256=digest(directory/'scan.json'),
         include_mc_stat_uncertainties=False, mass_interpolation=False,
         unknown_response_masses=excluded_masses, zero_observed_mc=model.unused_signals,
-        records=records, coverage=gaps)
+        records=records, coverage=gaps,
+        physical_domain=dict(mass_boundary_gev=12., below_maximum_epsilon=.03, above_maximum_epsilon=.1))
     save_json(output/'signal_strength_map.json', report)
     with (output/'signal_strength_anchors.csv').open('w') as stream:
         writer=csv.DictWriter(stream, fieldnames=list(records[0]));writer.writeheader();writer.writerows(records)
@@ -433,7 +434,7 @@ def strength_interpolator(records, mode):
     return LinearNDInterpolator(points, values), points, values
 
 
-def strength_surface(records, mode, bins=220):
+def strength_surface(records, mode, bins=220, physical_domain=None):
     """Sample the shared field for COLZ; never extrapolate outside its hull."""
     interpolator, _, _ = strength_interpolator(records, mode)
     all_points = np.array([[r['mass_gev'], r['epsilon']] for r in records])
@@ -441,7 +442,41 @@ def strength_surface(records, mode, bins=220):
              for i in range(2)]
     centres = [np.sqrt(e[:-1]*e[1:]) for e in edges]
     xx, yy = np.meshgrid(*[np.log10(c) for c in centres])
-    return edges, centres, interpolator(xx, yy)
+    surface = interpolator(xx, yy)
+    if physical_domain:
+        cap = np.where(10.**xx < physical_domain['mass_boundary_gev'],
+                       physical_domain['below_maximum_epsilon'], physical_domain['above_maximum_epsilon'])
+        surface[10.**yy > cap] = np.nan
+    return edges, centres, surface
+
+
+def clip_strength_domain(segments, domain):
+    """Clip log-linear contour edges to the pinned model's epsilon domains."""
+    if not domain:
+        return segments
+    xm = math.log10(domain['mass_boundary_gev'])
+    yl = math.log10(domain['below_maximum_epsilon'])
+    yh = math.log10(domain['above_maximum_epsilon'])
+    output = []
+    for segment in segments:
+        active = []
+        for left, right in zip(np.log10(segment[:-1]), np.log10(segment[1:])):
+            delta = right-left
+            cuts = sorted({0., 1.} | {float((edge-left[axis])/delta[axis])
+                for axis,edge in [(0,xm),(1,yl),(1,yh)] if delta[axis]!=0
+                and 0 < (edge-left[axis])/delta[axis] < 1})
+            for a,b in zip(cuts,cuts[1:]):
+                middle = left+(a+b)/2*delta
+                if middle[1] <= (yl if middle[0]<xm else yh)+1.e-12:
+                    start, end = left+a*delta, left+b*delta
+                    if active and not np.allclose(active[-1],start,rtol=0,atol=1.e-10):
+                        output.append(10.**np.asarray(active)); active=[]
+                    if not active:active.append(start)
+                    active.append(end)
+                elif active:
+                    output.append(10.**np.asarray(active)); active=[]
+        if active:output.append(10.**np.asarray(active))
+    return output
 
 
 def strength_contour_segments(report, mode):
@@ -456,7 +491,7 @@ def strength_contour_segments(report, mode):
     contour = axis.tricontour(triangles, values, levels=[0.])
     segments = [10.**segment.copy() for segment in contour.allsegs[0] if len(segment)>1]
     plt.close(figure)
-    return segments
+    return clip_strength_domain(segments, report.get('physical_domain'))
 
 
 def draw_strength_contours(axis, report, mode, color, label, **style):
@@ -485,7 +520,7 @@ def draw_root_strength_map(report, output):
     keep = []
     contour_counts = {}
     for index, mode in enumerate(('background', 'zero_background'), 1):
-        edges, centres, surface = strength_surface(report['records'], mode)
+        edges, centres, surface = strength_surface(report['records'], mode, physical_domain=report.get('physical_domain'))
         title = 'SM background' if mode == 'background' else 'Zero background'
         hist = ROOT.TH2D('r_'+mode, title+";m_{A'} [GeV];Kinetic mixing #epsilon;r",
                          len(edges[0])-1, array('d', edges[0]),
@@ -541,7 +576,8 @@ def draw_root_strength_map(report, output):
     canvas.SaveAs(str(target)); canvas.Write()
     metadata = dict(interpolation='Per-point likelihood fits, then linear log10(r) on the log10(mass), log10(epsilon) triangulation',
                     extrapolation=False,
-                    blank_bins='Outside the positive-response generated grid convex hull',
+                    blank_bins='Outside the grid hull or pinned physical epsilon domain',
+                    physical_domain=report.get('physical_domain'),
                     contour='r=1 on the interpolated surface; no contours against blank bins',
                     contour_segments=contour_counts,
                     snapshot_sha256=report['snapshot_sha256'])

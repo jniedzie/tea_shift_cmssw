@@ -8,7 +8,7 @@ ANALYSIS=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ANALYSIS/'bin'),str(ANALYSIS/'utils')]
 from shift_limits_current_plots import draw_regions, supported_contour_rows
 from shift_limits_profile import expected_limit, profile_q
-from shift_dp_progress_plots import signal_strength_contours, strength_surface, strength_contour_segments, strength_interpolator
+from shift_dp_progress_plots import signal_strength_contours, strength_surface, strength_contour_segments, strength_interpolator, clip_strength_domain
 
 
 class RecordingAxis:
@@ -122,6 +122,14 @@ class StrengthSurfaceTest(unittest.TestCase):
                 for m,e,r in [(1.,.001,1.),(10.,.001,0.),(1.,.1,3.)]]
         with self.assertRaises(ValueError):
             strength_surface(rows, 'background')
+
+    def test_contours_respect_model_domain_without_closing_support_edges(self):
+        import numpy as np
+        domain=dict(mass_boundary_gev=12.,below_maximum_epsilon=.03,above_maximum_epsilon=.1)
+        parts=clip_strength_domain([np.array([[5.,.02],[20.,.08]])],domain)
+        self.assertEqual(len(parts),2)
+        self.assertAlmostEqual(parts[0][-1,1],.03)
+        self.assertAlmostEqual(parts[1][0,0],12.)
 
 
 if __name__ == '__main__':
