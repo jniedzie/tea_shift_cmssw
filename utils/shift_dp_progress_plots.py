@@ -8,6 +8,7 @@ Legacy DY and qualified new-model support are deliberately shown separately.
 import argparse
 import hashlib
 import json
+import json
 import math
 from pathlib import Path
 import re
@@ -331,7 +332,7 @@ def signal_strength_contours(snapshot, scan):
 
 
 def draw_signal_strength_map(directory, output, confidence_level=.9, reference_directory=None):
-    """Evaluate r at generated anchors; never fill unsupported mass/epsilon gaps."""
+    """Evaluate r at generated anchors and render the interpolated ROOT map."""
     import csv
     from concurrent.futures import ThreadPoolExecutor
     from types import SimpleNamespace
@@ -411,53 +412,111 @@ def draw_signal_strength_map(directory, output, confidence_level=.9, reference_d
     save_json(output/'signal_strength_map.json', report)
     with (output/'signal_strength_anchors.csv').open('w') as stream:
         writer=csv.DictWriter(stream, fieldnames=list(records[0]));writer.writeheader();writer.writerows(records)
-    plt=plotting()
-    from matplotlib.colors import LogNorm
-    from matplotlib.lines import Line2D
-    positions={mass:i for i,mass in enumerate(masses)}
-    figure,axes=plt.subplots(1,2,figsize=(17,8),sharey=True)
-    norm=LogNorm(1.e-3,1.e3)
-    for axis,mode in zip(axes,modes):
-        selected=[r for r in records if r['mode']==mode]
-        for mass in masses:
-            local=sorted((r for r in selected if r['mass_gev']==mass),key=lambda r:r['epsilon'])
-            if len(local)>1:
-                axis.plot([positions[mass]]*len(local),[r['epsilon'] for r in local],
-                          color='#b0b0b0',lw=1,zorder=1)
-        scatter=axis.scatter([positions[r['mass_gev']] for r in selected],
-            [r['epsilon'] for r in selected],c=[r['r'] for r in selected],
-            norm=norm,cmap='coolwarm',s=95,edgecolors='black',linewidths=.4,zorder=3)
-        for r in selected:
-            axis.annotate(f"{r['r']:.2g}",(positions[r['mass_gev']],r['epsilon']),
-                          xytext=(5,3),textcoords='offset points',fontsize=6.3,zorder=4)
-        for row in model.unused_signals:
-            axis.scatter([positions[row['mass_gev']]],[row['epsilon']],marker='x',color='#777777',s=45)
-        for row in supported_rows:
-            if row['mode']!=mode:continue
-            for epsilon in row['roots']:
-                axis.plot(positions[row['mass_gev']],epsilon,marker='_',color='black',ms=17,mew=2.4,zorder=5)
-        axis.set(yscale='log',xlim=(-.6,len(masses)-.15),xticks=range(len(masses)),
-                 xlabel=r'$m_{A\prime}$ [GeV] (generated mass columns)',
-                 title='SM background' if mode=='background' else 'Zero background')
-        axis.set_xticklabels([f'{mass:g}' for mass in masses],rotation=60,ha='right')
-    axes[0].set_ylabel(r'Kinetic mixing $\epsilon$')
-    figure.suptitle(r'Expected signal-strength limit $r$: Both-Both, 90% CLs, 0.3 fb$^{-1}$',fontsize=15)
-    figure.subplots_adjust(left=.07,right=.90,bottom=.29,top=.90,wspace=.08)
-    colorbar_axis=figure.add_axes([.925,.26,.012,.60])
-    figure.colorbar(scatter,cax=colorbar_axis,extend='both',label=r'$r$ (blue: $r<1$, red: $r>1$)')
-    figure.legend(handles=[Line2D([],[],marker='o',color='none',markerfacecolor='white',markeredgecolor='black',label='Generated positive-response anchor; label = r'),
-        Line2D([],[],marker='_',color='none',markeredgecolor='black',markersize=17,label='Interpolated r = 1 within generated epsilon support'),
-        Line2D([],[],marker='x',color='#777',linestyle='none',label='Zero observed MC response: unknown')],
-        loc='lower center',bbox_to_anchor=(.5,.15),ncol=3,frameon=False,fontsize=8)
-    figure.text(.035,.025,
-        'Blank space = no evaluated anchor; grey vertical lines show available lifetime spans, not an exclusion contour. No interpolation between masses.\n'
-        'Blue anchors are excluded at their tested epsilon. Without an r > 1 anchor below, the lower boundary remains unbracketed.\n'
-        'Same likelihood, 19 SM templates, provisional mass resolution and 30% normalization uncertainties as the saved limit scan.\n'
-        'Finite-MC and source-collision covariance omitted; sparse-MC values are provisional. Counts are events normalized to lumi, not raw MC events.',fontsize=8.5)
-    target=output/'signal_strength_map.pdf';figure.savefig(target);plt.close(figure)
-    report['figure']=dict(path=str(target),sha256=digest(target))
-    save_json(output/'signal_strength_map.json',report)
+    report['figure'] = draw_root_strength_map(report, output)
+    save_json(output/'signal_strength_map.json', report)
     return report
+
+
+def strength_surface(records, mode, bins=220):
+    """Interpolate log(r) inside the positive-anchor convex hull only."""
+    from scipy.interpolate import LinearNDInterpolator
+    rows = [r for r in records if r['mode'] == mode]
+    points = np.array([[math.log10(r['mass_gev']), math.log10(r['epsilon'])]
+                       for r in rows])
+    values = np.log10([r['r'] for r in rows])
+    if not np.isfinite(values).all():
+        raise ValueError('Signal-strength anchors must have finite positive r')
+    all_points = np.array([[r['mass_gev'], r['epsilon']] for r in records])
+    edges = [np.geomspace(all_points[:, i].min(), all_points[:, i].max(), bins+1)
+             for i in range(2)]
+    centres = [np.sqrt(e[:-1]*e[1:]) for e in edges]
+    xx, yy = np.meshgrid(*[np.log10(c) for c in centres])
+    surface = LinearNDInterpolator(points, values)(xx, yy)
+    return edges, centres, surface
+
+
+def draw_root_strength_map(report, output):
+    """ROOT COLZ display and masked r=1 contours from evaluated anchors.
+
+    Display interpolation is distinct from the likelihood interpolation used
+    for the limit curves. No extrapolation beyond the anchor hull is implied.
+    """
+    import ROOT
+    from array import array
+    ROOT.gROOT.SetBatch(True)
+    ROOT.gStyle.SetOptStat(0)
+    ROOT.gStyle.SetPalette(ROOT.kBird)
+    target = output/'signal_strength_map.pdf'
+    root_path = output/'signal_strength_map.root'
+    root_file = ROOT.TFile(str(root_path), 'RECREATE')
+    canvas = ROOT.TCanvas('signal_strength', 'Expected signal-strength limit', 1500, 750)
+    canvas.Divide(2, 1)
+    keep = []
+    contour_counts = {}
+    for index, mode in enumerate(('background', 'zero_background'), 1):
+        edges, centres, surface = strength_surface(report['records'], mode)
+        title = 'SM background' if mode == 'background' else 'Zero background'
+        hist = ROOT.TH2D('r_'+mode, title+";m_{A'} [GeV];Kinetic mixing #epsilon;r",
+                         len(edges[0])-1, array('d', edges[0]),
+                         len(edges[1])-1, array('d', edges[1]))
+        mask = hist.Clone('support_'+mode)
+        mask.Reset()
+        hist.SetDirectory(0)
+        mask.SetDirectory(0)
+        for iy, ix in np.argwhere(np.isfinite(surface)):
+            hist.SetBinContent(int(ix)+1, int(iy)+1, 10.**float(surface[iy, ix]))
+            mask.SetBinContent(int(ix)+1, int(iy)+1, 1.)
+        hist.SetMinimum(1.e-3)
+        hist.SetMaximum(1.e3)
+        pad = canvas.cd(index)
+        pad.SetLogx(); pad.SetLogy(); pad.SetLogz()
+        pad.SetLeftMargin(.13); pad.SetRightMargin(.18); pad.SetBottomMargin(.16)
+        hist.GetYaxis().SetTitleOffset(1.4)
+        hist.Draw('COLZ')
+        # A masked contour avoids spurious r=1 edges against empty ROOT bins.
+        plt = plotting()
+        fig, axis = plt.subplots()
+        contour = axis.contour(centres[0], centres[1],
+                               np.ma.masked_invalid(surface), levels=[0.])
+        segments = contour.allsegs[0]
+        graphs = []
+        for segment in segments:
+            if len(segment) < 2:
+                continue
+            graph = ROOT.TGraph(len(segment), array('d', segment[:, 0]),
+                                array('d', segment[:, 1]))
+            graph.SetName('r1_'+mode+'_'+str(len(graphs)))
+            graph.SetLineWidth(3); graph.SetLineColor(ROOT.kBlack)
+            graph.Draw('L SAME'); graph.Write(); graphs.append(graph)
+        plt.close(fig)
+        anchors = [r for r in report['records'] if r['mode'] == mode]
+        markers = ROOT.TGraph(len(anchors), array('d', [r['mass_gev'] for r in anchors]),
+                             array('d', [r['epsilon'] for r in anchors]))
+        markers.SetName('anchors_'+mode); markers.SetMarkerStyle(20)
+        markers.SetMarkerSize(.35); markers.Draw('P SAME'); markers.Write()
+        label = ROOT.TLatex(); label.SetNDC(); label.SetTextSize(.028)
+        label.DrawLatex(.13, .09, 'Black: r = 1; dots: evaluated anchors')
+        label.DrawLatex(.13, .05, 'Log interpolation; blank: outside anchor support')
+        hist.Write(); mask.Write()
+        keep.extend([hist, mask, markers, label]+graphs)
+        contour_counts[mode] = len(graphs)
+    canvas.cd()
+    label = ROOT.TLatex(); label.SetNDC(); label.SetTextSize(.025)
+    label.DrawLatex(.12, .975, 'Both-Both, 90% CLs, '+str(report['luminosity_pb']/1000)+' fb^{-1}')
+    ROOT.gStyle.SetPaperSize(40., 20.)
+    canvas.SaveAs(str(target)); canvas.Write()
+    metadata = dict(interpolation='linear log10(r) in log10(mass), log10(epsilon)',
+                    extrapolation=False, blank_bins='Outside positive-anchor convex hull',
+                    contour='r=1 on the interpolated surface; no contours against blank bins',
+                    contour_segments=contour_counts,
+                    snapshot_sha256=report['snapshot_sha256'])
+    ROOT.TNamed('interpolation_metadata', json.dumps(metadata)).Write()
+    canvas.Close()
+    root_file.Close()
+    report['mass_interpolation'] = True
+    report['root_surface'] = metadata
+    return dict(path=str(target), sha256=digest(target), root_path=str(root_path),
+                root_sha256=digest(root_path))
 
 
 def main():

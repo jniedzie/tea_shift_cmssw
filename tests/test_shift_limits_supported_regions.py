@@ -8,7 +8,7 @@ ANALYSIS=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ANALYSIS/'bin'),str(ANALYSIS/'utils')]
 from shift_limits_current_plots import draw_regions, supported_contour_rows
 from shift_limits_profile import expected_limit, profile_q
-from shift_dp_progress_plots import signal_strength_contours
+from shift_dp_progress_plots import signal_strength_contours, strength_surface
 
 
 class RecordingAxis:
@@ -91,6 +91,19 @@ class SupportedRegionsTest(unittest.TestCase):
         self.assertEqual(len(signal_strength_contours(dict(signals=signals),dict(records=[row]))),1)
         signals[-1]['counts']={'Both-Both':dict(sumw=0.)}
         self.assertEqual(signal_strength_contours(dict(signals=signals),dict(records=[row])),[])
+
+
+class StrengthSurfaceTest(unittest.TestCase):
+    def test_log_plane_and_no_extrapolation(self):
+        import numpy as np
+        rows = [dict(mode='background', mass_gev=m, epsilon=e, r=m*e)
+                for m,e in [(1.,.001),(10.,.001),(1.,.1)]]
+        edges, centres, z = strength_surface(rows, 'background', bins=12)
+        xx, yy = np.meshgrid(*[np.log10(c) for c in centres])
+        finite = np.isfinite(z)
+        self.assertTrue(finite.any())
+        self.assertTrue((~finite).any())
+        np.testing.assert_allclose(z[finite], (xx+yy)[finite], atol=1.e-12)
 
 
 if __name__ == '__main__':
