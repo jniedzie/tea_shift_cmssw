@@ -14,10 +14,29 @@ sys.path[:0]=[str(ANALYSIS/'utils'),str(ANALYSIS/'bin')]
 from shift_dp_limits_refresh import (mass_fingerprint,qualify_rate,qualify_row,select_signals,
                                     same_scan_support,passing_event_statistics,settings,check_pdfs,scan_generated_points)
 from shift_limits_current_plots import comparison_figure_directory
-from shift_dp_progress_plots import with_retained_statistics
+from shift_dp_progress_plots import with_retained_statistics, signal_closure, background_closure
 
 
 class RefreshInputsTest(unittest.TestCase):
+    def test_background_update_keeps_identical_signals_and_rejects_changed_inputs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            signal=dict(name='m5_prompt',array_key='signal',sha256='a'*64,
+                rate_authority_sha256='b'*64,cross_section_pb=1.,full_gen_sumw=100.,
+                mass_gev=5.,epsilon=.001,proper_ctau_mm=1.e-6)
+            old=dict(luminosity_pb=300.,categories=['Both-Both'],mass_edges_gev=[0.,1.,2.],
+                signals=[signal],backgrounds=[dict(name='qcd',array_key='background',
+                cross_section_pb=1.,full_gen_sumw=100.)],histogram_cache=str(root/'old.npz'))
+            new=copy.deepcopy(old);new['histogram_cache']=str(root/'new.npz')
+            np.savez(root/'old.npz',signal=[[1.,2.]],signal_sumw2=[[1.,4.]],background=[[10.,20.]],background_sumw2=[[10.,20.]])
+            np.savez(root/'new.npz',signal=[[1.,2.]],signal_sumw2=[[1.,4.]],background=[[30.,40.]],background_sumw2=[[30.,40.]])
+            self.assertEqual(signal_closure([old,new])['signal_points'],1)
+            with self.assertRaisesRegex(ValueError,'background contents'):background_closure([old,new])
+            bad=copy.deepcopy(new);bad['signals'][0]['full_gen_sumw']=101.
+            with self.assertRaisesRegex(ValueError,'Changed signal'):signal_closure([old,bad])
+            np.savez(root/'new.npz',signal=[[1.,3.]],signal_sumw2=[[1.,4.]])
+            with self.assertRaisesRegex(ValueError,'Changed signal moments'):signal_closure([old,new])
+
     def test_retained_statistics_preserve_old_totals_without_pooling_models(self):
         old=dict(name='m15_prompt',event_neff=1596.,event_histogram_readback='passed')
         retained=dict(rows=[old,dict(old,name='m5_prompt',event_neff=500.)])

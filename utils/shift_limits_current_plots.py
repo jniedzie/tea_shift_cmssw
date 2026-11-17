@@ -16,6 +16,22 @@ MODE_COLORS={'background':'#b33636','zero_background':'#176b9c'}
 MODE_LABELS={'background':'SHIFT: QCD + DY + J/psi','zero_background':'SHIFT: zero background'}
 
 
+def draw_true_muonium(axis):
+    """Vector-state equivalent coupling, not a dimuon signal hypothesis.
+
+    Phys. Rev. D 100, 053003, Eqs. (2)-(3): m = 2 m_mu - BE,
+    epsilon_eff = alpha**2/2. The bound state decays predominantly to ee.
+    https://doi.org/10.1103/PhysRevD.100.053003
+    """
+    point = (0.211315, 2.66e-5)
+    axis.scatter(*point, marker='*', s=95, facecolor='#efbd32', edgecolor='black',
+                 linewidth=.65, zorder=30, label=r'True muonium ($e^+e^-$ reference)')
+    axis.annotate('TM', point, xytext=(7, -10), textcoords='offset points', fontsize=8)
+    return dict(mass_gev=point[0], equivalent_epsilon=point[1],
+                source='https://doi.org/10.1103/PhysRevD.100.053003',
+                role='Vector ee reference only; outside the dimuon signal grid')
+
+
 def comparison_figure_directory(config):
     """Let frozen analysis workers pin the figure without importing live configs."""
     explicit=getattr(config,'comparison_figure_directory',None)
@@ -356,11 +372,13 @@ def draw_model_update(config, model, reference_directory):
         strength=json.loads((model.output/'signal_strength_map.json').read_text())
         from shift_dp_progress_plots import draw_strength_contours
         rows=[]
-        styles=[('background','#b43c88','New model: QCD + DY + J/psi'),
-                ('zero_background','#166db0','New model: zero background')]
+        background_update=getattr(config,'background_comparison_update',False)
+        styles=[('background','#b43c88','Updated SM background' if background_update else 'New model: QCD + DY + J/psi'),
+                ('zero_background','#166db0','Zero background (same signals)' if background_update else 'New model: zero background')]
         for mode,color,label in styles:
             if mode in config.background_modes:
                 draw_strength_contours(axis,strength,mode,color,label,lw=2.1)
+        draw_true_muonium(axis)
         import io
         buffer=io.BytesIO();figure.savefig(buffer,format='pdf',transparent=True);plt.close(figure)
         layer=fitz.open(stream=buffer.getvalue(),filetype='pdf')

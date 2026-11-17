@@ -354,7 +354,7 @@ def finite_mc_diagnostics(config, model):
     return report
 
 
-def render(config, model, legacy, before, output, cutoff, before_event_statistics):
+def render(config, model, legacy, before, output, cutoff, before_event_statistics, background_update=False):
     from shift_limits_current import Model
     from shift_limits_current_plots import draw_original_comparisons, draw_model_update, draw_inputs
     from shift_dp_progress_plots import (draw_limits,draw_snapshot_statistics,
@@ -370,18 +370,20 @@ def render(config, model, legacy, before, output, cutoff, before_event_statistic
         shutil.copy2(legacy / name, reference / name)
     notes = [
         '0.3 fb^-1, Both-Both; no BDT/additional cuts; trigger efficiency and scale factors are 1.',
-        'Grey: previous MC grid. New model: qualified SensCalc plus MSHT20 NNLO grid. Both interpolate fitted log(r).',
+        ('Grey: previous SM background; coloured: 20261114_sm_native_v1, with identical signals.' if background_update else
+         'Grey: previous MC grid. New model: qualified SensCalc plus MSHT20 NNLO grid. Both interpolate fitted log(r).'),
         'Catalog cutoff: ' + cutoff + '. Missing lifetimes and support endpoints are not physical exclusion edges.',
         'Independent 30% signal/background normalization uncertainties; finite-MC uncertainty omitted from these matched curves.',
         'Provisional 2% mass resolution. Literal SM histogram bins; no invented background tail or interpolation.',
-        'Pheno SHIFT: 30 fb^-1. Most reference curves: 90% CL; FCC: 95% CL. Contours interpolate per-point log(r) in log(mass), log(epsilon); no template morphing or extrapolation.']
+        'Pheno SHIFT: 30 fb^-1. Most reference curves: 90% CL; FCC: 95% CL. Contours interpolate per-point log(r) in log(mass), log(epsilon); no template morphing or extrapolation.',
+        'Star: vector true muonium as an ee reference (Phys. Rev. D100,053003); not a dimuon hypothesis.']
     for modes in [('background', 'zero_background'), ('background',), ('zero_background',)]:
         old = copy.copy(config)
         old.output_path = str(reference)
         old.background_modes = modes
         old.epsilon_max = 1.
         old.plot_omitted_masses_gev = (1.5,)
-        old.signal_model_label = 'Previous DY (NNPDF)'
+        old.signal_model_label = 'Previous SM background' if background_update else 'Previous DY (NNPDF)'
         old.include_prompt_reference_extrapolation = False
         old.strength_report = previous_strength
         old.comparison_legend_fontsize = 10
@@ -393,10 +395,11 @@ def render(config, model, legacy, before, output, cutoff, before_event_statistic
         draw_original_comparisons(old, Model(old))
         current = copy.copy(config)
         current.background_modes = modes
+        current.background_comparison_update = background_update
         draw_model_update(current, model, reference)
     draw_inputs(config, model)
-    progress['limits']=draw_limits(before, legacy, output, output)
-    progress['zoomed_limits']=draw_limits(before,legacy,output,output,zoom=True)
+    progress['limits']=draw_limits(before, legacy, output, output, background_update=background_update)
+    progress['zoomed_limits']=draw_limits(before,legacy,output,output,zoom=True,background_update=background_update)
     current_statistics=output/'event_statistics.json'
     retained_statistics=legacy/'event_statistics.json'
     if retained_statistics.exists():
@@ -496,7 +499,8 @@ def refresh(args):
             {key: value for key, value in row.items() if not key.startswith('local_')} for row in inventory]))
         write(output/'event_statistics.json',dict(schema='shift-dp-passing-event-statistics-v1',
             catalog_cutoff_utc=catalog['updated_utc'],rows=event_statistics))
-        config = settings(output, reference / 'snapshot.json', local_inventory, args.figure_directory.resolve())
+        background = args.background_snapshot.resolve() if args.background_snapshot else reference/'snapshot.json'
+        config = settings(output, background, local_inventory, args.figure_directory.resolve())
         snapshot(config)
         model = Model(config)
         for source, row in zip(model.snapshot['signals'], selected):
@@ -506,8 +510,9 @@ def refresh(args):
         reuse = dict(method='Independent fits at generated points; no interpolated-template scans reused')
         scan_generated_points(config, model)
         diagnostics=finite_mc_diagnostics(config,model)
-        plots = render(config, model, args.legacy.resolve(), args.before.resolve(), output,
-            catalog['updated_utc'],args.before_event_statistics.resolve())
+        comparison = args.background_comparison.resolve() if args.background_comparison else args.legacy.resolve()
+        plots = render(config, model, comparison, args.before.resolve(), output,
+            catalog['updated_utc'],args.before_event_statistics.resolve(),background_update=bool(args.background_comparison))
         pdfs=check_pdfs(output)
         report.update(complete=True, completed_utc=datetime.now(timezone.utc).isoformat(),
                       elapsed_seconds=time.monotonic()-started, staged_bytes=stager.bytes,
@@ -523,8 +528,10 @@ def refresh(args):
             '# DP limits from ready signal increments\n\n'
             'Catalog cutoff: ' + catalog['updated_utc'] + '. Only qualified complete component combinations enter.\n\n'
             'Open `limits_current_cl90_comparison.pdf` for both background assumptions and the other-experiment/pheno comparison,\n'
-            'or the separately named background/zero-background PDFs. `limits_before_after.pdf` compares to 29 October.\n\n'
-            'Same 0.3 fb^-1, Both-Both, literal 19 SM templates and provisional 2% mass resolution; independent 30% normalization nuisances.\n'
+            'or the separately named background/zero-background PDFs. '+
+            ('`limits_before_after.pdf` isolates the SM background update with identical signal inputs.\n\n' if args.background_comparison else
+             '`limits_before_after.pdf` compares the previous and updated signal prescriptions.\n\n')+
+            'SM campaign: '+model.snapshot['background_campaign']+'. Same 0.3 fb^-1, Both-Both, literal published SM templates and provisional 2% mass resolution; independent 30% normalization nuisances.\n'
             'Nominal curves omit finite-MC uncertainty. Missing lifetime support is not a physical exclusion edge.\n'
             'No old NNPDF detector response is used for the revised benchmark. Grey curves retain the explicitly named older model.\n'
             'Each signal retains its qualified epsilon domain. Photon continuations above 0.01 require the explicit experimental approximation; v1 DY remains capped at 0.001.\n\n'
@@ -540,6 +547,10 @@ def main():
     parser.add_argument('--publisher-config-sha256', required=True)
     parser.add_argument('--reference', type=Path, required=True)
     parser.add_argument('--reference-sha256', required=True)
+    parser.add_argument('--background-snapshot',type=Path,
+                        help='Frozen SM snapshot; signal qualification still uses --reference')
+    parser.add_argument('--background-comparison',type=Path,
+                        help='Old-background fit with identical signals for a controlled SM update')
     parser.add_argument('--reuse-scan',type=Path)
     parser.add_argument('--legacy', type=Path, required=True)
     parser.add_argument('--before', type=Path, required=True)

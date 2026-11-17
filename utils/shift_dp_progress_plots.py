@@ -18,7 +18,7 @@ import numpy as np
 
 ANALYSIS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ANALYSIS / 'bin'))
-from shift_limits_current_plots import draw_regions, supported_contour_rows
+from shift_limits_current_plots import draw_regions, supported_contour_rows, draw_true_muonium
 from shift_limits_lifetime import plotting
 
 
@@ -80,10 +80,35 @@ def selected_rows(scan):
     return rows
 
 
-def draw_limits(before, legacy, after, output, zoom=False):
+def signal_closure(snapshots):
+    """Permit a background update only with identical signal templates and settings."""
+    reference = snapshots[0]
+    for current in snapshots[1:]:
+        for key in ('luminosity_pb', 'categories', 'mass_edges_gev'):
+            if current[key] != reference[key]:
+                raise ValueError('Unmatched comparison setting: ' + key)
+        left = {r['name']: r for r in reference['signals']}
+        right = {r['name']: r for r in current['signals']}
+        if left.keys() != right.keys():
+            raise ValueError('Background comparison requires identical signal points')
+        with np.load(reference['histogram_cache'], allow_pickle=False) as old:
+            with np.load(current['histogram_cache'], allow_pickle=False) as new:
+                for name, row in left.items():
+                    for key in ('sha256', 'rate_authority_sha256', 'cross_section_pb', 'full_gen_sumw',
+                                'mass_gev', 'epsilon', 'proper_ctau_mm'):
+                        if row.get(key) != right[name].get(key):
+                            raise ValueError('Changed signal in background comparison: ' + name)
+                    for suffix in ('', '_sumw2'):
+                        if not np.array_equal(old[row['array_key']+suffix], new[right[name]['array_key']+suffix]):
+                            raise ValueError('Changed signal moments: ' + name)
+    return dict(signal_points=len(reference['signals']), arrays_and_normalization_identical=True)
+
+
+def draw_limits(before, legacy, after, output, zoom=False, background_update=False):
     directories = [before, legacy, after]
     loaded = [checked_snapshot(path) for path in directories]
-    closure = background_closure([item[0] for item in loaded])
+    closure = (signal_closure([loaded[1][0], loaded[2][0]]) if background_update else
+               background_closure([item[0] for item in loaded]))
     current_strength = read_json(after/'signal_strength_map.json')
     previous_path = after/'previous_signal_strength.json'
     previous_strength = (read_json(previous_path) if previous_path.exists() else
@@ -103,9 +128,12 @@ def draw_limits(before, legacy, after, output, zoom=False):
         axis.plot(points[:, 0], points[:, 1], color='#168c76', lw=1.6,
                   label=r'Pheno SHIFT reference: 30 fb$^{-1}$')
         draw_strength_contours(axis, previous_strength, mode, '#929292',
+                               'Previous SM background' if background_update else
                                'Previous prescription: generated grid', lw=2.2, linestyle='--')
         draw_strength_contours(axis, current_strength, mode, color,
+                               'SM: '+loaded[2][0]['background_campaign'] if background_update else
                                'Updated prescription: generated grid', lw=2.6)
+        true_muonium = draw_true_muonium(axis)
         axis.axhspan(.1, 1, color='#eeeeee', zorder=-10)
         axis.set(xscale='log', yscale='log', xlim=(.2, 100), ylim=((1.e-6, .3) if zoom else (1.e-7, 1)),
                  xlabel=r'$m_{A\prime}$ [GeV]',
@@ -114,9 +142,11 @@ def draw_limits(before, legacy, after, output, zoom=False):
     axes[0].set_ylabel(r'Kinetic mixing $\epsilon$')
     figure.suptitle(r'DP sensitivity progress: expected 90% CLs, 0.3 fb$^{-1}$', fontsize=14)
     figure.text(.035, .02,
-                'Matched assumptions: Both-Both, same 19 SM templates, no BDT/additional cuts; trigger/SFs = 1.\n'
-                'Provisional 2% mass resolution; independent 30% signal/background normalization uncertainties; finite-MC uncertainty omitted.\n'
-                'Grey: previous prescription; coloured: updated prescription. Both use independently fitted generated points.\n'
+                ('Matched signals; updated SM campaign. Both-Both, no BDT/additional cuts; trigger/SFs = 1.\n' if background_update else
+                 'Matched assumptions: Both-Both, same SM templates, no BDT/additional cuts; trigger/SFs = 1.\n')+
+                'Provisional 2% mass resolution; independent 30% signal/background normalization uncertainties; finite-MC uncertainty omitted.\n'+
+                ('Grey: previous SM; coloured: updated SM, with the same signal grid.\n' if background_update else
+                 'Grey: previous prescription; coloured: updated prescription. Both use independently fitted generated points.\n')+
                 'All current contours: linear log(r) interpolation in log(mass), log(epsilon), inside each generated grid hull.\n'
                 'No template morphing or extrapolation. Sparse-MC and wide-triangle contours are provisional; blank support is unknown.',
                 fontsize=8.1, va='bottom')
@@ -128,7 +158,10 @@ def draw_limits(before, legacy, after, output, zoom=False):
                              scan_sha256=digest(path / 'scan.json')) for path in directories],
                 displayed_reference_includes_saved_prompt_extrapolation=False,
                 omitted_historical_curve=str(before),
-                matched_backgrounds=closure, confidence_level=.9, channel='Both-Both',
+                comparison_closure=closure, background_update=background_update,
+                matched_backgrounds=closure if not background_update else None,
+                matched_signals=closure if background_update else None,
+                true_muonium_reference=true_muonium, confidence_level=.9, channel='Both-Both',
                 luminosity_pb=loaded[0][0]['luminosity_pb'], fits_rerun=True,
                 method='Per-point fitted r, shared logarithmic triangulation; no template morphing',
                 include_mc_stat_uncertainties=False,
