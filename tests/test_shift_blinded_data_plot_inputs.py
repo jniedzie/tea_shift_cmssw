@@ -127,7 +127,7 @@ class AggregateRootPlotTest(unittest.TestCase):
                 f"globals().update(runpy.run_path({str(PROJECT / 'configs/shift_data_plotter_config.py')!r}, "
                 f"init_globals={{'summary_path': {str(source)!r}, 'output_path': {str(directory / 'plots')!r}, "
                 "'era': 'Synthetic MC-as-data', 'stream': 'Synthetic', 'run': '0'}))\n")
-            paths = [PROJECT, PROJECT / "configs", PROJECT / "tea/pylibs/plotting",
+            paths = [directory, PROJECT, PROJECT / "configs", PROJECT / "tea/pylibs/plotting",
                      PROJECT / "tea/pylibs/logger"]
             environment = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
             environment["PYTHONPATH"] = os.pathsep.join(map(str, paths)) + os.pathsep + environment.get("PYTHONPATH", "")

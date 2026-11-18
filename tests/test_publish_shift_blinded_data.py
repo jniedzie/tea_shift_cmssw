@@ -117,7 +117,7 @@ class BlindedPublicationTest(unittest.TestCase):
                           repr(str(PROJECT / "configs/shift_data_plotter_config.py")) +
                           ", init_globals=" + repr(dict(output_path=str(self.output))) + "))\n")
         environment = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
-        environment["PYTHONPATH"] = os.pathsep.join(map(str, [PROJECT, PROJECT / "configs",
+        environment["PYTHONPATH"] = os.pathsep.join(map(str, [stage, PROJECT, PROJECT / "configs",
             PROJECT / "tea/pylibs/plotting", PROJECT / "tea/pylibs/logger"])) + os.pathsep + environment.get("PYTHONPATH", "")
         result = subprocess.run([sys.executable, "-B", str(PROJECT / "tea/apps/examples/plotter.py"),
                                  "--config", "reuse_config"], cwd=stage, env=environment,

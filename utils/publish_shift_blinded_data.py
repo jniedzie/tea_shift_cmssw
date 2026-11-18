@@ -224,7 +224,7 @@ def render_plot(stage, summary_path):
         repr(str(PROJECT / "configs/shift_data_plotter_config.py")) + ", init_globals=" +
         repr(dict(summary_path=str(summary_path), output_path=str(stage))) + "))\n")
     environment = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
-    paths = [PROJECT, PROJECT / "configs", PROJECT / "tea/pylibs/plotting", PROJECT / "tea/pylibs/logger"]
+    paths = [stage, PROJECT, PROJECT / "configs", PROJECT / "tea/pylibs/plotting", PROJECT / "tea/pylibs/logger"]
     environment["PYTHONPATH"] = os.pathsep.join(map(str, paths)) + os.pathsep + environment.get("PYTHONPATH", "")
     result = subprocess.run([sys.executable, "-B", str(PROJECT / "tea/apps/examples/plotter.py"),
                              "--config", "_publication_config"], cwd=stage, env=environment,
