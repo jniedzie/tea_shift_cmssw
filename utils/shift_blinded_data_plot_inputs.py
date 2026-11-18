@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 
 try:
@@ -22,6 +23,68 @@ except ImportError:
 
 HISTOGRAM_NAME = "ShiftDimuonVertex_mass"
 METADATA_NAME = "ShiftDataControlSummary"
+CONTEXT_NAME = "plot_context.json"
+
+
+def validate_plot_context(context):
+    keys = {"schema", "era", "datasets", "runs", "summary_sha256"}
+    if (not isinstance(context, dict) or set(context) != keys
+            or context["schema"] != "shift-data-control-plot-context-v1"
+            or context["era"] != "Run2023D"):
+        raise BlindingError("Unsupported data plot context")
+    datasets, runs = context["datasets"], context["runs"]
+    if (not isinstance(datasets, list) or not datasets
+            or any(not isinstance(value, str) or not re.fullmatch(
+                r"/[A-Za-z0-9_-]+/Run2023D-v[0-9]+/RAW", value) for value in datasets)
+            or datasets != sorted(set(datasets))
+            or not isinstance(runs, list) or not runs
+            or any(type(value) is not int or not 0 < value < 2**32 for value in runs)
+            or runs != sorted(set(runs))
+            or not isinstance(context["summary_sha256"], str)
+            or not re.fullmatch(r"[a-f0-9]{64}", context["summary_sha256"])):
+        raise BlindingError("Invalid recorded-data source context")
+    return context
+
+
+def read_plot_context(summary_path):
+    summary_path = Path(summary_path)
+    context_path = summary_path.parent / CONTEXT_NAME
+    if not context_path.exists():
+        return None
+    try:
+        context = validate_plot_context(json.loads(context_path.read_text()))
+        digest = hashlib.sha256(summary_path.read_bytes()).hexdigest()
+    except (OSError, ValueError):
+        raise BlindingError("Data plot context is unavailable or invalid") from None
+    if context["summary_sha256"] != digest:
+        raise BlindingError("Data plot context belongs to a different aggregate summary")
+    return context
+
+
+def plot_context_labels(context):
+    validate_plot_context(context)
+    primaries = [value.split("/")[1] for value in context["datasets"]]
+    stream = " + ".join(primaries) if len(primaries) <= 2 else f"{len(primaries)} recorded RAW streams"
+    runs = context["runs"]
+    run_label = (f"run {runs[0]}" if len(runs) == 1
+                 else f"runs {runs[0]}-{runs[-1]} ({len(runs)} runs)")
+    return dict(era=context["era"], stream=stream, run_label=run_label)
+
+
+def data_plot_labels(summary_path, overrides, legacy_summary_path):
+    context = read_plot_context(summary_path)
+    if context is not None:
+        labels = plot_context_labels(context)
+        expected = dict(era=labels["era"], stream=labels["stream"], run=labels["run_label"])
+        for key, value in overrides.items():
+            if (f"run {value}" if key == "run" else value) != expected[key]:
+                raise BlindingError("Explicit plot labels conflict with the recorded-data context")
+        return labels
+    if (Path(summary_path).resolve() != Path(legacy_summary_path).resolve()
+            and set(overrides) != {"era", "stream", "run"}):
+        raise BlindingError("A nonlegacy data plot requires its source context")
+    return dict(era=overrides.get("era", "Run2023D"), stream=overrides.get("stream", "ZeroBias"),
+                run_label="run " + str(overrides.get("run", "369943")))
 
 
 def read_summary(path):

@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -20,10 +21,12 @@ import tempfile
 
 try:
     from . import shift_blinded_data_summary as blind
-    from .shift_blinded_data_plot_inputs import read_summary, verify_histogram
+    from .shift_blinded_data_plot_inputs import (CONTEXT_NAME, read_plot_context, read_summary,
+                                                validate_plot_context, verify_histogram)
 except ImportError:
     import shift_blinded_data_summary as blind
-    from shift_blinded_data_plot_inputs import read_summary, verify_histogram
+    from shift_blinded_data_plot_inputs import (CONTEXT_NAME, read_plot_context, read_summary,
+                                               validate_plot_context, verify_histogram)
 
 
 PROJECT = Path(__file__).resolve().parents[1]
@@ -170,17 +173,27 @@ def validate_prior_producer(producer):
 
 
 def validated_inputs(inventory):
-    require(inventory.get("schema") == "shift-data-staged-publication-inputs-v1"
-            and inventory.get("dataset") == "/ZeroBias/Run2023D-v1/RAW"
-            and inventory.get("era") == "Run2023D" and inventory.get("run") == 369943,
-            "Unsupported commissioning inventory")
+    legacy = inventory.get("schema") == "shift-data-staged-publication-inputs-v1"
+    if legacy:
+        require(inventory.get("dataset") == "/ZeroBias/Run2023D-v1/RAW"
+                and inventory.get("era") == "Run2023D" and inventory.get("run") == 369943,
+                "Unsupported commissioning inventory")
+    else:
+        require(inventory.get("schema") == "shift-data-staged-publication-inputs-v2",
+                "Unsupported commissioning inventory")
+        require(type(inventory.get("event_budget")) is int and 1 <= inventory["event_budget"] <= 100000,
+                "A scaled data cohort requires an explicit bounded event budget")
+        validate_plot_context(dict(schema="shift-data-control-plot-context-v1",
+                                   era=inventory.get("era"), datasets=inventory.get("datasets"),
+                                   runs=inventory.get("runs"), summary_sha256="0" * 64))
     count, ledger = inventory.get("expected_unique_events"), inventory.get("expected_identity_sha256")
-    require(type(count) is int and 1 <= count <= 1000
+    require(type(count) is int and 1 <= count <= (1000 if legacy else inventory["event_budget"])
             and isinstance(ledger, str) and len(ledger) == 64
             and all(c in "0123456789abcdef" for c in ledger), "Missing exact completed-event ownership")
     rows = inventory.get("inputs")
     require(isinstance(rows, list) and rows, "No completed canonical inputs were supplied")
     inputs, mappings, expected_total = [], [], 0
+    datasets, runs = set(), set()
     for row in rows:
         keys = {"path", "origin_uri", "root_uuid", "sha256", "bytes", "producer_receipt", "expected_event_count"}
         require(isinstance(row, dict) and set(row) == keys and isinstance(row["origin_uri"], str)
@@ -197,6 +210,24 @@ def validated_inputs(inventory):
             require(producer.get("schema") == "shift-data-worker-result-v1"
                     and producer.get("input_origin") == "collision-data",
                     "A native input is not a known collision-data producer")
+        if not legacy:
+            dataset, source_url = producer.get("dataset"), producer.get("source_url")
+            original_runs = producer.get("original_runs")
+            require(isinstance(dataset, str) and re.fullmatch(
+                        r"/[A-Za-z0-9_-]+/Run2023D-v[0-9]+/RAW", dataset)
+                    and producer.get("era") == inventory["era"]
+                    and isinstance(original_runs, list) and original_runs
+                    and all(type(value) is int and 0 < value < 2**32 for value in original_runs)
+                    and original_runs == sorted(set(original_runs))
+                    and isinstance(source_url, str) and row["origin_uri"] == source_url,
+                    "A native producer lacks exact recorded-data source metadata")
+            primary, processing = dataset.split("/")[1:3]
+            version = processing.split("-v")[1]
+            require(re.fullmatch(r"root://[^/]+//store/data/Run2023D/" + re.escape(primary)
+                                 + r"/RAW/v" + re.escape(version) + r"/.+\.root", source_url),
+                    "The native RAW source differs from its declared dataset")
+            datasets.add(dataset)
+            runs.update(original_runs)
         native, output, audit = producer.get("native", {}), producer.get("output", {}), producer.get("identity_audit", {})
         require(producer.get("complete") is True and type(native.get("exit_code")) is int
                 and native["exit_code"] == 0 and producer.get("candidate_branches_read") is False
@@ -212,6 +243,9 @@ def validated_inputs(inventory):
                              root_uuid=row["root_uuid"], expected_event_count=row["expected_event_count"]))
         expected_total += row["expected_event_count"]
     require(expected_total == count, "Completed native ownership differs from the declared subset")
+    if not legacy:
+        require(sorted(datasets) == inventory["datasets"] and sorted(runs) == inventory["runs"],
+                "The completed native sources differ from the declared data cohort")
     manifest = dict(schema=blind.MANIFEST_SCHEMA, inputs=inputs)
     blind.validate_manifest(manifest, [row["path"] for row in inputs], "collision-data")
     return manifest, mappings
@@ -219,10 +253,13 @@ def validated_inputs(inventory):
 
 def render_plot(stage, summary_path):
     configuration = stage / "_publication_config.py"
+    settings = dict(summary_path=str(summary_path), output_path=str(stage))
+    if read_plot_context(summary_path) is None:
+        settings.update(era="Run2023D", stream="ZeroBias", run="369943")
     configuration.write_text(
         "import runpy\n" + "globals().update(runpy.run_path(" +
         repr(str(PROJECT / "configs/shift_data_plotter_config.py")) + ", init_globals=" +
-        repr(dict(summary_path=str(summary_path), output_path=str(stage))) + "))\n")
+        repr(settings) + "))\n")
     environment = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
     paths = [stage, PROJECT, PROJECT / "configs", PROJECT / "tea/pylibs/plotting", PROJECT / "tea/pylibs/logger"]
     environment["PYTHONPATH"] = os.pathsep.join(map(str, paths)) + os.pathsep + environment.get("PYTHONPATH", "")
@@ -233,35 +270,42 @@ def render_plot(stage, summary_path):
     configuration.unlink()
 
 
+def bundle_files(directory):
+    return FILES + ((CONTEXT_NAME,) if (directory / CONTEXT_NAME).exists() else ())
+
+
 def check_bundle(directory, exact=True):
-    require(all((directory / name).is_file() for name in FILES)
-            and (not exact or set(path.name for path in directory.iterdir()) == set(FILES)),
+    files = bundle_files(directory)
+    require(all((directory / name).is_file() for name in files)
+            and (not exact or set(path.name for path in directory.iterdir()) == set(files)),
             "Incomplete publication bundle")
     summary_path = directory / FILES[0]
     summary, _ = read_summary(summary_path)
+    read_plot_context(summary_path)
     verify_histogram(summary_path, directory / FILES[1], BAND)
     pdf = (directory / FILES[2]).read_bytes()
     require(len(pdf) > 1000 and pdf.startswith(b"%PDF-") and b"%%EOF" in pdf[-100:],
             "The rendered data PDF is incomplete")
     return summary, {name: dict(sha256=sha256(directory / name), bytes=(directory / name).stat().st_size)
-                     for name in FILES}
+                     for name in files}
 
 
 def replace_delivery(output, stage, expected_hashes):
     """Replace complete staged files, restoring the old delivery on a write failure."""
-    existing = [name for name in FILES if (output / name).exists()]
-    require(len(existing) in (0, len(FILES))
-            and all(not (output / name).is_symlink() for name in FILES),
+    files = tuple(expected_hashes)
+    existing = [name for name in bundle_files(output) if (output / name).exists()]
+    require(len(existing) in (0, len(files)) and (not existing or tuple(existing) == files)
+            and all(not (output / name).is_symlink() for name in files),
             "An existing public delivery needs reconciliation")
     backup = Path(tempfile.mkdtemp(prefix=".previous-", dir=output))
     previous_hashes = None
     if existing:
-        for name in FILES:
+        for name in files:
             shutil.copy2(output / name, backup / name)
         _, previous_hashes = check_bundle(backup)
     replaced = []
     try:
-        for name in FILES:
+        for name in files:
             temporary = output / ("." + name + ".next")
             require(not temporary.exists(), "An earlier public-file transition needs reconciliation")
             shutil.copy2(stage / name, temporary)
@@ -275,7 +319,7 @@ def replace_delivery(output, stage, expected_hashes):
                 os.replace(backup / name, output / name)
             else:
                 (output / name).unlink()
-        for name in FILES:
+        for name in files:
             (output / ("." + name + ".next")).unlink(missing_ok=True)
         if existing:
             _, restored = check_bundle(output, exact=False)
@@ -299,16 +343,19 @@ def completed_publication(receipt_dir, output, inventory_path, review_path, code
     _, hashes = check_bundle(output, exact=False)
     # An ordinary replot may regenerate the derivative PDF; frozen aggregate
     # JSON and ROOT input must still be byte-identical to their producer receipt.
-    require(all(hashes[name] == receipt.get("outputs", {}).get(name) for name in FILES[:2]),
+    retained = FILES[:2] + ((CONTEXT_NAME,) if CONTEXT_NAME in hashes else ())
+    require(set(hashes) == set(receipt.get("outputs", {}))
+            and all(hashes[name] == receipt["outputs"].get(name) for name in retained),
             "Previously committed aggregate inputs differ from their receipt")
     return receipt
 
 
 def restore_previous_delivery(output, backup):
-    existing = [name for name in FILES if (backup / name).is_file()]
-    require(len(existing) in (0, len(FILES)), "Previous-delivery backup needs reconciliation")
+    files = bundle_files(backup) if (backup / FILES[0]).exists() else bundle_files(output)
+    existing = [name for name in files if (backup / name).is_file()]
+    require(len(existing) in (0, len(files)), "Previous-delivery backup needs reconciliation")
     expected = check_bundle(backup)[1] if existing else None
-    for name in FILES:
+    for name in files:
         if existing:
             os.replace(backup / name, output / name)
         else:
@@ -351,6 +398,11 @@ def publish(inventory_path, policy_path, authorization_path, mc_proof_path, mc_r
         stage = Path(tempfile.mkdtemp(prefix=".incoming-", dir=output))
         try:
             shutil.copy2(receipt_dir / "blinded_summary.json", stage / FILES[0])
+            if inventory["schema"] == "shift-data-staged-publication-inputs-v2":
+                save_new_json(stage / CONTEXT_NAME, dict(
+                    schema="shift-data-control-plot-context-v1", era=inventory["era"],
+                    datasets=inventory["datasets"], runs=inventory["runs"],
+                    summary_sha256=sha256(stage / FILES[0])))
             verify_plotting_environment(review)
             render_plot(stage, stage / FILES[0])
             verify_plotting_environment(review)

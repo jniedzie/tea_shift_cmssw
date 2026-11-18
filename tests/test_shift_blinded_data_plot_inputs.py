@@ -37,6 +37,41 @@ def synthetic_summary():
 
 
 class AggregateInputTest(unittest.TestCase):
+    def test_source_context_rejects_unbound_summary_and_forbidden_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            source = directory / "blinded_summary.json"
+            source.write_text(json.dumps(synthetic_summary()))
+            context = dict(schema="shift-data-control-plot-context-v1", era="Run2023D",
+                           datasets=["/Muon0/Run2023D-v1/RAW"], runs=[369943],
+                           summary_sha256=hashlib.sha256(source.read_bytes()).hexdigest())
+            path = directory / inputs.CONTEXT_NAME
+            path.write_text(json.dumps(context))
+            labels = inputs.data_plot_labels(source, {}, directory / "legacy/summary.json")
+            self.assertEqual(labels, dict(era="Run2023D", stream="Muon0", run_label="run 369943"))
+            path.write_text(json.dumps(dict(context, summary_sha256="0" * 64)))
+            with self.assertRaises(blind.BlindingError):
+                inputs.read_plot_context(source)
+            path.write_text(json.dumps(dict(context, candidate_rows=[999.123456])))
+            with self.assertRaises(blind.BlindingError):
+                inputs.read_plot_context(source)
+
+    def test_nonlegacy_plot_cannot_fall_back_to_wrong_source_labels(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            source = directory / "summary.json"
+            source.write_text(json.dumps(synthetic_summary()))
+            with self.assertRaises(blind.BlindingError):
+                inputs.data_plot_labels(source, {}, directory / "legacy/summary.json")
+            legacy = dict(era="Run2023D", stream="ZeroBias", run="369943")
+            self.assertEqual(inputs.data_plot_labels(source, legacy, source)["stream"], "ZeroBias")
+            context = dict(schema="shift-data-control-plot-context-v1", era="Run2023D",
+                           datasets=["/Muon0/Run2023D-v1/RAW"], runs=[369943],
+                           summary_sha256=hashlib.sha256(source.read_bytes()).hexdigest())
+            (directory / inputs.CONTEXT_NAME).write_text(json.dumps(context))
+            with self.assertRaises(blind.BlindingError):
+                inputs.data_plot_labels(source, legacy, source)
+
     def test_nested_forbidden_payload_is_rejected_before_output_creation(self):
         with tempfile.TemporaryDirectory() as directory:
             directory = Path(directory)

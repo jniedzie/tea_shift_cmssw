@@ -18,16 +18,18 @@ from Sample import Sample, SampleType
 project_dir = Path(__file__).resolve().parents[1]
 if str(project_dir) not in sys.path:
     sys.path.insert(0, str(project_dir))
-from utils.shift_blinded_data_plot_inputs import prepare_histogram, HISTOGRAM_NAME
+from utils.shift_blinded_data_plot_inputs import data_plot_labels, prepare_histogram, HISTOGRAM_NAME
 
 # Keep this unscaled data view separate from luminosity-normalized MC. Tests
 # may provide these globals explicitly when exercising the ordinary plotter.
 output_path = globals().get("output_path", str(project_dir / "plots/data/Run2023D/jpsi_control"))
 summary_path = globals().get("summary_path", str(Path(output_path) / "blinded_summary.json"))
 histogram_path = str(Path(output_path) / "blinded_histograms.root")
-era = globals().get("era", "Run2023D")
-stream = globals().get("stream", "ZeroBias")
-run = globals().get("run", "369943")
+source_labels = data_plot_labels(
+    summary_path, {key: globals()[key] for key in ("era", "stream", "run") if key in globals()},
+    project_dir / "plots/data/Run2023D/jpsi_control/blinded_summary.json")
+era = source_labels["era"]
+stream = source_labels["stream"]
 control_mass_min_gev, control_mass_max_gev = 2.6, 3.6
 summary = prepare_histogram(summary_path, histogram_path, (control_mass_min_gev, control_mass_max_gev))
 
@@ -35,7 +37,7 @@ is_data = summary["input_kind"] == "collision-data"
 source_label = "Data" if is_data else "MC-as-data validation"
 samples = [Sample(
     name="data_control", file_path=histogram_path, type=SampleType.data,
-    legend_description=f"{source_label}: {stream}, run {run}",
+    legend_description=f"{source_label}: {stream}, {source_labels['run_label']}",
     line_color=ROOT.kBlack, marker_color=ROOT.kBlack, marker_style=20,
     marker_size=0.9, fill_alpha=0.0, line_width=2,
 )]

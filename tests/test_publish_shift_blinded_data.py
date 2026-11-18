@@ -94,6 +94,23 @@ class BlindedPublicationTest(unittest.TestCase):
         return publisher.publish(inventory, self.policy_path, self.authorization, self.mc_proof,
                                  self.response, self.review, self.output, self.directory / receipt_name)
 
+    def scaled_inventory(self, name, rows, identities):
+        path = self.inventory(name, rows, identities)
+        inventory = json.loads(path.read_text())
+        inventory.pop("dataset");inventory.pop("run")
+        inventory.update(schema="shift-data-staged-publication-inputs-v2",
+                         datasets=["/Muon0/Run2023D-v1/RAW"], runs=[369943], event_budget=10000)
+        for row in rows:
+            receipt_path = Path(row["producer_receipt"]["path"])
+            receipt = json.loads(receipt_path.read_text())
+            source = "root://eoscms.cern.ch//store/data/Run2023D/Muon0/RAW/v1/000/369/943/fixture.root"
+            receipt.update(dataset=inventory["datasets"][0], era="Run2023D",
+                           source_url=source, original_runs=[369943])
+            receipt_path.write_text(json.dumps(receipt))
+            row.update(origin_uri=source, producer_receipt=publisher.pin(receipt_path))
+        inventory["inputs"] = rows
+        return self.write(name, inventory)
+
     def test_real_publication_and_exact_retry_preserve_current_bytes_and_no_outside_values(self):
         row = self.input("first", 1, [3.05, 666.123456])
         inventory = self.inventory("inventory.json", [row], [1])
@@ -115,7 +132,8 @@ class BlindedPublicationTest(unittest.TestCase):
         config = stage / "reuse_config.py"
         config.write_text("import runpy\nglobals().update(runpy.run_path(" +
                           repr(str(PROJECT / "configs/shift_data_plotter_config.py")) +
-                          ", init_globals=" + repr(dict(output_path=str(self.output))) + "))\n")
+                          ", init_globals=" + repr(dict(output_path=str(self.output), era="Run2023D",
+                                                        stream="ZeroBias", run="369943")) + "))\n")
         environment = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
         environment["PYTHONPATH"] = os.pathsep.join(map(str, [stage, PROJECT, PROJECT / "configs",
             PROJECT / "tea/pylibs/plotting", PROJECT / "tea/pylibs/logger"])) + os.pathsep + environment.get("PYTHONPATH", "")
@@ -269,6 +287,60 @@ class BlindedPublicationTest(unittest.TestCase):
                 self.publish(inventory, "receipt_second")
         self.assertEqual({name: publisher.sha256(self.output / name) for name in publisher.FILES}, before)
         self.assertFalse((self.directory / "receipt_second/publication.json").exists())
+
+    def test_scaled_publication_keeps_bound_muon_labels_for_ordinary_replot_and_retry(self):
+        row = self.input("muon", 1, [3.05, 666.123456])
+        inventory = self.scaled_inventory("muon_inventory.json", [row], [1])
+        receipt = self.publish(inventory, "muon_receipt")
+        files = publisher.FILES + (publisher.CONTEXT_NAME,)
+        self.assertEqual(set(receipt["outputs"]), set(files))
+        before = {name: publisher.sha256(self.output / name) for name in files}
+        context = publisher.read_plot_context(self.output / publisher.FILES[0])
+        self.assertEqual(context["datasets"], ["/Muon0/Run2023D-v1/RAW"])
+        stage = self.directory / "replot"
+        stage.mkdir()
+        publisher.render_plot(stage, self.output / publisher.FILES[0])
+        text = subprocess.run(["pdftotext", str(stage / publisher.FILES[2]), "-"],
+                              capture_output=True, text=True, check=True).stdout
+        for label in ("Muon0", "Run2023D", "369943", "1 unique processed events"):
+            self.assertIn(label, text)
+        self.assertNotIn("ZeroBias", text)
+        self.assertEqual(self.publish(inventory, "muon_receipt"), receipt)
+        self.assertEqual({name: publisher.sha256(self.output / name) for name in files}, before)
+        context["datasets"] = ["/Muon1/Run2023D-v1/RAW"]
+        (self.output / publisher.CONTEXT_NAME).write_text(json.dumps(context))
+        with self.assertRaises(blind.BlindingError):
+            self.publish(inventory, "muon_receipt")
+
+    def test_scaled_source_relabelling_rejects_before_reader_access(self):
+        row = self.input("muon", 1, [3.05])
+        inventory = self.scaled_inventory("muon_inventory.json", [row], [1])
+        source = json.loads(inventory.read_text())
+        for changes in (dict(datasets=["/Muon1/Run2023D-v1/RAW"]), dict(runs=[369944]),
+                        dict(event_budget=100001), dict(expected_unique_events=10001)):
+            with self.subTest(changes=changes):
+                inventory.write_text(json.dumps(dict(source, **changes)))
+                with patch.object(publisher.blind, "root_summary", side_effect=AssertionError("Must not read events")):
+                    with self.assertRaises(blind.BlindingError):
+                        self.publish(inventory, "muon_receipt")
+        self.assertFalse(self.output.exists())
+
+    def test_scaled_receipt_failure_restores_all_four_previous_files(self):
+        first = self.input("first", 1, [3.05])
+        self.publish(self.scaled_inventory("first_inventory.json", [first], [1]), "receipt_first")
+        files = publisher.FILES + (publisher.CONTEXT_NAME,)
+        before = {name: publisher.sha256(self.output / name) for name in files}
+        second = self.input("second", 2, [3.15])
+        inventory = self.scaled_inventory("second_inventory.json", [first, second], [1, 2])
+        save = publisher.save_new_json
+        def fail_commit(path, value):
+            if Path(path).name == "publication.json":
+                raise OSError("Synthetic four-file receipt failure")
+            return save(path, value)
+        with patch.object(publisher, "save_new_json", side_effect=fail_commit):
+            with self.assertRaises(OSError):
+                self.publish(inventory, "receipt_second")
+        self.assertEqual({name: publisher.sha256(self.output / name) for name in files}, before)
 
 
 if __name__ == "__main__":
