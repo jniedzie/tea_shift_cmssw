@@ -181,7 +181,7 @@ def validated_inputs(inventory):
     else:
         require(inventory.get("schema") == "shift-data-staged-publication-inputs-v2",
                 "Unsupported commissioning inventory")
-        require(type(inventory.get("event_budget")) is int and 1 <= inventory["event_budget"] <= 100000,
+        require(type(inventory.get("event_budget")) is int and 1 <= inventory["event_budget"] <= 1000000,
                 "A scaled data cohort requires an explicit bounded event budget")
         validate_plot_context(dict(schema="shift-data-control-plot-context-v1",
                                    era=inventory.get("era"), datasets=inventory.get("datasets"),

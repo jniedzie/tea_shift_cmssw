@@ -317,13 +317,26 @@ class BlindedPublicationTest(unittest.TestCase):
         inventory = self.scaled_inventory("muon_inventory.json", [row], [1])
         source = json.loads(inventory.read_text())
         for changes in (dict(datasets=["/Muon1/Run2023D-v1/RAW"]), dict(runs=[369944]),
-                        dict(event_budget=100001), dict(expected_unique_events=10001)):
+                        dict(event_budget=1000001), dict(expected_unique_events=10001)):
             with self.subTest(changes=changes):
                 inventory.write_text(json.dumps(dict(source, **changes)))
                 with patch.object(publisher.blind, "root_summary", side_effect=AssertionError("Must not read events")):
                     with self.assertRaises(blind.BlindingError):
                         self.publish(inventory, "muon_receipt")
         self.assertFalse(self.output.exists())
+
+    def test_large_budget_keeps_exact_exposure_and_approved_window(self):
+        row = self.input("large_budget", 1, [3.05, 666.123456])
+        inventory = self.scaled_inventory("large_budget_inventory.json", [row], [1])
+        source = json.loads(inventory.read_text())
+        source["event_budget"] = 1000000
+        inventory.write_text(json.dumps(source))
+        receipt = self.publish(inventory, "large_budget_receipt")
+        self.assertEqual(receipt["allowed_pairs"], 1)
+        self.assertEqual(receipt["events_with_allowed_pair"], 1)
+        summary = json.loads((self.output / publisher.FILES[0]).read_text())
+        self.assertEqual(summary["unique_processed_events"], 1)
+        self.assertNotIn("666.123456", json.dumps(summary))
 
     def test_scaled_receipt_failure_restores_all_four_previous_files(self):
         first = self.input("first", 1, [3.05])
