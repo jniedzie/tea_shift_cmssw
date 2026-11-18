@@ -22,6 +22,8 @@ import tempfile
 
 MASS_BRANCH = "ShiftDimuonVertex_mass"
 COUNT_BRANCH = "nShiftDimuonVertex"
+SUMMARY_SCHEMA = "shift-blinded-data-summary-v2"
+MANIFEST_SCHEMA = "shift-data-input-provenance-v2"
 POLICY_KEYS = {
     "schema", "version", "blinded", "unit", "mass_branch", "mass_min_gev",
     "mass_max_gev", "histogram_bins", "endpoints",
@@ -50,6 +52,21 @@ def executable_sha256():
     return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 
+def check_reference(reference):
+    if (not isinstance(reference, dict) or set(reference) != {"path", "sha256"}
+            or not isinstance(reference["path"], str)
+            or not isinstance(reference["sha256"], str) or len(reference["sha256"]) != 64):
+        raise BlindingError("Missing commissioning evidence reference")
+    try:
+        payload = Path(reference["path"]).read_bytes()
+        measured = hashlib.sha256(payload).hexdigest()
+    except OSError:
+        raise BlindingError("Commissioning evidence is unavailable") from None
+    if measured != reference["sha256"]:
+        raise BlindingError("Commissioning evidence differs from its qualified bytes")
+    return payload
+
+
 def validate_policy(policy):
     if not isinstance(policy, dict) or set(policy) != POLICY_KEYS:
         raise BlindingError("Missing or unsupported blinding policy fields")
@@ -75,17 +92,40 @@ def validate_qualification(policy, input_kind, qualification, provenance_sha256)
         return
     required = {
         "schema", "policy_sha256", "mc_as_data_passed", "independent_review_passed",
-        "window_mc_qualified", "executable_sha256", "input_provenance_sha256",
+        "executable_sha256", "input_provenance_sha256", "purpose",
+        "approved_mass_min_gev", "approved_mass_max_gev", "authorization", "mc_response_evidence",
     }
     if (not isinstance(qualification, dict) or set(qualification) != required
-            or qualification["schema"] != "shift-data-blinding-qualification-v1"
+            or qualification["schema"] != "shift-data-blinding-qualification-v2"
+            or qualification["purpose"] != "jpsi-control-commissioning"
+            or type(qualification["approved_mass_min_gev"]) not in (int, float)
+            or type(qualification["approved_mass_max_gev"]) not in (int, float)
+            or qualification["approved_mass_min_gev"] != policy["mass_min_gev"]
+            or qualification["approved_mass_max_gev"] != policy["mass_max_gev"]
             or qualification["policy_sha256"] != digest_json(policy)
             or qualification["executable_sha256"] != executable_sha256()
             or qualification["input_provenance_sha256"] != provenance_sha256
             or not isinstance(provenance_sha256, str) or len(provenance_sha256) != 64
             or any(qualification[key] is not True for key in (
-                "mc_as_data_passed", "independent_review_passed", "window_mc_qualified"))):
+                "mc_as_data_passed", "independent_review_passed"))):
         raise BlindingError("Collision data require qualification of this exact blinding policy")
+    # Commissioning authorizes this band only; it does not claim adequate
+    # J/psi tail acceptance, a yield fit, or physical normalization.
+    try:
+        authorization = json.loads(check_reference(qualification["authorization"]))
+    except ValueError:
+        raise BlindingError("Commissioning authorization is not valid JSON") from None
+    if (not isinstance(authorization, dict)
+            or authorization.get("schema") != "shift-data-commissioning-authorization-v1"
+            or authorization.get("purpose") != qualification["purpose"]
+            or authorization.get("mass_branch") != policy["mass_branch"]
+            or authorization.get("endpoints") != policy["endpoints"]
+            or type(authorization.get("approved_mass_min_gev")) not in (int, float)
+            or type(authorization.get("approved_mass_max_gev")) not in (int, float)
+            or authorization["approved_mass_min_gev"] != policy["mass_min_gev"]
+            or authorization["approved_mass_max_gev"] != policy["mass_max_gev"]):
+        raise BlindingError("Commissioning authorization does not approve this exact mass band")
+    check_reference(qualification["mc_response_evidence"])
 
 
 def identity_key(identity):
@@ -106,7 +146,7 @@ class BlindedSummary:
         self._policy_sha256 = digest_json(self.policy)
         self.provenance_sha256 = provenance_sha256
         self.input_kind = input_kind
-        self.qualification = dict(qualification) if qualification is not None else None
+        self.qualification = json.loads(canonical_json(qualification)) if qualification is not None else None
         self._qualification_sha256 = digest_json(self.qualification) if self.qualification else None
         self.identities = set()
         self.duplicates = 0
@@ -153,7 +193,7 @@ class BlindedSummary:
         for key in sorted(self.identities):
             ledger.update(struct.pack(">IIQ", *key))
         result = dict(
-            schema="shift-blinded-data-summary-v1", input_kind=self.input_kind,
+            schema=SUMMARY_SCHEMA, input_kind=self.input_kind,
             policy=dict(self.policy), policy_sha256=self._policy_sha256,
             qualification_sha256=self._qualification_sha256,
             unique_processed_events=len(self.identities),
@@ -173,7 +213,7 @@ def validate_summary(result):
     if not isinstance(result, dict) or set(result) != SUMMARY_KEYS:
         raise BlindingError("Unsupported blinded output schema")
     policy = validate_policy(result["policy"])
-    if (result["schema"] != "shift-blinded-data-summary-v1"
+    if (result["schema"] != SUMMARY_SCHEMA
             or result["input_kind"] not in ("mc-as-data", "collision-data")
             or result["policy_sha256"] != digest_json(policy)):
         raise BlindingError("Inconsistent blinded output provenance")
@@ -181,9 +221,12 @@ def validate_summary(result):
     if not isinstance(provenance, list):
         raise BlindingError("Unsupported input provenance schema")
     for source in provenance:
-        if (not isinstance(source, dict) or set(source) != {"path", "root_uuid", "entries"}
+        if (not isinstance(source, dict) or set(source) != {"path", "root_uuid", "entries", "sha256", "bytes"}
                 or not isinstance(source["path"], str) or not isinstance(source["root_uuid"], str)
-                or type(source["entries"]) is not int or source["entries"] < 0):
+                or type(source["entries"]) is not int or source["entries"] < 0
+                or type(source["bytes"]) is not int or source["bytes"] <= 0
+                or not isinstance(source["sha256"], str) or len(source["sha256"]) != 64
+                or any(c not in "0123456789abcdef" for c in source["sha256"])):
             raise BlindingError("Unsupported input provenance schema")
     for name in ("unique_processed_events", "events_with_allowed_pair", "allowed_pairs",
                  "duplicate_events_skipped"):
@@ -222,20 +265,38 @@ def checked_leaf(tree, name, types, count_name=None):
 
 def validate_manifest(manifest, paths, input_kind):
     if (not isinstance(manifest, dict) or set(manifest) != {"schema", "inputs"}
-            or manifest["schema"] != "shift-data-input-provenance-v1"
+            or manifest["schema"] != MANIFEST_SCHEMA
             or not isinstance(manifest["inputs"], list)):
         raise BlindingError("An explicit input provenance manifest is required")
     expected = {}
     for source in manifest["inputs"]:
-        if (not isinstance(source, dict) or set(source) != {"path", "root_uuid", "origin"}
+        if (not isinstance(source, dict) or set(source) != {"path", "root_uuid", "origin", "sha256", "bytes"}
                 or not isinstance(source["path"], str) or not source["path"]
                 or not isinstance(source["root_uuid"], str) or not source["root_uuid"]
+                or type(source["bytes"]) is not int or source["bytes"] <= 0
+                or not isinstance(source["sha256"], str) or len(source["sha256"]) != 64
+                or any(c not in "0123456789abcdef" for c in source["sha256"])
                 or source["origin"] != input_kind or source["path"] in expected):
             raise BlindingError("Input provenance origin or schema does not match the requested mode")
-        expected[source["path"]] = source["root_uuid"]
+        expected[source["path"]] = dict(source)
     if set(expected) != set(paths):
         raise BlindingError("Input paths differ from the provenance manifest")
     return expected
+
+
+def verify_input_bytes(source):
+    """Verify staged immutable bytes; a ROOT UUID does not pin file content."""
+    digest = hashlib.sha256()
+    total = 0
+    try:
+        with Path(source["path"]).open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                total += len(chunk)
+                digest.update(chunk)
+    except OSError:
+        raise BlindingError("A staged input cannot be checked against its frozen bytes") from None
+    if total != source["bytes"] or digest.hexdigest() != source["sha256"]:
+        raise BlindingError("A staged input differs from its frozen bytes")
 
 
 def root_summary(paths, policy, input_kind, qualification=None, provenance_manifest=None):
@@ -245,6 +306,8 @@ def root_summary(paths, policy, input_kind, qualification=None, provenance_manif
         raise BlindingError("At least one exact input file is required")
     expected = validate_manifest(provenance_manifest, paths, input_kind)
     summary = BlindedSummary(policy, input_kind, qualification, digest_json(provenance_manifest))
+    for source in expected.values():
+        verify_input_bytes(source)
     try:
         import ROOT
     except ImportError:
@@ -258,7 +321,7 @@ def root_summary(paths, policy, input_kind, qualification=None, provenance_manif
             if not source or source.IsZombie() or source.TestBit(ROOT.TFile.kRecovered):
                 raise BlindingError("An input ROOT file is unreadable or recovered")
             opened.append(source)
-            if source.GetUUID().AsString() != expected[path]:
+            if source.GetUUID().AsString() != expected[path]["root_uuid"]:
                 raise BlindingError("An input ROOT UUID differs from its provenance manifest")
             tree = source.Get("Events")
             if not tree or not tree.InheritsFrom("TTree"):
@@ -272,7 +335,8 @@ def root_summary(paths, policy, input_kind, qualification=None, provenance_manif
             for name in ("run", "luminosityBlock", "event", COUNT_BRANCH, MASS_BRANCH):
                 tree.SetBranchStatus(name, 1)
             provenance.append(dict(path=path, root_uuid=source.GetUUID().AsString(),
-                                   entries=int(tree.GetEntries())))
+                                   entries=int(tree.GetEntries()), sha256=expected[path]["sha256"],
+                                   bytes=expected[path]["bytes"]))
         for source in opened:
             tree = source.Get("Events")
             for index in range(tree.GetEntries()):
@@ -291,6 +355,8 @@ def root_summary(paths, policy, input_kind, qualification=None, provenance_manif
                 if len(values) != count:
                     raise BlindingError("Canonical mass array does not match its count")
                 summary.add_event(identity, count, [float(value) for value in values])
+        for source in expected.values():
+            verify_input_bytes(source)
         return summary.result(provenance)
     except BlindingError:
         raise

@@ -3,6 +3,7 @@
 
 from array import array
 import copy
+import hashlib
 import importlib.util
 import json
 import math
@@ -97,18 +98,38 @@ class BlindedSummaryTest(unittest.TestCase):
             blind.BlindedSummary(dict(policy(), unblind=True), "mc-as-data")
 
     def test_collision_data_require_exact_policy_qualification(self):
-        qualified = dict(schema="shift-data-blinding-qualification-v1",
-                         policy_sha256=blind.digest_json(policy()), mc_as_data_passed=True,
-                         independent_review_passed=True, window_mc_qualified=True,
-                         executable_sha256=blind.executable_sha256(), input_provenance_sha256="a" * 64)
-        blind.BlindedSummary(policy(), "collision-data", qualified, "a" * 64)
-        for receipt in (None, {}, dict(qualified, window_mc_qualified=False),
-                        dict(qualified, policy_sha256="0" * 64),
-                        dict(qualified, executable_sha256="0" * 64)):
-            with self.subTest(receipt=receipt), self.assertRaises(blind.BlindingError):
-                blind.BlindedSummary(policy(), "collision-data", receipt, "a" * 64)
-        with self.assertRaises(blind.BlindingError):
-            blind.BlindedSummary(policy(), "collision-data", qualified, "b" * 64)
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = Path(directory) / "evidence.json"
+            authorization = dict(schema="shift-data-commissioning-authorization-v1",
+                                 purpose="jpsi-control-commissioning", mass_branch=blind.MASS_BRANCH,
+                                 approved_mass_min_gev=2.9, approved_mass_max_gev=3.3, endpoints="inclusive")
+            evidence.write_text(json.dumps(authorization))
+            reference = dict(path=str(evidence), sha256=hashlib.sha256(evidence.read_bytes()).hexdigest())
+            qualified = dict(schema="shift-data-blinding-qualification-v2",
+                             purpose="jpsi-control-commissioning", approved_mass_min_gev=2.9,
+                             approved_mass_max_gev=3.3, authorization=reference, mc_response_evidence=reference,
+                             policy_sha256=blind.digest_json(policy()), mc_as_data_passed=True,
+                             independent_review_passed=True, executable_sha256=blind.executable_sha256(),
+                             input_provenance_sha256="a" * 64)
+            blind.BlindedSummary(policy(), "collision-data", qualified, "a" * 64)
+            for receipt in (None, {}, dict(qualified, independent_review_passed=False),
+                            dict(qualified, policy_sha256="0" * 64),
+                            dict(qualified, executable_sha256="0" * 64),
+                            dict(qualified, approved_mass_max_gev=4.),
+                            dict(qualified, purpose="final-jpsi-yield"),
+                            dict(qualified, authorization=dict(reference, sha256="0" * 64))):
+                with self.subTest(receipt=receipt), self.assertRaises(blind.BlindingError):
+                    blind.BlindedSummary(policy(), "collision-data", receipt, "a" * 64)
+            with self.assertRaises(blind.BlindingError):
+                blind.BlindedSummary(policy(), "collision-data", qualified, "b" * 64)
+            widened = dict(policy(), mass_max_gev=4.)
+            widened_qualification = dict(qualified, policy_sha256=blind.digest_json(widened),
+                                         approved_mass_max_gev=4.)
+            with self.assertRaises(blind.BlindingError):
+                blind.BlindedSummary(widened, "collision-data", widened_qualification, "a" * 64)
+            evidence.write_text('{"synthetic_evidence": false}')
+            with self.assertRaises(blind.BlindingError):
+                blind.BlindedSummary(policy(), "collision-data", qualified, "a" * 64)
         with self.assertRaises(blind.BlindingError):
             blind.BlindedSummary(policy(), "unknown")
 
@@ -153,10 +174,10 @@ class BlindedSummaryTest(unittest.TestCase):
             summary.result([])
 
     def test_manifest_origin_paths_and_schema_fail_closed(self):
-        good = dict(schema="shift-data-input-provenance-v1", inputs=[
-            dict(path="a.root", root_uuid="synthetic-uuid", origin="collision-data")])
+        record = dict(path="a.root", root_uuid="synthetic-uuid", origin="collision-data", sha256="a" * 64, bytes=1)
+        good = dict(schema=blind.MANIFEST_SCHEMA, inputs=[record])
         self.assertEqual(blind.validate_manifest(good, ["a.root"], "collision-data"),
-                         {"a.root": "synthetic-uuid"})
+                         {"a.root": record})
         for manifest, paths, kind in ((None, ["a.root"], "mc-as-data"),
                                       (good, ["a.root"], "mc-as-data"),
                                       (good, ["b.root"], "collision-data"),
@@ -187,9 +208,10 @@ class BlindedRootReaderTest(unittest.TestCase):
         records = []
         for path in paths:
             source = ROOT.TFile.Open(str(path))
-            records.append(dict(path=str(path), root_uuid=source.GetUUID().AsString(), origin="mc-as-data"))
+            records.append(dict(path=str(path), root_uuid=source.GetUUID().AsString(), origin="mc-as-data",
+                                sha256=hashlib.sha256(path.read_bytes()).hexdigest(), bytes=path.stat().st_size))
             source.Close()
-        return dict(schema="shift-data-input-provenance-v1", inputs=records)
+        return dict(schema=blind.MANIFEST_SCHEMA, inputs=records)
 
     def fixture(self, path, rows, missing_mass=False, wrong_count=False):
         source = ROOT.TFile(str(path), "RECREATE")
@@ -244,6 +266,22 @@ class BlindedRootReaderTest(unittest.TestCase):
             self.fixture(path, [(1, [3.1])])
             manifest = self.manifest([path])
             manifest["inputs"][0]["root_uuid"] = "stale-uuid"
+            with self.assertRaises(blind.BlindingError):
+                blind.root_summary([path], policy(), "mc-as-data", provenance_manifest=manifest)
+
+    def test_same_uuid_root_update_is_rejected_by_actual_byte_fingerprint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "input.root"
+            self.fixture(path, [(1, [3.1])])
+            manifest = self.manifest([path])
+            source = ROOT.TFile.Open(str(path), "UPDATE")
+            before_uuid = source.GetUUID().AsString()
+            ROOT.TObjString("synthetic changed bytes").Write("ChangedPayload")
+            source.Close()
+            source = ROOT.TFile.Open(str(path))
+            self.assertEqual(source.GetUUID().AsString(), before_uuid)
+            source.Close()
+            self.assertNotEqual(hashlib.sha256(path.read_bytes()).hexdigest(), manifest["inputs"][0]["sha256"])
             with self.assertRaises(blind.BlindingError):
                 blind.root_summary([path], policy(), "mc-as-data", provenance_manifest=manifest)
 
