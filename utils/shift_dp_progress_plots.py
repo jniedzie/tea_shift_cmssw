@@ -292,16 +292,20 @@ def with_retained_statistics(current, retained):
                 retained_reference_anchors=sum(r['retained_reference'] for r in selected.values()))
 
 
-def draw_snapshot_statistics(before, current, output, cutoff):
+def draw_snapshot_statistics(before, current, output, cutoff, *, all_points=False):
     """Show stored weighted passing statistics, with model changes explicit."""
     snapshots=[read_json(before),read_json(current)]
     rows=[snapshot['rows'] for snapshot in snapshots]
-    masses=sorted({row['mass_gev'] for group in rows for row in group})
     def flight_label(row):
         # Keep nominal sample labels together despite small boost differences.
         name=row.get('name',row.get('point',''))
         match=re.search(r'_lab_([0-9p]+)m$',name)
         return float(match[1].replace('p','.')) if match else row.get('mean_lab_flight_m')
+    total_anchors=[len(group) for group in rows]
+    if not all_points:
+        standard_flights=(None,5.,30.,100.,1000.)
+        rows=[[row for row in group if flight_label(row) in standard_flights] for group in rows]
+    masses=sorted({row['mass_gev'] for group in rows for row in group})
     flights=[None]+sorted({flight_label(row) for group in rows for row in group
                           if flight_label(row) is not None})
     plt=plotting()
@@ -319,7 +323,8 @@ def draw_snapshot_statistics(before, current, output, cutoff):
         cells.append(lookup)
     norm=LogNorm(1,10**math.ceil(math.log10(maximum)))
     cmap=plt.get_cmap('viridis')
-    figure,axes=plt.subplots(1,2,figsize=(15,6.1),sharey=True)
+    height=max(6.1,.27*len(flights)+3.) if all_points else 6.1
+    figure,axes=plt.subplots(1,2,figsize=(15,height),sharey=True)
     for epoch,(axis,lookup,group) in enumerate(zip(axes,cells,rows)):
         for i,mass in enumerate(masses):
             for j,flight in enumerate(flights):
@@ -350,11 +355,18 @@ def draw_snapshot_statistics(before, current, output, cutoff):
         'Current catalog cutoff: '+cutoff+'. Same axes and colour scale; weights and original GEN exposure are preserved.\n'
         'N_eff = (sum w)^2 / sum w^2 from positive event-multiplicity bins, including overflow; each event is counted once.\n'
         'These are MC statistics, not raw event counts or events normalized to lumi; source-collision correlations can reduce independent precision.\n'
-        'Current totals retain previous-model inputs where no replacement exists; hatching identifies retained references, not new-model qualification.\n'
+        'Current totals retain previous-model inputs where no replacement exists; hatching identifies retained references, not new-model qualification.\n'+
+        ('All generated points are shown here.\n' if all_points else
+         'Standard prompt/5/30/100/1000 m grid; additional lifetime and epsilon points are in signal_statistics_all_points.pdf.\n')+
         'Lab-flight rows use the nominal sample labels; exact epsilon, proper lifetime and reference boost remain in the saved inputs.',fontsize=8.1,va='bottom')
-    path=output/'signal_statistics_before_after.pdf';figure.savefig(path);plt.close(figure)
-    return dict(path=str(path),sha256=digest(path),before_anchors=len(rows[0]),current_anchors=len(rows[1]),
+    path=output/('signal_statistics_all_points.pdf' if all_points else 'signal_statistics_before_after.pdf')
+    figure.savefig(path);plt.close(figure)
+    report=dict(path=str(path),sha256=digest(path),before_anchors=len(rows[0]),current_anchors=len(rows[1]),
+                total_before_anchors=total_anchors[0],total_current_anchors=total_anchors[1],
                 missing_is_zero=False,source_collision_correlations_generally_omitted=True)
+    if not all_points:
+        report['all_points']=draw_snapshot_statistics(before,current,output,cutoff,all_points=True)
+    return report
 
 
 def signal_strength_contours(snapshot, scan):

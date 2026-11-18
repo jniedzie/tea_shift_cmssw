@@ -91,12 +91,13 @@ def select_signals(catalog, baseline):
 
 
 class Stager:
-    def __init__(self, directory, maximum_bytes):
+    def __init__(self, directory, maximum_bytes, input_cache=None):
         self.directory = directory
         self.maximum_bytes = maximum_bytes
         self.bytes = 0
         self.records = []
         self.cache = {}
+        self.input_cache = Path(input_cache) if input_cache else None
 
     def stage(self, path, expected, *, size=None, url=None):
         check_digest(expected)
@@ -112,12 +113,17 @@ class Stager:
                         or supplied.netloc!=urlsplit(canonical).netloc
                         or native_url('/'+supplied.path.lstrip('/'))!=canonical):
                     raise ValueError('Publication URL differs from its explicit canonical storage path')
-            subprocess.run(['/usr/bin/xrdcp', '--silent', '--cksum', 'adler32', canonical, str(destination)],
-                           timeout=120, check=True)
         else:
             source = Path(path)
             if not source.is_absolute() or not str(source).startswith('/afs/cern.ch/work/j/jniedzie/private/shift_cmssw/'):
                 raise ValueError('A non-EOS authority must be an explicit workspace file')
+        cached = self.input_cache / expected if self.input_cache else None
+        if cached is not None and cached.is_file():
+            shutil.copy2(cached, destination)
+        elif str(path).startswith('/eos/'):
+            subprocess.run(['/usr/bin/xrdcp', '--silent', '--cksum', 'adler32', canonical, str(destination)],
+                           timeout=120, check=True)
+        else:
             shutil.copy2(source, destination)
         observed = destination.stat().st_size
         if (size is not None and observed != size) or digest(destination) != expected:
@@ -472,7 +478,7 @@ def refresh(args):
     write(output / 'refresh_status.json', report)
     with tempfile.TemporaryDirectory(prefix='shift-dp-limits-', dir=args.scratch_base) as temporary:
         scratch = Path(temporary)
-        stager = Stager(scratch, args.maximum_input_bytes)
+        stager = Stager(scratch, args.maximum_input_bytes, getattr(args, 'input_cache', None))
         inventory = []
         event_statistics=[]
         for row in selected:
@@ -558,6 +564,8 @@ def main():
     parser.add_argument('--figure-directory', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--scratch-base', type=Path, default=Path('/tmp'))
+    parser.add_argument('--input-cache', type=Path,
+                        help='Optional local files named by SHA-256; every reused file is checked again')
     parser.add_argument('--maximum-input-bytes', type=int, default=500_000_000)
     args = parser.parse_args()
     check_digest(args.publisher_config_sha256)

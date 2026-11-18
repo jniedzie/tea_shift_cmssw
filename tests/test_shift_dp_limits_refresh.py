@@ -11,13 +11,34 @@ import numpy as np
 
 ANALYSIS=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ANALYSIS/'utils'),str(ANALYSIS/'bin')]
-from shift_dp_limits_refresh import (mass_fingerprint,qualify_rate,qualify_row,select_signals,
+from shift_dp_limits_refresh import (Stager,mass_fingerprint,qualify_rate,qualify_row,select_signals,
                                     same_scan_support,passing_event_statistics,settings,check_pdfs,scan_generated_points)
 from shift_limits_current_plots import comparison_figure_directory
 from shift_dp_progress_plots import with_retained_statistics, signal_closure, background_closure
 
 
 class RefreshInputsTest(unittest.TestCase):
+    def test_input_cache_preserves_canonical_provenance_and_rechecks_bytes(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);cache=root/'cache';cache.mkdir()
+            content=b'qualified input';expected=hashlib.sha256(content).hexdigest()
+            cached=cache/expected;cached.write_bytes(content)
+            stage=Stager(root,1000,input_cache=cache)
+            canonical='/eos/user/j/test/histogram.root'
+            with patch('shift_dp_limits_refresh.subprocess.run') as download:
+                actual=stage.stage(canonical,expected,size=len(content))
+                download.assert_not_called()
+            self.assertEqual(actual.read_bytes(),content)
+            self.assertEqual(stage.records[0]['path'],canonical)
+            with self.assertRaisesRegex(ValueError,'canonical storage path'):
+                Stager(root,1000,input_cache=cache).stage(canonical,expected,url='root://wrong.example//eos/user/j/test/histogram.root')
+            with self.assertRaisesRegex(ValueError,'explicit workspace file'):
+                Stager(root,1000,input_cache=cache).stage('/tmp/unqualified.root',expected)
+            cached.write_bytes(b'changed input')
+            with self.assertRaisesRegex(ValueError,'pinned bytes'):
+                Stager(root,1000,input_cache=cache).stage(canonical,expected)
+
     def test_background_update_keeps_identical_signals_and_rejects_changed_inputs(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary)
