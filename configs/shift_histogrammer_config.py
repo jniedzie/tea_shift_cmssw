@@ -21,6 +21,12 @@ import os
 # Truth is used only for MC performance evaluation, never reco selection.
 enableTruthDiagnostics = True
 
+# Nominal SHIFT collision point [cm] for precomputed pointing in older Nano.
+# New Nano stores its producer's exact reference and validity flags.
+primaryVertexX = 0.0
+primaryVertexY = 0.0
+primaryVertexZ = 14800.0
+
 # Optional truth-binned response maps for the reconstruction study.
 enableResolutionMaps = False
 resolutionMapsOnly = False
@@ -367,6 +373,11 @@ for category in dimuonCategories:
         ("maxMuonPt", 500, 0.0, 50.0),
         ("rapidity", 400, -10.0, 10.0),
         ("vertexR", 450, 0.0, 450.0),
+        ("pvDca", 1000, 0.0, 5000.0),
+        ("pvPointingCos", 201, -1.005, 1.005),
+        ("pvPointingCosFine", 1000, 0.99, 1.00001),
+        ("pvDcaValid", 2, -0.5, 1.5),
+        ("pvPointingValid", 2, -0.5, 1.5),
         ("massOS", 5000, 0.0, 100.0),
         ("massSS", 5000, 0.0, 100.0),
         ("constrainedMass", 1000, 0.0, 100.0),

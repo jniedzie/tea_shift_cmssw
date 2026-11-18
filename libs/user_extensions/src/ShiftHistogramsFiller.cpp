@@ -3,8 +3,10 @@
 
 #include "ConfigManager.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <iomanip>
+#include <limits>
 #include <map>
 #include <set>
 
@@ -84,6 +86,13 @@ ShiftHistogramsFiller::ShiftHistogramsFiller(shared_ptr<HistogramsHandler> histo
     : histogramsHandler(histogramsHandler_) {
   auto& config = ConfigManager::GetInstance();
   eventProcessor = make_unique<EventProcessor>();
+  float pvX = primaryVertex.X(), pvY = primaryVertex.Y(), pvZ = primaryVertex.Z();
+  try { config.GetValue("primaryVertexX", pvX); } catch (const Exception&) {}
+  try { config.GetValue("primaryVertexY", pvY); } catch (const Exception&) {}
+  try { config.GetValue("primaryVertexZ", pvZ); } catch (const Exception&) {}
+  if (!isfinite(pvX) || !isfinite(pvY) || !isfinite(pvZ))
+    throw runtime_error("The configured SHIFT primary vertex must be finite");
+  primaryVertex.SetXYZ(pvX, pvY, pvZ);
   config.GetValue("enableTruthDiagnostics", enableTruthDiagnostics);
   try {
     string weightsBranchName;
@@ -673,6 +682,49 @@ void ShiftHistogramsFiller::FillDimuonKinematics(const shared_ptr<Event> event) 
     if (mass >= 0. && pt >= 0. && transverseMass > 0.)
       fill("rapidity", asinh(pz / transverseMass));
     fill("vertexR", hypot(dimuon->GetAs<float>("vx"), dimuon->GetAs<float>("vy")));
+    double pvDca = numeric_limits<double>::quiet_NaN();
+    double pvPointingCos = numeric_limits<double>::quiet_NaN();
+    bool pvDcaValid = false, pvPointingValid = false;
+    if (dimuon->HasBranch("pvDca") && dimuon->HasBranch("pvPointingCos") &&
+        dimuon->HasBranch("pvDcaValid") && dimuon->HasBranch("pvPointingValid")) {
+      // New Nano files preserve the producer's configured reference point.
+      pvDca = dimuon->GetAs<float>("pvDca");
+      pvPointingCos = dimuon->GetAs<float>("pvPointingCos");
+      pvDcaValid = dimuon->GetAs<int>("pvDcaValid") == 1 && isfinite(pvDca) && pvDca >= 0.;
+      pvPointingValid = dimuon->GetAs<int>("pvPointingValid") == 1 &&
+                        isfinite(pvPointingCos) && abs(pvPointingCos) <= 1.;
+    } else {
+      // Old Nano files need no detector replay. Use the unconstrained pair
+      // momentum and nominal collision point, never an event-truth vertex.
+      TVector3 reference = primaryVertex;
+      if (dimuon->HasBranch("pvX") && dimuon->HasBranch("pvY") && dimuon->HasBranch("pvZ"))
+        reference.SetXYZ(dimuon->GetAs<float>("pvX"), dimuon->GetAs<float>("pvY"),
+                         dimuon->GetAs<float>("pvZ"));
+      TVector3 const flight(dimuon->GetAs<float>("vx") - reference.X(),
+                            dimuon->GetAs<float>("vy") - reference.Y(),
+                            dimuon->GetAs<float>("vz") - reference.Z());
+      double const phi = dimuon->GetAs<float>("phi");
+      double const momentum = hypot(pt, pz);
+      if (isfinite(pt) && pt >= 0. && isfinite(pz) && isfinite(phi) && momentum > 0. && isfinite(momentum) &&
+          isfinite(flight.X()) && isfinite(flight.Y()) && isfinite(flight.Z())) {
+        TVector3 const direction(pt * cos(phi) / momentum, pt * sin(phi) / momentum, pz / momentum);
+        auto const cross = flight.Cross(direction);
+        pvDca = hypot(cross.X(), cross.Y(), cross.Z());
+        pvDcaValid = isfinite(pvDca);
+        double const distance = hypot(flight.X(), flight.Y(), flight.Z());
+        if (distance > 0. && isfinite(distance)) {
+          pvPointingCos = clamp((flight * (1. / distance)).Dot(direction), -1., 1.);
+          pvPointingValid = isfinite(pvPointingCos);
+        }
+      }
+    }
+    fill("pvDcaValid", pvDcaValid);
+    fill("pvPointingValid", pvPointingValid);
+    if (pvDcaValid) fill("pvDca", pvDca);
+    if (pvPointingValid) {
+      fill("pvPointingCos", pvPointingCos);
+      fill("pvPointingCosFine", pvPointingCos);
+    }
     // Keep OS and SS spectra separate without changing any pair selection.
     if (mass >= 0. && dimuon->HasBranch("isOS")) {
       int const isOS = dimuon->GetAs<int>("isOS");

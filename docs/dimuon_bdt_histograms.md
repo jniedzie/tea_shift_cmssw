@@ -1,6 +1,26 @@
 <!-- Code style: human-code. -->
 # Dimuon vertex BDT histograms and process overlays
 
+The18November pointing additions are ordinary dimuon diagnostics, independent
+of the saved score: `pvDca` [cm] and signed `pvPointingCos`, plus their validity
+histograms, are booked in all seven categories and included in the main plotting
+configuration, including a fine cosine view near+1. They use the canonical
+unconstrained pair and nominal SHIFT PV,
+normally `(0,0,14800 cm)`. Older Nano computes them during histogramming;
+new Nano can supply precomputed values and its exact PV reference. Configure
+`primaryVertexX/Y/Z` for older inputs from another collision position. Existing
+histogram files must be refreshed before these plots are available. Definitions,
+validation and the retraining-plan link are in
+[`SHIFT_RECONSTRUCTION.md`](../../SHIFT_RECONSTRUCTION.md#dimuon-pointing-observables).
+No score cut is added.
+
+The large18November rerun and its explicitly separate historical fake-pair
+control are indexed in
+[`pointing_large_stats`](../plots/vertex_classifier/pointing_large_stats/README.md).
+Use its process-dependence figure as well as the pooled distributions: a global
+DCA working point loses genuine native QCD, and current labelled-fake support
+is sparse. The canonical interpretation is in the reconstruction note above.
+
 These diagnostics use the saved `ShiftDimuonVertex_bdtScore` Double array.
 Every existing dimuon pair is retained. There is no BDT cut and no change to
 reconstruction, electronics, trigger settings or MC normalization. Generator

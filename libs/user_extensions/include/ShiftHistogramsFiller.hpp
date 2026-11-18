@@ -29,6 +29,7 @@ class ShiftHistogramsFiller {
 
   std::shared_ptr<HistogramsHandler> histogramsHandler;
   std::unique_ptr<EventProcessor> eventProcessor;
+  TVector3 primaryVertex{0., 0., 14800.};
   bool enableTruthDiagnostics = true;
   bool enableResolutionMaps = false;
   bool resolutionMapsOnly = false;

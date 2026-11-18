@@ -21,7 +21,7 @@ class DimuonKinematicsRuntimeTest(unittest.TestCase):
         self.addCleanup(scratch.cleanup)
         self.scratch = Path(scratch.name)
 
-    def run_histograms(self, events, truth=False, response_maps=False):
+    def run_histograms(self, events, truth=False, response_maps=False, primary_vertex=None):
         root = self.ROOT.TFile(str(self.scratch / "input.root"), "RECREATE")
         tree = self.ROOT.TTree("Events", "Synthetic reconstructed muon pairs")
         source = (Path(__file__).resolve().parents[1] /
@@ -31,6 +31,13 @@ class DimuonKinematicsRuntimeTest(unittest.TestCase):
                        "probability", "originCompatibilityNormalizedChi2", "refitStatus",
                        "dca", "dcaValid"))
         fields.update(f"constrained{variable}" for variable in ("Pt", "Pz", "Eta", "Phi", "Vx", "Vy", "Vz"))
+        # Most fixtures represent old Nano files; add saved pointing only when requested.
+        fields.difference_update(("pvX", "pvY", "pvZ", "pvDca", "pvPointingCos",
+                                  "pvDcaValid", "pvPointingValid"))
+        for event in events:
+            for name in event.get("branches", {}):
+                if "_" in name:
+                    fields.add(name.split("_", 1)[1])
         buffers = {}
         collections = ("ShiftMuon", "ShiftDimuonVertex", "GenPart") if truth else (
             "ShiftMuon", "ShiftDimuonVertex")
@@ -74,6 +81,8 @@ class DimuonKinematicsRuntimeTest(unittest.TestCase):
             "from shift_histogrammer_config import *\n"
             "defaultHistParams = ()\nirregularDefaultHistParams = ()\n"
             f"enableTruthDiagnostics = {truth}\n"
+            + ("" if primary_vertex is None else
+               "primaryVertexX, primaryVertexY, primaryVertexZ = " + repr(primary_vertex) + "\n")
             + ("enableResolutionMaps = True\nresolutionMapsOnly = True\n"
                "irregularHistParams2D = book_resolution_maps()\n" if response_maps else "")
             + ("" if truth else
@@ -163,6 +172,67 @@ class DimuonKinematicsRuntimeTest(unittest.TestCase):
         self.assertEqual(self.integral(self.histogram(root, "constrainedMass")), 0.0)
         self.assertEqual(root.Get("dimuon/ShiftDimuonVertex_massVsOpeningAngle").GetEntries(), 1.0)
 
+    def test_pv_pointing_geometry_invalid_states_and_signed_weights(self):
+        forward = {
+            "ShiftDimuonVertex_pt": [0.0], "ShiftDimuonVertex_pz": [-5.0],
+            "ShiftDimuonVertex_phi": [0.0], "ShiftDimuonVertex_vx": [10.0],
+            "ShiftDimuonVertex_vy": [20.0], "ShiftDimuonVertex_vz": [20.0],
+        }
+        cases = [
+            {"weight": 2.5, "branches": dict(forward, ShiftDimuonVertex_pt=[5.0],
+              ShiftDimuonVertex_pz=[0.0], ShiftDimuonVertex_vx=[13.0],
+              ShiftDimuonVertex_vy=[24.0], ShiftDimuonVertex_vz=[30.0])},
+            {"weight": -1.0, "branches": forward},
+            {"weight": 3.0, "branches": dict(forward, ShiftDimuonVertex_pz=[5.0])},
+            {"weight": 4.0, "branches": dict(forward, ShiftDimuonVertex_vz=[30.0])},
+            {"weight": 10.0, "branches": dict(forward, ShiftDimuonVertex_pz=[0.0])},
+            {"weight": 10.0, "branches": dict(forward, ShiftDimuonVertex_phi=[math.nan])},
+            {"weight": 10.0, "branches": dict(forward, ShiftDimuonVertex_vz=[math.inf])},
+        ]
+        root = self.run_histograms(cases, primary_vertex=(10.0, 20.0, 30.0))
+        for category in ("", "Good", "Both-Both"):
+            dca = self.histogram(root, "pvDca", category)
+            cosine = self.histogram(root, "pvPointingCos", category)
+            self.assertEqual(dca.GetEntries(), 4)
+            self.assertAlmostEqual(self.integral(dca), 8.5)
+            self.assertAlmostEqual(dca.GetMean(), 10.0 / 8.5)
+            self.assertAlmostEqual(dca.GetBinContent(dca.FindBin(4.0)), 8.5)
+            self.assertAlmostEqual(dca.GetBinError(dca.FindBin(4.0)) ** 2, 32.25)
+            self.assertEqual(cosine.GetEntries(), 3)
+            self.assertAlmostEqual(self.integral(cosine), 4.5)
+            for value, weight in ((0.6, 2.5), (1.0, -1.0), (-1.0, 3.0)):
+                self.assertAlmostEqual(cosine.GetBinContent(cosine.FindBin(value)), weight)
+            self.assertEqual(cosine.GetBinContent(0), 0.0)
+            self.assertEqual(cosine.GetBinContent(cosine.GetNbinsX() + 1), 0.0)
+            fine = self.histogram(root, "pvPointingCosFine", category)
+            self.assertAlmostEqual(fine.GetBinContent(fine.FindBin(1.0)), -1.0)
+            self.assertAlmostEqual(self.integral(fine), 4.5)
+            for name, valid_weight, invalid_weight in (("pvDcaValid", 8.5, 30.0),
+                                                       ("pvPointingValid", 4.5, 34.0)):
+                hist = self.histogram(root, name, category)
+                self.assertAlmostEqual(hist.GetBinContent(hist.FindBin(1.0)), valid_weight)
+                self.assertAlmostEqual(hist.GetBinContent(hist.FindBin(0.0)), invalid_weight)
+
+    def test_saved_pv_pointing_values_and_independent_validity_are_preserved(self):
+        saved = {"ShiftDimuonVertex_pvDca": [12.5],
+                 "ShiftDimuonVertex_pvPointingCos": [0.25],
+                 "ShiftDimuonVertex_pvDcaValid": [1.0],
+                 "ShiftDimuonVertex_pvPointingValid": [1.0]}
+        root = self.run_histograms([
+            {"branches": saved},
+            {"branches": dict(saved, ShiftDimuonVertex_pvDca=[0.0],
+                               ShiftDimuonVertex_pvPointingCos=[math.nan],
+                               ShiftDimuonVertex_pvPointingValid=[0.0])},
+            {"branches": dict(saved, ShiftDimuonVertex_pvDcaValid=[0.0],
+                               ShiftDimuonVertex_pvPointingValid=[0.0])},
+        ], primary_vertex=(100.0, 200.0, 300.0))
+        dca, cosine = self.histogram(root, "pvDca"), self.histogram(root, "pvPointingCos")
+        self.assertEqual(dca.GetEntries(), 2)
+        self.assertEqual(dca.GetBinContent(dca.FindBin(12.5)), 1.0)
+        self.assertEqual(dca.GetBinContent(dca.FindBin(0.0)), 1.0)
+        self.assertEqual(cosine.GetEntries(), 1)
+        self.assertEqual(cosine.GetBinContent(cosine.FindBin(0.25)), 1.0)
+
     def test_log_mass_categories_signed_weights_and_invalid_values(self):
         events = [
             {"weight": weight, "branches": {"ShiftDimuonVertex_mass": [mass]}}
@@ -242,6 +312,12 @@ class DimuonKinematicsRuntimeTest(unittest.TestCase):
         self.assertEqual(self.integral(self.histogram(root, "constrainedMass")), 12.5)
         self.assertEqual(self.integral(self.histogram(root, "refittedMass")), 12.5)
         self.assertEqual(self.integral(self.histogram(root, "massSS")), -1.0)
+        for variable in ("pvDca", "pvPointingCos"):
+            self.assertEqual(self.integral(self.histogram(root, variable)), 11.5)
+            self.assertEqual(self.integral(self.histogram(root, variable, "Good")), 12.5)
+            self.assertEqual(self.integral(self.histogram(root, variable, "Both-Both")), 1.5)
+            for category in ("Near-Both", "Near-Far", "Both-Far", "Other"):
+                self.assertEqual(self.integral(self.histogram(root, variable, category)), 2.5)
 
 
 if __name__ == "__main__":
