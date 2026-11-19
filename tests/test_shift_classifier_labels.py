@@ -17,8 +17,10 @@ class TruthRecoveryTest(unittest.TestCase):
                           ShiftMuon_hitGenPartIdx=[-1, -1],
                           GenPart_pdgId=[], GenPart_status=[])
         self.truth = dict(event_id=[7, 2, 123], original_request_sha256="a" * 64, tracks=[
-            dict(track_id=21, pdg_id=13, vertex_index=4, vertex_cm=[0., 0., 100.]),
-            dict(track_id=22, pdg_id=-13, vertex_index=4, vertex_cm=[0., 0., 100.])])
+            dict(track_id=21, pdg_id=13, vertex_index=4, vertex_cm=[0., 0., 100.],
+                 origin_semantics="validated_physical_muon_birth", physical_muon_id="muon-a"),
+            dict(track_id=22, pdg_id=-13, vertex_index=4, vertex_cm=[0., 0., 100.],
+                 origin_semantics="validated_physical_muon_birth", physical_muon_id="muon-b")])
 
     def recover(self, truth=None, label=-1, reason="unknown_match"):
         return recover_pair_label(self.event, 0, 1, label, reason, truth)
@@ -79,6 +81,18 @@ class TruthRecoveryTest(unittest.TestCase):
         del self.event["original_request_sha256"]
         with self.assertRaisesRegex(ValueError, "original detector request"):
             self.recover(self.truth)
+
+    def test_raw_transport_vertices_do_not_certify_physical_birth(self):
+        del self.truth["tracks"][0]["origin_semantics"]
+        y, _, detail = self.recover(self.truth)
+        self.assertEqual(y, -1)
+        self.assertEqual(detail["status"], "physical_birth_unqualified")
+
+    def test_distinct_track_ids_do_not_by_themselves_mean_distinct_muons(self):
+        del self.truth["tracks"][0]["physical_muon_id"]
+        self.assertEqual(self.recover(self.truth)[0], -1)
+        self.truth["tracks"][0]["physical_muon_id"] = "muon-b"
+        self.assertEqual(self.recover(self.truth)[:2], (0, "same_physical_muon"))
 
     def test_missing_nonmuon_and_invalid_vertex_do_not_recover(self):
         variants = []

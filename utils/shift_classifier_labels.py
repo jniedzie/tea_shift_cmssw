@@ -71,6 +71,11 @@ def recover_pair_label(event, first, second, original_label, original_reason,
     ``track_id``, ``pdg_id``, ``vertex_index`` and ``vertex_cm=(x,y,z)``. It must
     come from the exact original detector response, never GEN extrapolation,
     an angular reco match, or a newly sampled event. Missing records stay unknown.
+    Each recovered track must additionally certify
+    ``origin_semantics='validated_physical_muon_birth'`` and a nonempty string
+    ``physical_muon_id``. Raw transport/restart vertices do not certify birth;
+    validated primary GEN/HepMC or secondary-creation ancestry must establish
+    the physical origin and identity before the caller supplies that certificate.
     """
     if original_label not in (-1, 0, 1):
         raise ValueError("Original label must be unknown, fake or genuine")
@@ -99,6 +104,16 @@ def recover_pair_label(event, first, second, original_label, original_reason,
     if any(abs(int(record["pdg_id"])) != 13 for record in records):
         diagnosis["status"] = "simulation_particle_not_muon"
         return -1, original_reason, diagnosis
+    if any(record.get("origin_semantics") != "validated_physical_muon_birth" for record in records):
+        diagnosis["status"] = "physical_birth_unqualified"
+        return -1, original_reason, diagnosis
+    physical_ids = [record.get("physical_muon_id") for record in records]
+    if any(not isinstance(identity, str) or not identity for identity in physical_ids):
+        diagnosis["status"] = "physical_muon_identity_unqualified"
+        return -1, original_reason, diagnosis
+    if physical_ids[0] == physical_ids[1]:
+        diagnosis.update(recovered=True, status="duplicate_physical_muon")
+        return 0, "same_physical_muon", diagnosis
     positions = [tuple(float(value) for value in record["vertex_cm"]) for record in records]
     if any(int(record["vertex_index"]) < 0 for record in records) or any(
             len(position) != 3 or not all(math.isfinite(value) for value in position)
