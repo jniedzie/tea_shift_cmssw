@@ -6,7 +6,16 @@ from pathlib import Path
 
 import numpy as np
 
-from shift_classifier_crossfit import SM_PROCESSES, digest, fold_masks, validate_data, validation_cut
+from shift_classifier_crossfit import SM_PROCESSES, digest, fold_masks, validate_data, validation_cut, task_training_data
+from shift_classifier_labels import task_contract
+
+
+def metric_names(task):
+    if task == 'distinct-muons':
+        return ('distinct_muon_retention', 'duplicate_muon_rejection', 'unknown_identity_retention')
+    if task == 'vertex-origin':
+        return ('common_origin_retention', 'different_origin_rejection', 'unknown_origin_retention')
+    return ('genuine_retention', 'fake_rejection', 'unknown_retention')
 
 
 def wilson(fraction, n):
@@ -28,6 +37,7 @@ def verified_predictions(data, input_hash, directory):
     if digest(path) != receipt['predictions_sha256']:
         raise ValueError('Predictions changed after completion')
     prediction = dict(np.load(path, allow_pickle=False)); n = len(data['y'])
+    task = receipt.get('task', 'legacy-common-origin'); fitting_data = task_training_data(data, task)
     np.testing.assert_array_equal(prediction['row_index'], np.arange(n))
     for key in ('ids', 'process', 'point', 'category', 'pair_index', 'group_id', 'event_owner_id', 'y', 'weight', 'mass'):
         if key not in data or key not in prediction:
@@ -37,10 +47,16 @@ def verified_predictions(data, input_hash, directory):
     if not np.isfinite(score).all() or not np.isfinite(cut).all() or np.any((score<0)|(score>1)):
         raise ValueError('Invalid saved scores or thresholds')
     np.testing.assert_array_equal(prediction['crossfit_pass'], score>=cut)
+    if 'task_y' in prediction:
+        np.testing.assert_array_equal(prediction['task_y'], fitting_data['y'])
+        np.testing.assert_array_equal(prediction['task_reason'], fitting_data['task_reason'])
+        np.testing.assert_array_equal(prediction['task_name'], task)
+    elif task != 'legacy-common-origin':
+        raise ValueError('Separate classifier task predictions require explicit task truth')
     if {r['scored_fold'] for r in receipt['models']} != {0, 1}:
         raise ValueError('Distinct original-source folds are required')
     for model in receipt['models']:
-        fold = model['scored_fold']; train, validation, scored = fold_masks(data, fold, receipt['fit_mode'])
+        fold = model['scored_fold']; train, validation, scored = fold_masks(fitting_data, fold, receipt['fit_mode'])
         for name, mask in (('train', train), ('validation', validation), ('scored', scored)):
             if model['groups'][name] != sorted(set(map(str, data['group_id'][mask]))):
                 raise ValueError('Model source ownership differs from the original input')
@@ -50,7 +66,7 @@ def verified_predictions(data, input_hash, directory):
         for name, mask in (('train', train), ('validation', validation), ('scored', scored)):
             np.testing.assert_array_equal(partitions[name], np.flatnonzero(mask))
         calibration = np.full(n, np.nan); calibration[validation] = partitions['validation_scores']
-        if validation_cut(calibration, data['y'], validation, data['process']) != model['threshold']:
+        if validation_cut(calibration, fitting_data['y'], validation, data['process']) != model['threshold']:
             raise ValueError('Saved cut differs from its own inner-validation genuine SM scores')
         model_path = fold_dir/'model.pkl'
         if digest(model_path) != model['model_sha256']:
@@ -77,7 +93,7 @@ def paired_metric(data, mask, outcomes, replicates=200, seed=711926):
     passed = np.vstack([np.bincount(reverse, weights=np.asarray(value)[indices]) for value in outcomes])
     weighted = np.vstack([np.bincount(reverse, weights=native*np.asarray(value)[indices]) for value in outcomes])
     raw_eff = passed.sum(axis=1)/len(indices); sumw = float(native.sum())
-    weight_eff = weighted.sum(axis=1)/sumw if sumw else np.full(2, np.nan)
+    weight_eff = weighted.sum(axis=1)/sumw if sumw else np.full(len(outcomes), np.nan)
     rng = np.random.default_rng(seed); boot = []; weighted_boot = []
     for _ in range(replicates):
         draw = rng.poisson(1., len(group_names))[event_group]*rng.poisson(1., len(owners))
@@ -91,14 +107,16 @@ def paired_metric(data, mask, outcomes, replicates=200, seed=711926):
         boundary = wilson(float(efficiency), len(owners))
         sampled = np.quantile(np.asarray(boot)[:, i], [.025, .975]) if boot else boundary
         intervals.append([min(boundary[0], float(sampled[0])), max(boundary[1], float(sampled[1]))])
-    delta = float(raw_eff[1]-raw_eff[0])
-    delta_ci = np.quantile(np.diff(np.asarray(boot), axis=1)[:, 0], [.025, .975]).tolist() if boot else [-1., 1.]
-    if delta_ci[0] == delta_ci[1]:
-        # No observed disagreement does not bound unseen disagreements to zero.
-        width = wilson(0., len(owners))[1]
-        delta_ci = [max(-1., delta-width), min(1., delta+width)]
+    delta = float(raw_eff[1]-raw_eff[0]) if len(outcomes)==2 else None
+    delta_ci = None
+    if len(outcomes)==2:
+        delta_ci = np.quantile(np.diff(np.asarray(boot), axis=1)[:, 0], [.025, .975]).tolist() if boot else [-1., 1.]
+        if delta_ci[0] == delta_ci[1]:
+            # No observed disagreement does not bound unseen disagreements to zero.
+            width = wilson(0., len(owners))[1]
+            delta_ci = [max(-1., delta-width), min(1., delta+width)]
     rows = []
-    for i in range(2):
+    for i in range(len(outcomes)):
         weighted_ci = np.quantile(np.asarray(weighted_boot)[:, i], [.025, .975]).tolist() if weighted_boot else [None, None]
         if weighted_ci[0] == weighted_ci[1] and weighted_ci[0] is not None:
             weighted_ci = [None, None]
@@ -106,18 +124,18 @@ def paired_metric(data, mask, outcomes, replicates=200, seed=711926):
                          native_weighted_fraction=float(weight_eff[i]) if np.isfinite(weight_eff[i]) else None,
                          native_weighted_bootstrap_ci95=weighted_ci))
     sumw2_events = float(event_weight@event_weight)
-    weighted_delta = float(weight_eff[1]-weight_eff[0]) if np.isfinite(weight_eff).all() else None
-    weighted_delta_ci = np.quantile(np.diff(np.asarray(weighted_boot), axis=1)[:, 0], [.025, .975]).tolist() if weighted_boot else [None, None]
+    weighted_delta = float(weight_eff[1]-weight_eff[0]) if len(outcomes)==2 and np.isfinite(weight_eff).all() else None
+    weighted_delta_ci = np.quantile(np.diff(np.asarray(weighted_boot), axis=1)[:, 0], [.025, .975]).tolist() if len(outcomes)==2 and weighted_boot else [None, None]
     if weighted_delta_ci[0] == weighted_delta_ci[1]:
         weighted_delta_ci = [None, None]
     return dict(raw_pairs=len(indices), independent_event_owners=len(owners), source_groups=len(group_names),
                 native_sumw=sumw, native_pair_sumw2=float(native@native),
                 native_event_owner_sumw2=sumw2_events,
                 native_effective_event_owners=sumw*sumw/sumw2_events if sumw2_events else None,
-                signed_native_weights=bool(np.any(native<0)), baseline=rows[0], candidate=rows[1],
+                signed_native_weights=bool(np.any(native<0)), baseline=rows[0], candidate=rows[1] if len(outcomes)==2 else None,
                 paired_difference=dict(candidate_minus_baseline=delta, ci95=delta_ci,
                                        native_weighted_candidate_minus_baseline=weighted_delta,
-                                       native_weighted_bootstrap_ci95=weighted_delta_ci),
+                                       native_weighted_bootstrap_ci95=weighted_delta_ci) if len(outcomes)==2 else None,
                 supported_event_count=len(owners)>=30, source_variation_measurable=len(group_names)>=2,
                 unknown=False)
 
@@ -135,7 +153,8 @@ def empirical_roc(y, score):
     return dict(genuine_pairs=genuine, fake_pairs=fake, auc=auc, fpr=fpr.tolist(), tpr=tpr.tolist())
 
 
-def compare(data, predictions, replicates=200, inventory_physical_points=None):
+def compare(data, predictions, replicates=200, inventory_physical_points=None,
+            task='legacy-common-origin', model_names=None):
     passes = [p['crossfit_pass'] for p in predictions]; y = data['y']; process = data['process']
     sm = np.isin(process, SM_PROCESSES); bsm = ~sm
     domain = data.get('domain', np.full(len(y), 'unspecified'))
@@ -147,13 +166,16 @@ def compare(data, predictions, replicates=200, inventory_physical_points=None):
     views.update({'process:'+str(value): process==value for value in np.unique(process)})
     views.update({'category:'+str(value): sm&(data['category']==value) for value in np.unique(data['category'])})
     views.update({'domain:'+str(value): domain==value for value in np.unique(domain)})
+    metric_keys = metric_names(task); excluded = np.asarray(data.get('task_reason', np.full(len(y), ''))) == 'unknown_excluded_duplicate_muons'
     def metrics(mask):
-        return {name: paired_metric(data, mask&(y==label), outcomes, replicates)
-                for label, name, outcomes in ((1, 'genuine_retention', passes),
-                                              (0, 'fake_rejection', [~p for p in passes]),
-                                              (-1, 'unknown_retention', passes))}
+        values = {name: paired_metric(data, mask&(y==label)&(~excluded if label==-1 else True), outcomes, replicates)
+                  for label, name, outcomes in ((1, metric_keys[0], passes), (0, metric_keys[1], [~p for p in passes]), (-1, metric_keys[2], passes))}
+        if task == 'vertex-origin':values['excluded_duplicate_pairs']=int(np.sum(mask&excluded))
+        return values
     report = dict(views={name: metrics(mask) for name, mask in views.items()}, roc={}, signal_points={},
-                  pooled_signal_points_diagnostic={}, historical_signal_control_points={})
+                  pooled_signal_points_diagnostic={}, historical_signal_control_points={}, task=task,
+                  task_contract=task_contract(task), metric_names=list(metric_keys),
+                  model_names=model_names or ['SM-only', 'SM+BSM'][:len(predictions)])
     for name in ('current_SM', 'pooled_SM'):
         mask = views[name]&(y>=0)
         report['roc'][name] = dict(
@@ -171,7 +193,7 @@ def compare(data, predictions, replicates=200, inventory_physical_points=None):
     for point in current_points:
         mask = current_bsm&(data['point']==point); item = metrics(mask)
         item['coverage'] = dict(input_candidate_pairs=int(mask.sum()), inventory_member=point in inventory_points,
-            genuine_retention_status='measured_on_reconstructed_pairs' if np.any(mask&(y==1)) else 'unknown_no_genuine_reconstructed_support',
+            task_positive_retention_status='measured_on_reconstructed_pairs' if np.any(mask&(y==1)) else 'unknown_no_task_positive_reconstructed_support',
             absent_from_candidate_rows=not bool(mask.any()))
         report['signal_points'][point] = item
     for point in np.unique(data['point'][bsm]):
@@ -183,9 +205,9 @@ def compare(data, predictions, replicates=200, inventory_physical_points=None):
         reported_current_points=len(current_points),
         declared_points_without_candidate_rows=sorted(set(inventory_points)-set(map(str,data['point'][current_bsm]))),
         absent_point_interpretation='Unknown conditional retention, not zero efficiency or zero physical acceptance')
-    names = list(map(str, data['feature_names']))
-    if all('pair_'+key in names for key in ('vx', 'vy', 'vz')):
-        vertices = data['X'][:, [names.index('pair_'+key) for key in ('vx', 'vy', 'vz')]]
+    feature_columns = list(map(str, data['feature_names']))
+    if all('pair_'+key in feature_columns for key in ('vx', 'vy', 'vz')):
+        vertices = data['X'][:, [feature_columns.index('pair_'+key) for key in ('vx', 'vy', 'vz')]]
         flight = np.linalg.norm(vertices-np.array([0., 0., 14800.]), axis=1)/100.
         mass_edges = [0., .3, 1., 3., 10., 30., 100., np.inf]
         flight_edges = [0., .1, 1., 5., 30., 100., np.inf]
@@ -210,26 +232,27 @@ def render(report, output):
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     from matplotlib.backends.backend_pdf import PdfPages
-    colors = ('#0072b2', '#d55e00'); model_names = ('SM-only', 'SM+BSM')
+    colors = ('#0072b2', '#d55e00'); model_names = report.get('model_names', ['SM-only', 'SM+BSM'])
+    keys = ('baseline', 'candidate')[:len(model_names)]; positive, negative, _ = report.get('metric_names', metric_names('legacy-common-origin'))
     with PdfPages(output) as pdf:
         fig, axes = plt.subplots(1, 2, figsize=(12, 5), layout='constrained')
         for ax, population in zip(axes, ('current_SM', 'pooled_SM')):
-            for i, key in enumerate(('baseline', 'candidate')):
+            for i, key in enumerate(keys):
                 curve = report['roc'][population]['models'][key]
                 ax.plot(curve['fpr'], curve['tpr'], color=colors[i],
                         label=model_names[i]+(' AUC %.3f'%curve['auc'] if curve['auc'] is not None else ' unmeasured'))
             curve = report['roc'][population]['models']['baseline']
-            ax.set(title=f"{population}: {curve['genuine_pairs']} genuine / {curve['fake_pairs']} fake raw pairs",
-                   xlabel='Fake-pair acceptance', ylabel='Genuine-pair retention', xlim=(0, 1), ylim=(0, 1)); ax.grid(alpha=.2); ax.legend()
+            ax.set(title=f"{population}: {curve['genuine_pairs']} positive / {curve['fake_pairs']} negative raw pairs",
+                   xlabel='Task-negative pair acceptance', ylabel='Task-positive pair retention', xlim=(0, 1), ylim=(0, 1)); ax.grid(alpha=.2); ax.legend()
             composition = report['roc'][population]['composition']
-            ax.text(.03, .03, '\n'.join(str(k)+': G='+str(v['1'])+', F='+str(v['0']) for k, v in composition.items()),
+            ax.text(.03, .03, '\n'.join(str(k)+': positive='+str(v['1'])+', negative='+str(v['0']) for k, v in composition.items()),
                     transform=ax.transAxes, fontsize=7, va='bottom')
-        fig.suptitle('Exploratory source-grouped cross-fit; empirical ROC, no luminosity normalization')
+        fig.suptitle(report.get('task','legacy-common-origin')+': exploratory source-grouped cross-fit; empirical ROC')
         pdf.savefig(fig); plt.close(fig)
         names = ['current_SM', 'historical_SM', 'pooled_SM']+[name for name in report['views'] if name.startswith('category:')]
         fig, axes = plt.subplots(1, 2, figsize=(13, 6), layout='constrained')
-        for ax, metric, title in zip(axes, ('genuine_retention', 'fake_rejection'), ('Genuine retention', 'Fake rejection')):
-            for i, key in enumerate(('baseline', 'candidate')):
+        for ax, metric, title in zip(axes, (positive, negative), (positive.replace('_', ' '), negative.replace('_', ' '))):
+            for i, key in enumerate(keys):
                 for x, name in enumerate(names):
                     entry = report['views'][name][metric]
                     if entry[key] is None:
@@ -244,44 +267,57 @@ def render(report, output):
         points = list(report['signal_points'])
         for start in range(0, len(points), 30):
             subset = points[start:start+30]; fig, ax = plt.subplots(figsize=(14, 6), layout='constrained')
-            for i, key in enumerate(('baseline', 'candidate')):
+            for i, key in enumerate(keys):
                 first_visible = next((x for x, point in enumerate(subset)
-                                      if report['signal_points'][point]['genuine_retention'][key] is not None), None)
+                                      if report['signal_points'][point][positive][key] is not None), None)
                 for x, point in enumerate(subset):
-                    entry = report['signal_points'][point]['genuine_retention']; value = entry[key]
+                    entry = report['signal_points'][point][positive]; value = entry[key]
                     if value is None:
                         continue
                     lo, hi = value['ci95']; fraction = value['raw_pair_fraction']
                     ax.errorbar(x+(i-.5)*.16, fraction, yerr=[[fraction-lo], [hi-fraction]], fmt='o',
                                 color=colors[i] if entry['supported_event_count'] else '#888888',
                                 label=model_names[i] if x==first_visible else None)
-            labels = [point+' (N='+str(report['signal_points'][point]['genuine_retention']['independent_event_owners'])+')' for point in subset]
+            labels = [point+' (N='+str(report['signal_points'][point][positive]['independent_event_owners'])+')' for point in subset]
             ax.set_xticks(range(len(subset)), labels, rotation=90, fontsize=6)
-            ax.set(title='Current BSM physical points; gray: fewer than30 original genuine events',
-                   xlabel='Missing markers: no genuine reconstructed support; retention unknown',
-                   ylabel='Conditional genuine-pair retention', ylim=(-.03, 1.03)); ax.grid(alpha=.2)
+            ax.set(title='Current BSM physical points; gray: fewer than30 task-positive original events',
+                   xlabel='Missing markers: no task-positive reconstructed support; retention unknown',
+                   ylabel=positive.replace('_', ' '), ylim=(-.03, 1.03)); ax.grid(alpha=.2)
             if ax.get_legend_handles_labels()[0]:ax.legend()
             pdf.savefig(fig); plt.close(fig)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('input', 'sm-only', 'sm-bsm', 'output'):
+    for name in ('input', 'output'):
         parser.add_argument('--'+name, type=Path, required=True)
+    for name in ('sm-only', 'sm-bsm', 'result'):
+        parser.add_argument('--'+name, type=Path)
     parser.add_argument('--cohort-receipt', type=Path)
     parser.add_argument('--bootstrap', type=int, default=200)
     args = parser.parse_args(); data = dict(np.load(args.input, allow_pickle=False)); validate_data(data)
     if args.bootstrap < 20:
         parser.error('At least20 paired bootstrap replicates are required')
-    loaded = [verified_predictions(data, digest(args.input), directory) for directory in (args.sm_only, args.sm_bsm)]
-    if [receipt['fit_mode'] for _, receipt in loaded] != ['sm-only', 'sm-bsm']:
+    if args.result:
+        if args.sm_only or args.sm_bsm:parser.error('--result cannot be combined with the matched-comparison arguments')
+        directories = [args.result]
+    else:
+        if not args.sm_only or not args.sm_bsm:parser.error('Supply --result or both --sm-only and --sm-bsm')
+        directories = [args.sm_only, args.sm_bsm]
+    loaded = [verified_predictions(data, digest(args.input), directory) for directory in directories]
+    if len(loaded)==2 and [receipt['fit_mode'] for _, receipt in loaded] != ['sm-only', 'sm-bsm']:
         raise ValueError('Expected one SM-only baseline and one SM+BSM candidate')
+    tasks = {receipt.get('task', 'legacy-common-origin') for _, receipt in loaded}
+    if len(tasks)!=1:raise ValueError('Different classifier tasks cannot be compared as alternative models')
+    task = tasks.pop(); fitting_data = task_training_data(data, task)
     cohort = json.loads(args.cohort_receipt.read_text()) if args.cohort_receipt else {}
-    report = compare(data, [prediction for prediction, _ in loaded], args.bootstrap, cohort.get('inventory_physical_points'))
+    model_names = ['SM-only', 'SM+BSM'] if len(loaded)==2 else [task+' ('+loaded[0][1]['fit_mode']+')']
+    report = compare(fitting_data, [prediction for prediction, _ in loaded], args.bootstrap,
+                     cohort.get('inventory_physical_points'), task, model_names)
     report.update(schema='shift-vertex-crossfit-comparison-v1', input_sha256=digest(args.input),
                   simulation_only=True, deployment_ready=False,
                   inference='Every row scored by the opposite original-ownership half only',
-                  threshold='Each saved model uses its own inner-validation genuine-SM cut; none fitted on scored folds',
+                  threshold='Each saved model uses its own inner-validation task-positive SM cut; none fitted on scored folds',
                   metric_interpretation='Raw pairs, original-event owners and native-weight diagnostics; no events normalized to lumi, physical yields or full-acceptance claim',
                   bootstrap='Paired source-group Poisson multiplier times original-event Poisson multiplier; same draws for both models; finite-event boundary envelopes',
                   limitations=['Previously inspected development populations; cross-fit does not create a new blind test.',

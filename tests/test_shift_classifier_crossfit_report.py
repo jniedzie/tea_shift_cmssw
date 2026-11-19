@@ -9,6 +9,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'utils'))
 from shift_classifier_crossfit import digest, fold_masks, ownership_partitions
+from shift_classifier_crossfit import task_training_data
 from shift_classifier_crossfit_report import compare, empirical_roc, paired_metric, verified_predictions
 
 
@@ -100,6 +101,20 @@ class CrossFitReportTest(unittest.TestCase):
         self.assertEqual(report['signal_points']['unknown-only']['unknown_retention']['raw_pairs'],1)
         self.assertEqual(sum(c['metrics']['genuine_retention']['raw_pairs'] for c in report['signal_mass_flight']['cells']),1)
         self.assertEqual(sum(c['metrics']['genuine_retention']['raw_pairs'] for c in report['pooled_signal_mass_flight_diagnostic']['cells']),2)
+
+    def test_single_task_report_uses_task_truth_and_separates_excluded_duplicates(self):
+        data=dataset();data['y']=np.tile([1,0,0,-1],50)
+        data['label_reason']=np.tile(['common_vertex','different_vertices','same_muon_twice','unknown_match'],50)
+        prediction=dict(crossfit_pass=np.ones(200,dtype=bool),crossfit_score=np.full(200,.8))
+        distinct=compare(task_training_data(data,'distinct-muons'),[prediction],20,task='distinct-muons')
+        self.assertEqual(distinct['views']['pooled_SM']['distinct_muon_retention']['raw_pairs'],100)
+        self.assertEqual(distinct['views']['pooled_SM']['duplicate_muon_rejection']['raw_pairs'],50)
+        self.assertIsNone(distinct['views']['pooled_SM']['duplicate_muon_rejection']['paired_difference'])
+        origin=compare(task_training_data(data,'vertex-origin'),[prediction],20,task='vertex-origin')
+        self.assertEqual(origin['views']['pooled_SM']['common_origin_retention']['raw_pairs'],50)
+        self.assertEqual(origin['views']['pooled_SM']['different_origin_rejection']['raw_pairs'],50)
+        self.assertEqual(origin['views']['pooled_SM']['unknown_origin_retention']['raw_pairs'],50)
+        self.assertEqual(origin['views']['pooled_SM']['excluded_duplicate_pairs'],50)
 
 
 if __name__=='__main__':unittest.main()

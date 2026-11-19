@@ -6,7 +6,7 @@ import unittest
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "utils"))
-from shift_classifier_crossfit import fitting_weights, fold_masks, ownership_partitions, validate_data, validation_cut, verify_model_readback
+from shift_classifier_crossfit import fitting_weights, fold_masks, ownership_partitions, validate_data, validation_cut, verify_model_readback, task_training_data
 
 
 def cohort():
@@ -91,6 +91,18 @@ class CrossFitLeakageTest(unittest.TestCase):
         self.assertFalse(np.array_equal(model.predict_proba(data['X'],data['category'])[:40,1],
                                         model.predict_proba(data['X'][probe],data['category'][probe])[:,1]))
         verify_model_readback(model,BatchShapePredictor(),data['X'],data['category'],probe)
+
+    def test_separate_task_targets_preserve_original_labels_and_source_halves(self):
+        data=cohort();data['y']=np.tile([1,0,0,-1],100)
+        data['label_reason']=np.tile(['common_vertex','different_vertices','same_muon_twice','unknown_match'],100)
+        original=data['y'].copy();original_X=data['X'].copy()
+        identity=task_training_data(data,'distinct-muons');origin=task_training_data(data,'vertex-origin')
+        np.testing.assert_array_equal(identity['y'][:4],[1,1,0,-1]);np.testing.assert_array_equal(origin['y'][:4],[1,0,-1,-1])
+        for fold in(0,1):
+            a=fold_masks(identity,fold);b=fold_masks(origin,fold)
+            np.testing.assert_array_equal(a[2],b[2])
+            self.assertFalse(np.any((b[0]|b[1])&(data['label_reason']=='same_muon_twice')))
+        np.testing.assert_array_equal(data['y'],original);np.testing.assert_array_equal(data['X'],original_X)
 
 
 if __name__ == "__main__":

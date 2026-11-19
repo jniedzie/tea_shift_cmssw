@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+from shift_classifier_labels import TASK_NAMES, TASK_LABEL_SCHEMA, task_contract, task_labels_for_data
 
 
 SM_PROCESSES = ("qcd", "dy", "jpsi")
@@ -160,13 +161,21 @@ def verify_model_readback(model, restored, X, categories, probe):
     np.testing.assert_array_equal(recovered, original)
 
 
-def run_crossfit(input_path, output_dir, frozen_source, fit_mode="sm-bsm", epochs=200, scored_fold=None):
+def task_training_data(data, task="legacy-common-origin"):
+    """Use separate target arrays internally; never rewrite original binary y."""
+    y, reason = task_labels_for_data(data, task)
+    return dict(data, y=y, task_y=y, task_reason=reason)
+
+
+def run_crossfit(input_path, output_dir, frozen_source, fit_mode="sm-bsm", epochs=200, scored_fold=None,
+                 task="legacy-common-origin", recipe_name=None):
     input_path, output_dir, frozen_source = map(Path, (input_path, output_dir, frozen_source))
     data = dict(np.load(input_path, allow_pickle=False))
     n = validate_data(data)
+    training_data = task_training_data(data, task)
     if scored_fold not in (None, 0, 1):
         raise ValueError("scored_fold must be 0, 1 or None for both")
-    plans = {fold: fold_masks(data, fold, fit_mode)
+    plans = {fold: fold_masks(training_data, fold, fit_mode)
              for fold in ((0, 1) if scored_fold is None else (scored_fold,))}
     if not isinstance(epochs, int) or epochs < 1:
         raise ValueError("epochs must be a positive integer")
@@ -193,9 +202,17 @@ def run_crossfit(input_path, output_dir, frozen_source, fit_mode="sm-bsm", epoch
     torch.set_num_threads(1)
     nuisance = pointing.transfer_nuisance(data["X"], data["mass"])
     output_dir.mkdir(parents=True, exist_ok=False)
+    recipe_name = recipe_name or ("legacy-disco" if task == "legacy-common-origin" else "bce")
+    if recipe_name not in ("legacy-disco", "bce"):
+        raise ValueError("Unknown declared training recipe")
     recipe = dict(RECIPE, epochs=epochs)
+    if recipe_name == "bce":
+        recipe.update(strength=0., category_strength=0., conditional_strength=0., acceptance_strength=0.)
     protocol = dict(
-        schema="shift-vertex-source-crossfit-v1", fit_mode=fit_mode,
+        schema="shift-vertex-source-crossfit-v2", fit_mode=fit_mode,
+        task=task, task_label_schema=TASK_LABEL_SCHEMA, task_contract=task_contract(task), recipe_name=recipe_name,
+        task_recipe="task-separated-reco121-" + recipe_name + "-v1",
+        task_label_sha256=hashlib.sha256(training_data["y"].tobytes()).hexdigest(),
         input_path=str(input_path.resolve()), input_sha256=digest(input_path),
         frozen_source=str(source), source_sha256=source_hashes,
         frozen_protocol=str(frozen_protocol), frozen_protocol_sha256=digest(frozen_protocol),
@@ -204,8 +221,8 @@ def run_crossfit(input_path, output_dir, frozen_source, fit_mode="sm-bsm", epoch
         partitions="Two ownership-hash halves; 20% inner validation within fit half only",
         grouping_contract="group_id connects all responses sharing original GEN ownership; extractor supplies closure",
         weights="Equal class; smoothed process and point masses min(1,n/50); native weights retained separately",
-        cut="Unweighted 90% genuine SM retention on the fit half's inner validation only; ties retained",
-        labels="Existing common-origin truth labels only; unknown excluded; no fitted-vertex residual negatives",
+        cut="Unweighted 90% task-positive SM retention on the fit half's inner validation only; ties retained",
+        labels="Declared task truth only; original binary y preserved; unknown excluded; no fitted-vertex residual negatives",
         inference="Exact frozen RECO121 and reconstructed category only; no source/process/point/truth attributes",
         interpretation="Exploratory source-grouped cross-fit; earlier samples inspected; no blind or deployment claim",
     )
@@ -216,19 +233,22 @@ def run_crossfit(input_path, output_dir, frozen_source, fit_mode="sm-bsm", epoch
     for fold, (train, validation, scored) in plans.items():
         fold_dir = output_dir / ("fold" + str(fold))
         fold_dir.mkdir()
-        train_weights = fitting_weights(data["y"][train], data["process"][train], data["point"][train])
-        val_weights = fitting_weights(data["y"][validation], data["process"][validation], data["point"][validation])
+        train_weights = fitting_weights(training_data["y"][train], data["process"][train], data["point"][train])
+        val_weights = fitting_weights(training_data["y"][validation], data["process"][validation], data["point"][validation])
         model, history = pointing.train_pointing_neural(
-            data["X"][train], data["y"][train], train_weights, nuisance[train],
-            data["X"][validation], data["y"][validation], val_weights, nuisance[validation],
+            data["X"][train], training_data["y"][train], train_weights, nuisance[train],
+            data["X"][validation], training_data["y"][validation], val_weights, nuisance[validation],
             feature_names=tuple(map(str, data["feature_names"])),
             train_category=data["category"][train], val_category=data["category"][validation],
             train_process=data["process"][train], val_process=data["process"][validation],
             seed=71 + fold, **recipe,
         )
+        model.classifier_task_ = task
+        model.task_label_schema_ = TASK_LABEL_SCHEMA
+        model.task_contract_ = task_contract(task)
         calibration = np.full(n, np.nan)
         calibration[validation] = model.predict_proba(data["X"][validation], data["category"][validation])[:, 1]
-        cut = validation_cut(calibration, data["y"], validation, data["process"])
+        cut = validation_cut(calibration, training_data["y"], validation, data["process"])
         scores[scored] = model.predict_proba(data["X"][scored], data["category"][scored])[:, 1]
         cuts[scored] = cut
         model_path = fold_dir / "model.pkl"
@@ -249,7 +269,7 @@ def run_crossfit(input_path, output_dir, frozen_source, fit_mode="sm-bsm", epoch
         receipt = dict(scored_fold=fold, seed=71 + fold, threshold=cut,
                        model_sha256=digest(model_path), best_epoch=history["best_epoch"],
                        groups=groups, no_source_overlap=True,
-                       counts={name: _counts(data, mask) for name, mask in (("train", train), ("validation", validation), ("scored", scored))})
+                       counts={name: _counts(training_data, mask) for name, mask in (("train", train), ("validation", validation), ("scored", scored))})
         _write_json(fold_dir / "receipt.json", receipt)
         rows.append(receipt)
     scored_rows = np.logical_or.reduce([plan[2] for plan in plans.values()])
@@ -265,12 +285,15 @@ def run_crossfit(input_path, output_dir, frozen_source, fit_mode="sm-bsm", epoch
     predictions = {key: value[scored_rows] for key, value in data.items() if key not in ("X", "feature_names")}
     predictions.update(row_index=np.flatnonzero(scored_rows), crossfit_score=scores[scored_rows], crossfit_cut=cuts[scored_rows],
                        crossfit_pass=scores[scored_rows] >= cuts[scored_rows], scored_fold=fold[scored_rows], inner_validation_role=inner[scored_rows])
+    predictions.update(task_y=training_data["y"][scored_rows], task_reason=training_data["task_reason"][scored_rows],
+                       task_name=np.full(int(scored_rows.sum()), task))
     np.savez_compressed(output_dir / "predictions.npz", **predictions)
     report = dict(protocol, completed=True, rows=int(scored_rows.sum()), total_input_rows=n,
                   unscored_rows=int((~scored_rows).sum()), models=rows,
                   predictions_sha256=digest(output_dir / "predictions.npz"),
                   no_source_overlap=True, deployment_ready=False,
-                  all_labels=_counts(data, np.ones(n, dtype=bool)))
+                  all_labels=_counts(training_data, np.ones(n, dtype=bool)),
+                  original_binary_labels=_counts(data, np.ones(n, dtype=bool)))
     _write_json(output_dir / "completion.json", report)
     return report
 
@@ -292,10 +315,17 @@ def combine_folds(input_path, fold_directories, output_dir):
         pred = dict(np.load(directory / "predictions.npz", allow_pickle=False))
         if digest(directory / "predictions.npz") != report["predictions_sha256"]:
             raise ValueError("Half predictions differ from completion receipt")
-        train, validation, scored = fold_masks(data, fold, report["fit_mode"])
+        training_data = task_training_data(data, report.get("task", "legacy-common-origin"))
+        train, validation, scored = fold_masks(training_data, fold, report["fit_mode"])
         np.testing.assert_array_equal(pred["row_index"], np.flatnonzero(scored))
         for key in ("ids", "process", "point", "category", "group_id", "y", "weight", "mass"):
             np.testing.assert_array_equal(pred[key], data[key][scored])
+        if "task_y" in pred:
+            np.testing.assert_array_equal(pred["task_y"], training_data["y"][scored])
+            np.testing.assert_array_equal(pred["task_reason"], training_data["task_reason"][scored])
+            np.testing.assert_array_equal(pred["task_name"], report.get("task", "legacy-common-origin"))
+        elif report.get("task", "legacy-common-origin") != "legacy-common-origin":
+            raise ValueError("Separate-task predictions must retain explicit task truth")
         receipt = report["models"][0]
         for name, mask in (("train", train), ("validation", validation), ("scored", scored)):
             if receipt["groups"][name] != sorted(set(map(str, data["group_id"][mask]))):
@@ -303,7 +333,8 @@ def combine_folds(input_path, fold_directories, output_dir):
         if digest(directory / ("fold" + str(fold)) / "model.pkl") != receipt["model_sha256"]:
             raise ValueError("Half model differs from its receipt")
         paths[fold] = directory.resolve(); reports.append(report); predictions.append(pred)
-    for key in ("fit_mode", "training", "source_sha256", "frozen_protocol_sha256", "cut", "weights"):
+    for key in ("fit_mode", "training", "source_sha256", "frozen_protocol_sha256", "cut", "weights",
+                "task", "task_recipe", "task_label_schema", "task_label_sha256", "recipe_name"):
         if reports[0].get(key) != reports[1].get(key):
             raise ValueError("Half jobs use different " + key)
     if set(predictions[0]) != set(predictions[1]):
@@ -338,13 +369,16 @@ def main():
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--scored-fold", type=int, choices=(0, 1))
     parser.add_argument("--combine-folds", type=Path, nargs=2)
+    parser.add_argument("--task", choices=TASK_NAMES, default="legacy-common-origin")
+    parser.add_argument("--recipe", choices=("legacy-disco", "bce"))
     args = parser.parse_args()
     if args.combine_folds:
         result = combine_folds(args.input, args.combine_folds, args.output)
     else:
         if args.frozen_source is None:
             parser.error("--frozen-source is required for fitting")
-        result = run_crossfit(args.input, args.output, args.frozen_source, args.fit_mode, args.epochs, args.scored_fold)
+        result = run_crossfit(args.input, args.output, args.frozen_source, args.fit_mode, args.epochs, args.scored_fold,
+                              args.task, args.recipe)
     print(json.dumps({key: result[key] for key in ("completed", "rows", "fit_mode", "no_source_overlap", "deployment_ready")}))
 
 
