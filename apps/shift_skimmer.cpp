@@ -126,29 +126,23 @@ int RunSkimmer(int argc, char** argv) {
   auto const floatLeaves = CandidateLeaves(*tree, count, collection, floats, "Float_t");
   auto const intLeaves = CandidateLeaves(*tree, count, collection, ints, "Int_t");
 
-  string weight, weightConfig = "branchesToKeep += (";
+  string weight;
   for (auto const& name : weightNames) {
     if (!tree->GetBranch(name.c_str())) continue;
     if (isData) throw runtime_error("The collision-data input has MC weights");
-    branches.push_back(name);
-    weightConfig += "'" + name + "',";
     if (requestedWeight && name == *requestedWeight) weight = name;
     if (!requestedWeight && weight.empty() &&
         (name == "genWeight" || (name.find("GenWeight") != string::npos && name != "shiftOriginalGenWeight")))
       weight = name;
   }
-  if (!isData) {
-    if (weight.empty() || (requestedWeight && weight != *requestedWeight))
-      throw runtime_error("The requested MC weight is missing");
-    if (PyRun_SimpleString((weightConfig + ")").c_str()) != 0)
-      throw runtime_error("Could not configure the skim weight branches");
-  }
+  if (!isData && weight.empty()) throw runtime_error("The requested MC weight is missing");
 
   EventWriter writer(reader);
   // The writer restores the input branch mask after cloning. Read the mass
   // first, then the other retained branches only for accepted events.
   tree->SetBranchStatus("*", false);
-  for (auto const& name : branches) tree->SetBranchStatus(name.c_str(), true);
+  for (auto const& name : branches)
+    if (tree->GetBranch(name.c_str())) tree->SetBranchStatus(name.c_str(), true);
   Long64_t const original = tree->GetEntries();
   Long64_t selected = 0, pairs = 0;
   vector<int> rows;

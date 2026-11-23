@@ -1,10 +1,6 @@
 # Code style: AI-code. AI-generated configuration for the blinded SHIFT skim.
 """Use TEA's event writer to save the accepted J/ψ candidates."""
 
-from pathlib import Path
-import sys
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 from shift_jpsi_dimuon import jpsi_dimuon
 
 nEvents = -1
@@ -23,9 +19,10 @@ mcWeightBranches = (
     "shiftSamplingWeight", "shiftOriginalGenWeight",
 )
 # Keep the existing candidate branches and compact their rows before filling.
-branchesToKeep = (
+dimuonBranches = (
     "run", "luminosityBlock", "event", f"n{skimCollection}",
     *(f"{skimCollection}_{field}" for field in floatFields + intFields),
 )
+branchesToKeep = dimuonBranches + mcWeightBranches
 branchesToRemove = ()
 branchesToAdd = ()
