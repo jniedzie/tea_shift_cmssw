@@ -72,11 +72,11 @@ def background_closure(snapshots):
     return report
 
 
-def selected_rows(scan):
+def selected_rows(scan, channel='Both-Both', confidence_level=.9):
     rows = [row for row in scan['records']
-            if row['channel'] == 'Both-Both' and row['confidence_level'] == .9]
+            if row['channel'] == channel and row['confidence_level'] == confidence_level]
     if not rows:
-        raise ValueError('No Both-Both 90% CL scan records')
+        raise ValueError(f'No {channel} {100 * confidence_level:g}% CL scan records')
     return rows
 
 
@@ -374,15 +374,16 @@ def signal_strength_contours(snapshot, scan):
     return supported_contour_rows(selected_rows(scan),snapshot['signals'])
 
 
-def evaluated_strength_grid(directory, confidence_level=.9):
+def evaluated_strength_grid(directory, confidence_level=.9, *, channel='Both-Both'):
     """Fit only generated hypotheses; interpolation never changes a template."""
     from concurrent.futures import ThreadPoolExecutor
     from types import SimpleNamespace
     from shift_limits_current import Model
     from shift_limits_profile import expected_limit, profile_q
     snapshot, scan = checked_snapshot(directory)
+    saved_rows = selected_rows(scan, channel, confidence_level)
     config = SimpleNamespace(output_path=str(directory), luminosity=snapshot['luminosity_pb'],
-        categories=snapshot['categories'], primary_channel='Both-Both',
+        categories=snapshot['categories'], primary_channel=channel,
         response_anchors=tuple(r['name'].split('_', 1)[1] for r in snapshot['signals']),
         include_mc_stat_uncertainties=False)
     model = Model(config)
@@ -394,7 +395,7 @@ def evaluated_strength_grid(directory, confidence_level=.9):
         epsilon = anchor['epsilon']
         records = []
         for mode in modes:
-            signal, background = model.cells(mass, epsilon, 'Both-Both', mode)
+            signal, background = model.cells(mass, epsilon, channel, mode)
             total = float(signal.sum())
             if total <= 0:
                 raise ValueError('Selected positive-response anchor became empty')
@@ -402,7 +403,7 @@ def evaluated_strength_grid(directory, confidence_level=.9):
             limit = zero_limit if mode == 'zero_background' else expected_limit(
                 signal / total, background, confidence_level)[0]
             r = limit / total
-            q = model.q(mass, epsilon, 'Both-Both', mode)
+            q = model.q(mass, epsilon, channel, mode)
             if (r < 1) != (q > threshold):
                 raise ValueError('r and the saved exclusion statistic disagree')
             if not math.isclose(profile_q(limit, signal / total, background), threshold,
@@ -419,7 +420,7 @@ def evaluated_strength_grid(directory, confidence_level=.9):
         for result in workers.map(evaluate, items):
             records.extend(result)
     for record in records:
-        saved=next(row for row in selected_rows(scan) if row['mass_gev']==record['mass_gev']
+        saved=next(row for row in saved_rows if row['mass_gev']==record['mass_gev']
                    and row['mode']==record['mode'])
         matches=[q for epsilon,q in zip(saved['epsilon_grid'],saved['q_grid'])
                  if math.isclose(epsilon,record['epsilon'],rel_tol=1.e-12)]
@@ -428,9 +429,11 @@ def evaluated_strength_grid(directory, confidence_level=.9):
     return snapshot, scan, records, model
 
 
-def draw_signal_strength_map(directory, output, confidence_level=.9, reference_directory=None):
+def draw_signal_strength_map(directory, output, confidence_level=.9, reference_directory=None,
+                             *, channel='Both-Both'):
     import csv
-    snapshot, scan, records, model = evaluated_strength_grid(directory, confidence_level)
+    snapshot, scan, records, model = evaluated_strength_grid(directory, confidence_level,
+                                                               channel=channel)
     supported_rows = []  # Contours come exclusively from the fitted-r surface.
     modes = ('background', 'zero_background')
     masses=sorted({r['mass_gev'] for r in snapshot['signals']})
@@ -453,7 +456,7 @@ def draw_signal_strength_map(directory, output, confidence_level=.9, reference_d
                              bracket_epsilon_ratios=[b/a for a,b in brackets], status=status))
     excluded_masses = sorted({r['mass_gev'] for r in snapshot['signals']} - set(model.signals))
     report = dict(definition='r = expected signal-yield upper limit / predicted signal yield',
-        confidence_level=confidence_level, luminosity_pb=snapshot['luminosity_pb'], channel='Both-Both',
+        confidence_level=confidence_level, luminosity_pb=snapshot['luminosity_pb'], channel=channel,
         snapshot_sha256=digest(directory/'snapshot.json'), scan_sha256=digest(directory/'scan.json'),
         include_mc_stat_uncertainties=False, mass_interpolation=False,
         unknown_response_masses=excluded_masses, zero_observed_mc=model.unused_signals,
@@ -579,11 +582,17 @@ def draw_root_strength_map(report, output):
             mask.SetBinContent(int(ix)+1, int(iy)+1, 1.)
         hist.SetMinimum(1.e-3)
         hist.SetMaximum(1.e3)
+        # Colour the lowest supported bins while keeping exact r in the ROOT file.
+        display = hist.Clone('display_'+mode)
+        display.SetDirectory(0)
+        for iy, ix in np.argwhere(np.isfinite(surface) & (surface < -3)):
+            display.SetBinContent(int(ix)+1, int(iy)+1, 1.e-3)
         pad = canvas.cd(index)
         pad.SetLogx(); pad.SetLogy(); pad.SetLogz()
         pad.SetLeftMargin(.13); pad.SetRightMargin(.18); pad.SetBottomMargin(.16)
-        hist.GetYaxis().SetTitleOffset(1.4)
-        hist.Draw('COLZ')
+        pad.SetTopMargin(.14)
+        display.GetYaxis().SetTitleOffset(1.4)
+        display.Draw('COLZ')
         # A masked contour avoids spurious r=1 edges against empty ROOT bins.
         segments = strength_contour_segments(report, mode)
         graphs = []
@@ -612,16 +621,19 @@ def draw_root_strength_map(report, output):
         label.DrawLatex(.13, .09, 'Black: r = 1; dots: anchors; grey x: empty MC')
         label.DrawLatex(.13, .05, 'Log(r) interpolation; blank: outside grid hull')
         hist.Write(); mask.Write()
-        keep.extend([hist, mask, markers, label]+graphs)
+        keep.extend([hist, display, mask, markers, label]+graphs)
         contour_counts[mode] = len(graphs)
     canvas.cd()
-    label = ROOT.TLatex(); label.SetNDC(); label.SetTextSize(.025)
-    label.DrawLatex(.12, .975, 'Both-Both, 90% CLs, '+str(report['luminosity_pb']/1000)+' fb^{-1}')
+    label = ROOT.TLatex(); label.SetNDC(); label.SetTextSize(.025); label.SetTextAlign(21)
+    channel = 'All dimuons' if report['channel'] == 'All' else report['channel']
+    label.DrawLatex(.5, .973, f"{channel}, {100 * report['confidence_level']:g}% CLs, "
+                    + str(report['luminosity_pb']/1000)+' fb^{-1}')
     ROOT.gStyle.SetPaperSize(26., 13.)
     canvas.SaveAs(str(target)); canvas.Write()
     metadata = dict(interpolation='Per-point likelihood fits, then linear log10(r) on the log10(mass), log10(epsilon) triangulation',
                     extrapolation=False,
                     blank_bins='Outside the grid hull or pinned physical epsilon domain',
+                    display_range_saturated=[1.e-3, 1.e3],
                     physical_domain=report.get('physical_domain'),
                     contour='r=1 on the interpolated surface; no contours against blank bins',
                     contour_segments=contour_counts,
