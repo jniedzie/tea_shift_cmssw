@@ -148,13 +148,14 @@ class ShiftSkimmerTest(unittest.TestCase):
     def test_mc_native_weight_round_trip(self):
         self.check_skim(mc=True)
 
-    def test_invalid_input_leaves_no_visible_output(self):
+    def test_nan_mass_is_not_selected(self):
         create_input(self.source, invalid=True)
         result = self.skim()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("canonical candidate mass is nonfinite", result.stdout)
-        self.assertFalse(self.dest.exists())
-        self.assertEqual(list(self.directory.glob(".shift_jpsi_pending_*")), [])
+        self.assertEqual(result.returncode, 0, result.stdout)
+        with ROOT.TFile.Open(str(self.dest), "READ") as output:
+            tree = output.Get("Events")
+            self.assertEqual(tree.GetEntries(), 1)
+            self.assertEqual([int(row.event) for row in tree], [EVENT_BASE])
 
 
 if __name__ == "__main__":

@@ -17,6 +17,11 @@ skimMassWindow = tuple(str(limit) for limit in jpsi_dimuon["mass"])
 
 floatFields = ("mass", "pt", "pz", "eta", "phi", "vx", "vy", "vz", "chi2", "normalizedChi2", "dca")
 intFields = ("topologyMin", "topologyMax", "isOS", "dcaValid")
+mcWeightBranches = (
+    "shiftSamplingGenWeight", "shiftResponseGenWeight", "shiftRecoveryGenWeight",
+    "shiftProposalGenWeight", "genWeight", "shiftSamplingProbability",
+    "shiftSamplingWeight", "shiftOriginalGenWeight",
+)
 # Keep the existing candidate branches and compact their rows before filling.
 branchesToKeep = (
     "run", "luminosityBlock", "event", f"n{skimCollection}",
