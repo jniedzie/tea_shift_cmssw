@@ -688,6 +688,7 @@ void ShiftHistogramsFiller::FillDimuonKinematics(const shared_ptr<Event> event) 
     double const pz = dimuon->GetAs<float>("pz");
     // Mass is stored in GeV. Nonpositive masses have no logarithm.
     if (mass > 0.) fill("logMass", log10(mass));
+    if (pt >= 0.) fill("ptLog", pt);
     double const transverseMass = hypot(mass, pt);
     if (mass >= 0. && pt >= 0. && transverseMass > 0.)
       fill("rapidity", asinh(pz / transverseMass));
@@ -697,7 +698,6 @@ void ShiftHistogramsFiller::FillDimuonKinematics(const shared_ptr<Event> event) 
       int const isOS = dimuon->GetAs<int>("isOS");
       if (isOS == 0 || isOS == 1) fill(isOS ? "massOS" : "massSS", mass);
     }
-    if (!muons) continue;
     double pvDca = numeric_limits<double>::quiet_NaN();
     double pvPointingCos = numeric_limits<double>::quiet_NaN();
     bool pvDcaValid = false, pvPointingValid = false;
@@ -736,14 +736,21 @@ void ShiftHistogramsFiller::FillDimuonKinematics(const shared_ptr<Event> event) 
     }
     fill("pvDcaValid", pvDcaValid);
     fill("pvPointingValid", pvPointingValid);
-    if (pvDcaValid) fill("pvDca", pvDca);
+    if (pvDcaValid) {
+      fill("pvDca", pvDca);
+      fill("pvDcaLog", pvDca);
+    }
     if (pvPointingValid) {
       fill("pvPointingCos", pvPointingCos);
+      // Expand both endpoint peaks while keeping the sign. Exact endpoints go to ±8.
+      double const endpointDistance = max(1.e-8, 1. - abs(pvPointingCos));
+      fill("pvPointingCosLog", copysign(-log10(endpointDistance), pvPointingCos));
       // Match the Float32 booking edge so each zoom has no out-of-window entries.
       constexpr float pointingZoomEdge = 0.99f;
       if (pvPointingCos >= pointingZoomEdge) fill("pvPointingCosFine", pvPointingCos);
       if (pvPointingCos < -pointingZoomEdge) fill("pvPointingCosFineNegative", pvPointingCos);
     }
+    if (!muons) continue;
     for (string const variable : {"probability", "originCompatibilityNormalizedChi2",
                                  "constrainedValid", "refitStatus"})
       if (dimuon->HasBranch(variable)) fill(variable, dimuon->GetAs<float>(variable));

@@ -12,6 +12,7 @@ from shift_plot_binning import (
     dimuon_opening_angle_edges,
     dimuon_fine_opening_angle_edges,
     dimuon_origin_chi2_edges,
+    dimuon_log_edges,
     dimuon_pointing_edges,
 )
 from shift_storage_paths import resolve_storage_path
@@ -376,6 +377,7 @@ for category in dimuonCategories:
         ("vertexR", 450, 0.0, 450.0),
         ("pvDcaValid", 2, -0.5, 1.5),
         ("pvPointingValid", 2, -0.5, 1.5),
+        ("pvPointingCosLog", 33, -8.25, 8.25),
         ("massOS", 5000, 0.0, 100.0),
         ("massSS", 5000, 0.0, 100.0),
         ("constrainedMass", 1000, 0.0, 100.0),
@@ -469,6 +471,8 @@ dimuon_source_variable_edges = {
     "constrainedOpeningAngle": dimuon_opening_angle_edges,
     "openingAngleFine": dimuon_fine_opening_angle_edges,
     "originCompatibilityNormalizedChi2": dimuon_origin_chi2_edges,
+    "ptLog": dimuon_log_edges,
+    "pvDcaLog": dimuon_log_edges,
     **dimuon_pointing_edges,
 }
 histParams = tuple(
@@ -925,7 +929,10 @@ if skim_weight is not None:
 
     pair_collections = {f"{skimCollection}{category}" for category in dimuonCategories}
     pair_fields = set(floatFields + intFields) - {"topologyMin", "topologyMax"}
-    derived_fields = {"logMass", "rapidity", "vertexR", "massOS", "massSS", "topologyCategory"}
+    derived_fields = {
+        "logMass", "rapidity", "vertexR", "massOS", "massSS", "topologyCategory",
+        "pvDcaValid", "pvPointingValid", "pvPointingCosLog",
+    }
 
     extraEventCollections = {
         name: collection for name, collection in extraEventCollections.items()
@@ -942,6 +949,9 @@ if skim_weight is not None:
     histParams = tuple(
         row for row in histParams if row[0] in pair_collections and row[1] in derived_fields
     )
-    irregularHistParams = ()
+    irregularHistParams = tuple(
+        row for row in irregularHistParams
+        if row[0] in pair_collections and row[1] in {"ptLog", "pvDcaLog", *dimuon_pointing_edges}
+    )
     histParams2D = ()
     irregularHistParams2D = ()

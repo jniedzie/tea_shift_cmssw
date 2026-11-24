@@ -136,8 +136,11 @@ if plot_dimuons:
         # The current signal files use different bins and counts per bin need a shared axis.
         if not bsm_inputs:
             histograms.extend([
+                Histogram(f"dimuon/ShiftDimuonVertex{category}_ptLog", log_x=True, log_y=True, norm_type=normalization, show_full_x_range=True, legend_outside=True),
                 Histogram(f"dimuon/ShiftDimuonVertex{category}_pvDca", log_y=True, norm_type=normalization, show_full_x_range=True, legend_outside=True),
+                Histogram(f"dimuon/ShiftDimuonVertex{category}_pvDcaLog", log_x=True, log_y=True, norm_type=normalization, show_full_x_range=True, legend_outside=True),
                 Histogram(f"dimuon/ShiftDimuonVertex{category}_pvPointingCos", log_y=True, norm_type=normalization, show_full_x_range=True, legend_outside=True),
+                Histogram(f"dimuon/ShiftDimuonVertex{category}_pvPointingCosLog", log_y=True, norm_type=normalization, show_full_x_range=True, legend_outside=True),
                 Histogram(f"dimuon/ShiftDimuonVertex{category}_pvPointingCosFine", log_y=True, norm_type=normalization, show_full_x_range=True, legend_outside=True),
                 Histogram(f"dimuon/ShiftDimuonVertex{category}_pvPointingCosFineNegative", log_y=True, norm_type=normalization, show_full_x_range=True, legend_outside=True),
             ])

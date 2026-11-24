@@ -108,6 +108,9 @@ dimuon_origin_chi2_edges = linear_bin_edges(
     (0.0, 10.0, 0.05), (10.0, 50.0, 0.1), (50.0, 100.0, 0.5), (100.0, 500.0, 2.0)
 )
 
+# Ten bins per decade, from 0.01 to 1000 in GeV or cm.
+dimuon_log_edges = tuple(10.0 ** (step / 10.0) for step in range(-20, 31))
+
 # The DCA interior uses rounded quantiles of the inclusive and Both-Both
 # raw distributions. The upper edge is the first Float32 value above the
 # largest published pair; ROOT excludes its upper edge from the last bin.
