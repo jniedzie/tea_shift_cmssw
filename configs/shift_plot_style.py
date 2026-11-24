@@ -161,11 +161,11 @@ def apply_2d_plot_style(histograms):
 def plot_legends(compare_bsm):
     if compare_bsm:
         return {
-            SampleType.background: Legend(0.65, 0.48, 0.99, 0.90, "f", title="SM", text_size=16),
+            SampleType.background: Legend(0.65, 0.48, 0.99, 0.90, "f", title="SM, no analysis selections", text_size=16),
             SampleType.signal: Legend(0.65, 0.12, 0.99, 0.45, "l",
                                       title="BSM (normalized to SM integral)", text_size=17),
         }
-    return {SampleType.background: Legend(0.58, 0.2, 0.9, 0.9, "f", text_size=16)}
+    return {SampleType.background: Legend(0.58, 0.2, 0.9, 0.9, "f", title="No analysis selections", text_size=16)}
 
 
 luminosity = 0.01 * 300000.0  # pb^-1 (1% of Run 3)

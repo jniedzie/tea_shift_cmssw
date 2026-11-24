@@ -1,4 +1,4 @@
-# Code style: AI-code. AI-generated J/ψ control-region configuration.
+# Code style: human-code
 """Keep only dimuon candidates inside the J/ψ control region."""
 
 # The shared 2.6–3.6 GeV mass window has inclusive endpoints.

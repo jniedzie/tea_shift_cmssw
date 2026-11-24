@@ -2,6 +2,7 @@
 """Prepare available SHIFT samples and their legend styles."""
 
 import json
+import math
 
 import ROOT
 from Sample import Sample, SampleType
@@ -85,6 +86,65 @@ def prepare_jpsi_plot(data_path, mc_paths, histograms):
     return samples, ready, luminosity
 
 
+def read_jpsi_cr_exposure(source, input_kind):
+    """Check the selected histogram file's own control-region definition."""
+    from shift_jpsi_cr_skimmer_config import extraEventCollections, skimCandidateCollection
+    from shift_jpsi_dimuon import jpsi_dimuon
+
+    marker = source.Get("ShiftJpsiControlExposure")
+    record = json.loads(str(marker.GetString())) if marker else {}
+    selection = extraEventCollections[skimCandidateCollection]
+    collection = jpsi_dimuon["collection"]
+    pair_cuts = {}
+    for name, bound in selection.items():
+        if name == "inputCollections":
+            continue
+        limits = bound if isinstance(bound, tuple) else (bound, bound)
+        pair_cuts[f"{collection}_{name}"] = [edge if math.isfinite(edge) else None for edge in limits]
+    mass_limits = (record.get("mass_min_gev"), record.get("mass_max_gev"))
+    mass_window = tuple(record.get("mass_window_gev", mass_limits))
+    if mass_limits != (None, None) and mass_limits != mass_window:
+        raise ValueError(f"Conflicting J/ψ mass windows in {source.GetName()}")
+    selected_pairs = record.get("selected_pairs_both_both")
+    if (record.get("schema") != "shift-jpsi-control-publication-v1"
+            or record.get("input_kind") != input_kind
+            or record.get("pair_cuts") != pair_cuts
+            or mass_window != jpsi_dimuon["mass"]
+            or type(selected_pairs) is not int or selected_pairs < 0
+            or selected_pairs != record.get("selected_pairs")):
+        raise ValueError(f"Expected published Both-Both J/ψ CR histograms in {source.GetName()}")
+    return record
+
+
+def prepare_jpsi_cr_data(path, histograms):
+    if path is None:
+        return None, [], None
+    try:
+        source = ROOT.TFile.Open(eos_xrootd_url(path) or path, "READ")
+    except OSError:
+        Logger.warn(f"J/ψ CR data histograms are unavailable at {path}")
+        return None, [], None
+
+    if not source or source.IsZombie():
+        Logger.warn(f"J/ψ CR data histograms are unavailable at {path}")
+        return None, [], None
+    with source:
+        record = read_jpsi_cr_exposure(source, "collision-data")
+        recorded_lumi = record.get("recorded_luminosity_pb_inverse")
+        if recorded_lumi is not None and (
+            type(recorded_lumi) not in (int, float) or not math.isfinite(recorded_lumi) or recorded_lumi <= 0
+        ):
+            raise ValueError(f"Invalid recorded luminosity in {source.GetName()}")
+        ready = []
+        for histogram in histograms:
+            observed = source.Get(histogram.name)
+            if observed and observed.Integral() > 0:
+                ready.append(histogram)
+        data = Sample(name="collision_data", file_path=source.GetName(),
+                      type=SampleType.data, legend_description="Collision data")
+        return data, ready, recorded_lumi
+
+
 def prepare_plot_samples(
     base_path,
     cross_sections,
@@ -94,6 +154,8 @@ def prepare_plot_samples(
     bsm_mean_lab_flights_to_plot,
     bsm_epsilons_to_plot,
     histogram_cache_directory,
+    *,
+    jpsi_control_region=False,
 ):
     histogram_inventory = campaign_histogram_inventory(campaign)
     reference_inputs = {}
@@ -171,7 +233,14 @@ def prepare_plot_samples(
                 )
                 if file_path is not None:
                     try:
-                        exposure = histogram_gen_normalization(file_path, name)
+                        if jpsi_control_region:
+                            with ROOT.TFile.Open(eos_xrootd_url(file_path) or file_path, "READ") as source:
+                                read_jpsi_cr_exposure(source, "mc")
+                                exposure = histogram_gen_normalization(file_path, name, source=source)
+                            if exposure is None:
+                                raise ValueError("missing full source normalization")
+                        else:
+                            exposure = histogram_gen_normalization(file_path, name)
                     except OSError:
                         Logger.warn(
                             f"Skipping {name}: cannot open histogram {file_path}"

@@ -7,6 +7,17 @@ base_path = "/eos/home-j/jniedzie/shift_cmssw/"  # lxplus
 histogram_input_path = None
 histogram_output_path = None
 
+# Use the normal plotter for either the unselected sample or the J/ψ control region.
+plot_jpsi_control_region = False
+jpsi_cr_base_path = (
+    "/eos/cms/store/group/phys_exotica/xtracks/jeremi/shift_cmssw/support/jpsi_cr_20261124"
+)
+# None gives CR simulation plots at a reference 1 pb^-1.
+jpsi_cr_data_histogram = (
+    "/eos/user/j/jniedzie/shift_cmssw_support/halo_data_20261121/"
+    "jpsi_cr_20261124/data/histograms_merged/ntuple_0.root"
+)
+
 # ==========================
 # BSM samples
 # ==========================

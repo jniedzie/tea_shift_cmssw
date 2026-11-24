@@ -17,7 +17,7 @@ jpsi_mc_histograms = globals().get("jpsi_mc_histograms", {})
 
 from Histogram import Histogram, Histogram2D
 from HistogramNormalizer import NormalizationType
-from shift_plot_samples import prepare_plot_samples
+from shift_plot_samples import prepare_jpsi_cr_data, prepare_plot_samples
 from shift_plot_style import (
     apply_plot_style,
     apply_2d_plot_style,
@@ -40,9 +40,23 @@ from shift_paths import (
     bsm_mean_lab_flights_to_plot,
     bsm_epsilons_to_plot,
     histogram_cache_directory,
+    plot_jpsi_control_region,
+    jpsi_cr_base_path,
+    jpsi_cr_data_histogram,
 )
 
-if jpsi_data_histogram:
+if plot_jpsi_control_region:
+    dimuon_categories = ["Both-Both"]
+    plot_muons = plot_reco = plot_diagnostics = plot_2d = False
+    samples, bsm_inputs = prepare_plot_samples(
+        jpsi_cr_base_path, cross_sections, campaign, None, None, None, None,
+        histogram_cache_directory, jpsi_control_region=True,
+    )
+    output_path = f"../plots/physics/Jpsi_CR/{campaign}/"
+    normalization = NormalizationType.to_lumi
+    luminosity = 1.0
+    beam_label = "SM prediction at 1 pb^{-1}"
+elif jpsi_data_histogram:
     bsm_inputs = []
     output_path = globals().get("jpsi_output_path", "../plots/data/jpsi_control/")
     normalization = NormalizationType.to_data
@@ -60,9 +74,9 @@ else:
         histogram_cache_directory,
     )
     output_path = (
-        f"../plots/physics/SM_BSM/{bsm_campaign}/"
+        f"../plots/physics/SM_BSM/{bsm_campaign}/no_analysis_selections/"
         if bsm_inputs
-        else f"../plots/physics/SM/{campaign}/"
+        else f"../plots/physics/SM/{campaign}/no_analysis_selections/"
     )
     normalization = (
         NormalizationType.to_background if bsm_inputs else NormalizationType.to_lumi
@@ -104,7 +118,7 @@ if plot_dimuons:
             Histogram(f"dimuon/ShiftDimuonVertex{category}_p_variable"       , "", False, True          , normalization,  5, None  , None   , 1e-3, None, scale_by_bin_width=True      ),
             Histogram(f"dimuon/ShiftDimuonVertex{category}_eta"              , "", False, True          , normalization,  5, None  , None   , 1e-3, None),
             Histogram(f"dimuon/ShiftDimuonVertex{category}_phi"              , "", False, True          , normalization,  2, None  , None   , 1e-1, None),
-            Histogram(f"dimuon/ShiftDimuonVertex{category}_mass"             , "", False, True          , normalization, 20, None  , 350    , 1e-3, None, allow_legend_x_extension=True),
+            Histogram(f"dimuon/ShiftDimuonVertex{category}_mass"             , "", False, True          , normalization, 20, None  , 350    , 1e-3, None, legend_outside=not bsm_inputs),
             Histogram(f"dimuon/ShiftDimuonVertex{category}_logMass"          , "", False, True          , normalization,  5, None  , None   , 1e-1, None, de_loggify_x_axis=True       ),
             Histogram(f"dimuon/ShiftDimuonVertex{category}_vx"               , "", False, True          , normalization,  5, None  , None   , None, None),
             Histogram(f"dimuon/ShiftDimuonVertex{category}_vy"               , "", False, True          , normalization,  5, None  , None   , None, None),
@@ -205,7 +219,7 @@ if plot_2d and not jpsi_data_histogram:
 
 # fmt: on
 
-if plot_dimuons and jpsi_data_histogram:
+if plot_dimuons and (jpsi_data_histogram or plot_jpsi_control_region):
     for category in dimuon_categories:
         for variable in (
             "dca",
@@ -227,7 +241,50 @@ apply_plot_style(histograms, variable_rebin=variable_histogram_rebin)
 apply_2d_plot_style(histograms2D)
 legends = plot_legends(bool(bsm_inputs))
 
-if jpsi_data_histogram:
+if plot_jpsi_control_region:
+    from CmsLabelsManager import CmsLabel
+    from Legend import Legend
+    from Logger import info
+    from Sample import SampleType
+
+    # These observables are available in the compact dimuon skim.
+    missing_from_skim = {
+        "openingAngle", "openingAngleFine", "deltaPhi", "deltaEta", "deltaR",
+        "ptAsymmetry", "momentumAsymmetry", "minMuonPt", "maxMuonPt", "massSS",
+    }
+    histograms = [hist for hist in histograms if hist.name.split("_", 1)[-1] not in missing_from_skim]
+    data, data_histograms, recorded_lumi = prepare_jpsi_cr_data(jpsi_cr_data_histogram, histograms)
+    legends = {
+        SampleType.background: Legend(0.58, 0.2, 0.9, 0.9, "f", title="J/#psi control region", text_size=16),
+    }
+    if data is not None:
+        recorded = "Recorded CMS lumi unknown"
+        if recorded_lumi is not None:
+            recorded = f"{recorded_lumi:.12g} pb^{{-1}} recorded CMS lumi"
+        info(f"J/ψ CR data: {recorded}. Absolute SHIFT MC normalization is unqualified.")
+        if data_histograms:
+            normalization = NormalizationType.to_data if samples else NormalizationType.none
+            cms_label = CmsLabel.private_data_sim if samples else CmsLabel.private_data
+            beam_label = recorded
+            # With sparse data, show observed bin counts without empty-bin Poisson bars.
+            plotting_options = {**plotting_options, SampleType.data: "nostack p"}
+            legends[SampleType.data] = Legend(0.58, 0.78, 0.94, 0.9, "p", title="J/#psi control region", text_size=16)
+            legends[SampleType.background] = Legend(0.58, 0.2, 0.94, 0.77, "f", title="MC shape scaled to data", text_size=16)
+            samples.append(data)
+            histograms = data_histograms
+    for histogram in histograms:
+        histogram.norm_type = normalization
+        histogram.rebin = 1
+        histogram.bin_edges = None
+        histogram.scale_by_bin_width = False
+        histogram.x_min = 2.5 if histogram.name.endswith("_mass") else None
+        histogram.x_max = 3.7 if histogram.name.endswith("_mass") else None
+        histogram.log_y = False
+        histogram.legend_outside = True
+        histogram.y_label = (
+            "Dimuons / bin" if histogram.name.startswith("dimuon/") else "Events / bin"
+        )
+elif jpsi_data_histogram:
     from CmsLabelsManager import CmsLabel
     from Legend import Legend
     from Sample import SampleType
