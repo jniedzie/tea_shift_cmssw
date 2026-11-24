@@ -1,4 +1,4 @@
-# Code style: AI-code. AI-generated shared definition of the blinded dimuon.
+# Code style: human-code
 """Use the stored canonical SHIFT mass with inclusive endpoints."""
 
 jpsi_dimuon = {

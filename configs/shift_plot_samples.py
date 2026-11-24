@@ -1,9 +1,12 @@
 # Code style: human-code.
 """Prepare available SHIFT samples and their legend styles."""
 
+import json
+
 import ROOT
 from Sample import Sample, SampleType
 import Logger
+from teaHelpers import eos_xrootd_url
 from shift_sample_paths import (
     single_root_file,
     histogram_gen_normalization,
@@ -30,6 +33,56 @@ def get_bin_label(bin_name, process):
     variable = "m_{#mu#mu}^{gen}" if process == "dy" else "#hat{p}_{T}"
     interval = f"[{low}, #infty)" if high in ("-1", "inf") else f"[{low}, {high}]"
     return f"{variable} #in {interval} GeV"
+
+
+def prepare_jpsi_plot(data_path, mc_paths, histograms):
+    """Keep the published histograms that TEA can normalize to the data shape."""
+    samples = []
+    colors = (ROOT.kAzure + 1, ROOT.kOrange - 3, ROOT.kViolet - 5, ROOT.kGreen + 1)
+    for index, (name, path) in enumerate([(None, data_path), *mc_paths.items()]):
+        path = str(path)
+        kind = "collision-data" if name is None else "mc"
+        try:
+            with ROOT.TFile.Open(eos_xrootd_url(path) or path, "READ") as source:
+                exposure = source.Get("ShiftJpsiControlExposure")
+                metadata = json.loads(str(exposure.GetString())) if exposure else {}
+                if metadata.get("input_kind") != kind:
+                    raise ValueError(f"Expected published J/ψ {kind} histograms in {path}")
+
+                if name is None:
+                    luminosity = metadata["recorded_luminosity_pb_inverse"]
+                    samples.append(Sample(name="collision_data", file_path=source.GetName(),
+                                          type=SampleType.data, legend_description="Collision data"))
+                    mc_totals = {}
+                    for histogram in histograms:
+                        observed = source.Get(histogram.name)
+                        if observed and observed.Integral() > 0:
+                            mc_totals[histogram.name] = 0.0
+                    continue
+
+                normalization = histogram_gen_normalization(path, name, source=source)
+                if normalization is None:
+                    raise ValueError("missing full GEN normalization")
+                cross_section = normalization["cross_section_pb"]
+                weight_sum = normalization["initial_weight_sum"]
+                color = colors[(index - 1) % len(colors)]
+                samples.append(Sample(name=name, file_path=source.GetName(), type=SampleType.background,
+                                      line_color=color, fill_color=color, legend_description=name,
+                                      cross_section=cross_section, initial_weight_sum=weight_sum))
+                scale = cross_section / weight_sum
+                for histogram in mc_totals:
+                    shape = source.Get(histogram)
+                    if shape:
+                        mc_totals[histogram] += scale * shape.Integral()
+        except (OSError, ValueError) as error:
+            if name is None:
+                raise
+            Logger.warn(f"Skipping {name}: {error}")
+
+    ready = [hist for hist in histograms if mc_totals.get(hist.name, 0) > 0]
+    if not ready:
+        raise ValueError("No common J/ψ histograms with positive data and MC totals")
+    return samples, ready, luminosity
 
 
 def prepare_plot_samples(

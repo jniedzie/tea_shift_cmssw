@@ -3,6 +3,10 @@
 # base_path = "/pnfs/iihe/cms/store/user/jniedzie/shift_cmssw"  # t2b
 base_path = "/eos/home-j/jniedzie/shift_cmssw/"  # lxplus
 
+# Optional paths for a single histogrammer run, including a published skim.
+histogram_input_path = None
+histogram_output_path = None
+
 # ==========================
 # BSM samples
 # ==========================

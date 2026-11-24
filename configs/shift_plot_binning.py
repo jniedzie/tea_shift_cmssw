@@ -107,3 +107,20 @@ dimuon_fine_opening_angle_edges = linear_bin_edges(
 dimuon_origin_chi2_edges = linear_bin_edges(
     (0.0, 10.0, 0.05), (10.0, 50.0, 0.1), (50.0, 100.0, 0.5), (100.0, 500.0, 2.0)
 )
+
+# The DCA interior uses rounded quantiles of the inclusive and Both-Both
+# raw distributions. The upper edge is the first Float32 value above the
+# largest published pair; ROOT excludes its upper edge from the last bin.
+# The cosine overview uses visible mirrored bins. The zooms resolve the peaks.
+dimuon_pointing_cosine_zoom_edges = (
+    0.99, 0.996, 0.9985, 0.9992, 0.9995, 0.9997,
+    0.99982, 0.9999, 0.99995, 0.99998, 1.00001,
+)
+dimuon_pointing_edges = {
+    "pvDca": (0.0, 5.4, 8.0, 10.6, 13.4, 16.3, 19.6, 23.4, 28.2,
+              33.3, 39.4, 47.4, 57.7, 71.4, 93.5, 137.0, 686.57110595703),
+    "pvPointingCos": (-1.01, -0.98, -0.95, -0.9, -0.7, -0.45, -0.2, 0.0,
+                    0.2, 0.45, 0.7, 0.9, 0.95, 0.98, 1.01),
+    "pvPointingCosFine": dimuon_pointing_cosine_zoom_edges,
+    "pvPointingCosFineNegative": tuple(-edge for edge in reversed(dimuon_pointing_cosine_zoom_edges)),
+}

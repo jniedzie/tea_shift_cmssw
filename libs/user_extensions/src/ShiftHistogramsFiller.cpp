@@ -85,6 +85,16 @@ string GetDimuonTopologyCategory(int topologyMin, int topologyMax) {
 ShiftHistogramsFiller::ShiftHistogramsFiller(shared_ptr<HistogramsHandler> histogramsHandler_, TFile* inputFile)
     : histogramsHandler(histogramsHandler_) {
   auto& config = ConfigManager::GetInstance();
+  string skimInputPath;
+  try { config.GetValue("skimInputFilePath", skimInputPath); } catch (const Exception&) {}
+  if (!skimInputPath.empty()) {
+    string inputPath;
+    config.GetValue("inputFilePath", inputPath);
+    if (inputPath != skimInputPath)
+      throw runtime_error("Set the skim input path in shift_paths.py when changing the input");
+  }
+  if (auto* tree = inputFile ? inputFile->Get<TTree>("Events") : nullptr)
+    hasRecoMuons = tree->GetBranch("ShiftMuon_pt") != nullptr;
   eventProcessor = make_unique<EventProcessor>();
   float pvX = primaryVertex.X(), pvY = primaryVertex.Y(), pvZ = primaryVertex.Z();
   try { config.GetValue("primaryVertexX", pvX); } catch (const Exception&) {}
@@ -158,7 +168,7 @@ void ShiftHistogramsFiller::Fill(const shared_ptr<Event> event) {
   FillRecoLevel(event);
   FillConstrainedMuons(event);
   FillDimuonKinematics(event);
-  FillDetectorDiagnostics(event);
+  if (hasRecoMuons) FillDetectorDiagnostics(event);
   if (enableTruthDiagnostics) {
     FillResolutionMaps(event);
     FillDimuonOrigins(event);
@@ -629,7 +639,7 @@ void ShiftHistogramsFiller::FillRecoLevel(const shared_ptr<Event> event) {
   for (auto const& [category, index] : categoryIndices)
     labels[index] = category;
 
-  auto const recoMuons = event->GetCollection("ShiftMuon");
+  auto const recoMuons = enableTruthDiagnostics ? event->GetCollection("ShiftMuon") : nullptr;
   vector<GenJPsiCandidate> truthCandidates;
   if (enableTruthDiagnostics) truthCandidates = GetGenJPsiCandidates(event->GetCollection("GenPart"));
   for (auto const& dimuon : *dimuons) {
@@ -656,7 +666,7 @@ void ShiftHistogramsFiller::FillRecoLevel(const shared_ptr<Event> event) {
 }
 
 void ShiftHistogramsFiller::FillDimuonKinematics(const shared_ptr<Event> event) {
-  auto const muons = event->GetCollection("ShiftMuon");
+  auto const muons = hasRecoMuons ? event->GetCollection("ShiftMuon") : nullptr;
   map<PhysicsObject const*, vector<string>> categoriesByDimuon;
   for (auto const& category : dimuonCategories)
     for (auto const& dimuon : *event->GetCollection("ShiftDimuonVertex" + category))
@@ -682,6 +692,12 @@ void ShiftHistogramsFiller::FillDimuonKinematics(const shared_ptr<Event> event) 
     if (mass >= 0. && pt >= 0. && transverseMass > 0.)
       fill("rapidity", asinh(pz / transverseMass));
     fill("vertexR", hypot(dimuon->GetAs<float>("vx"), dimuon->GetAs<float>("vy")));
+    // Keep OS and SS spectra separate without changing any pair selection.
+    if (mass >= 0. && dimuon->HasBranch("isOS")) {
+      int const isOS = dimuon->GetAs<int>("isOS");
+      if (isOS == 0 || isOS == 1) fill(isOS ? "massOS" : "massSS", mass);
+    }
+    if (!muons) continue;
     double pvDca = numeric_limits<double>::quiet_NaN();
     double pvPointingCos = numeric_limits<double>::quiet_NaN();
     bool pvDcaValid = false, pvPointingValid = false;
@@ -723,12 +739,10 @@ void ShiftHistogramsFiller::FillDimuonKinematics(const shared_ptr<Event> event) 
     if (pvDcaValid) fill("pvDca", pvDca);
     if (pvPointingValid) {
       fill("pvPointingCos", pvPointingCos);
-      fill("pvPointingCosFine", pvPointingCos);
-    }
-    // Keep OS and SS spectra separate without changing any pair selection.
-    if (mass >= 0. && dimuon->HasBranch("isOS")) {
-      int const isOS = dimuon->GetAs<int>("isOS");
-      if (isOS == 0 || isOS == 1) fill(isOS ? "massOS" : "massSS", mass);
+      // Match the Float32 booking edge so each zoom has no out-of-window entries.
+      constexpr float pointingZoomEdge = 0.99f;
+      if (pvPointingCos >= pointingZoomEdge) fill("pvPointingCosFine", pvPointingCos);
+      if (pvPointingCos < -pointingZoomEdge) fill("pvPointingCosFineNegative", pvPointingCos);
     }
     for (string const variable : {"probability", "originCompatibilityNormalizedChi2",
                                  "constrainedValid", "refitStatus"})

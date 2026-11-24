@@ -8,6 +8,7 @@ import os
 import shutil
 import tempfile
 from collections import Counter
+from contextlib import nullcontext
 from pathlib import Path
 import re
 
@@ -194,14 +195,43 @@ def single_root_file(directory, *, allow_missing=False, cache_directory=None):
     return str(target)
 
 
-def histogram_gen_normalization(path, stratum):
+def jpsi_skim_weight(path):
+    """Read the weight branch declared by an explicitly selected skim."""
+    if path.startswith("/store/"):
+        return None
+
+    import ROOT
+
+    with ROOT.TFile.Open(path, "READ") as source:
+        marker = source.Get("ShiftJpsiSkimMetadata")
+        if not marker:
+            return None
+        if source.TestBit(ROOT.TFile.kRecovered):
+            raise ValueError("Cannot use a recovered J/ψ skim")
+        metadata = json.loads(str(marker.GetString()))
+        tree = source.Get("Events")
+        if not tree:
+            raise ValueError("J/ψ skim has no Events tree")
+        weight = metadata["weight_branch"]
+        if metadata["input_kind"] == "collision-data":
+            from shift_skimmer_config import dimuonBranches
+
+            branches = {branch.GetName() for branch in tree.GetListOfBranches()}
+            if weight or branches != set(dimuonBranches):
+                raise ValueError("J/ψ skim has unexpected or missing data branches")
+        elif metadata["input_kind"] != "mc" or not weight or not tree.GetBranch(weight):
+            raise ValueError("J/ψ skim has no configured MC weight branch")
+        return weight
+
+
+def histogram_gen_normalization(path, stratum, *, source=None):
     """Read a merged histogram's own exposure, without production-side files."""
     import ROOT
     from teaHelpers import eos_xrootd_url
-    source = ROOT.TFile.Open(eos_xrootd_url(path) or path)
-    if not source or source.IsZombie():
-        raise OSError('Cannot read histogram normalization: ' + path)
-    try:
+    input_file = ROOT.TFile.Open(eos_xrootd_url(path) or path) if source is None else nullcontext(source)
+    with input_file as source:
+        if not source or source.IsZombie():
+            raise OSError('Cannot read histogram normalization: ' + path)
         record = source.Get('ShiftStreamingNormalization')
         if record:
             metadata = json.loads(record.GetString().Data())
@@ -241,8 +271,6 @@ def histogram_gen_normalization(path, stratum):
                 or not math.isfinite(cross_section) or cross_section <= 0):
             raise ValueError('Invalid full GEN histogram normalization: ' + path)
         return dict(cross_section_pb=cross_section, initial_weight_sum=denominator)
-    finally:
-        source.Close()
 
 
 def _component_rate_histogram_normalization(metadata):

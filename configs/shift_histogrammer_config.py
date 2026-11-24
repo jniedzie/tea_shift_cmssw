@@ -4,14 +4,15 @@
 # ============================================================
 
 from Logger import info
-from shift_paths import base_path, campaign, sample
+from shift_paths import base_path, campaign, histogram_input_path, histogram_output_path, sample
 from shift_extra_collections import extraEventCollections
-from shift_sample_paths import latest_merged_sample
+from shift_sample_paths import jpsi_skim_weight, latest_merged_sample
 from shift_plot_binning import (
     linear_bin_edges,
     dimuon_opening_angle_edges,
     dimuon_fine_opening_angle_edges,
     dimuon_origin_chi2_edges,
+    dimuon_pointing_edges,
 )
 from shift_storage_paths import resolve_storage_path
 import re
@@ -373,9 +374,6 @@ for category in dimuonCategories:
         ("maxMuonPt", 500, 0.0, 50.0),
         ("rapidity", 400, -10.0, 10.0),
         ("vertexR", 450, 0.0, 450.0),
-        ("pvDca", 1000, 0.0, 5000.0),
-        ("pvPointingCos", 201, -1.005, 1.005),
-        ("pvPointingCosFine", 1000, 0.99, 1.00001),
         ("pvDcaValid", 2, -0.5, 1.5),
         ("pvPointingValid", 2, -0.5, 1.5),
         ("massOS", 5000, 0.0, 100.0),
@@ -471,6 +469,7 @@ dimuon_source_variable_edges = {
     "constrainedOpeningAngle": dimuon_opening_angle_edges,
     "openingAngleFine": dimuon_fine_opening_angle_edges,
     "originCompatibilityNormalizedChi2": dimuon_origin_chi2_edges,
+    **dimuon_pointing_edges,
 }
 histParams = tuple(
     row for row in histParams
@@ -740,8 +739,8 @@ else:
     input_path, sample_version, provenance_tag = "", 0, campaign
 project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-inputFilePath = input_path
-histogramsOutputFilePath = (
+inputFilePath = histogram_input_path or input_path
+histogramsOutputFilePath = histogram_output_path or (
     f"{project_dir}/plots/reconstruction/versions/v{sample_version}_{provenance_tag}/histograms.root"
 )
 
@@ -911,3 +910,38 @@ if enableBdtDiagnostics:
 
 if enableResolutionMaps:
     irregularHistParams2D = book_resolution_maps()
+
+skim_weight = jpsi_skim_weight(inputFilePath) if histogram_input_path else None
+
+if skim_weight is not None:
+    from shift_skimmer_config import floatFields, intFields, skimCollection
+
+    skimInputFilePath = inputFilePath
+    weightsBranchName = skim_weight
+    enableTruthDiagnostics = False
+    enableBdtDiagnostics = False
+    enableResolutionMaps = False
+    resolutionMapsOnly = False
+
+    pair_collections = {f"{skimCollection}{category}" for category in dimuonCategories}
+    pair_fields = set(floatFields + intFields) - {"topologyMin", "topologyMax"}
+    derived_fields = {"logMass", "rapidity", "vertexR", "massOS", "massSS", "topologyCategory"}
+
+    extraEventCollections = {
+        name: collection for name, collection in extraEventCollections.items()
+        if name.startswith(skimCollection)
+    }
+    defaultHistParams = tuple(
+        row for row in defaultHistParams
+        if (row[0] in pair_collections and row[1] in pair_fields)
+        or (row[0] == "Event" and row[1][1:] in pair_collections)
+    )
+    irregularDefaultHistParams = tuple(
+        row for row in irregularDefaultHistParams if row[0] in pair_collections
+    )
+    histParams = tuple(
+        row for row in histParams if row[0] in pair_collections and row[1] in derived_fields
+    )
+    irregularHistParams = ()
+    histParams2D = ()
+    irregularHistParams2D = ()
