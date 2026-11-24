@@ -7,6 +7,7 @@
 #include <TFile.h>
 #include <TObjString.h>
 
+#include <cmath>
 #include <filesystem>
 #include <iomanip>
 #include <limits>
@@ -65,8 +66,47 @@ vector<TLeaf*> CandidateLeaves(TTree& tree, TLeaf* count, const string& collecti
   return leaves;
 }
 
+struct PairCut {
+  TLeaf* leaf;
+  double lower;
+  double upper;
+};
+
+vector<PairCut> ReadPairCuts(ConfigManager& config, TTree& tree, TLeaf* count, const string& collection) {
+  string name;
+  try {
+    config.GetValue("skimCandidateCollection", name);
+  } catch (const Exception&) {
+    return {};  // The original mass-only skim.
+  }
+
+  insertion_ordered_map<string, ExtraCollection> selections;
+  config.GetExtraEventCollections(selections);
+  auto selected = selections.find(name);
+  if (selected == selections.end() || selected->second.inputCollections != vector<string>{collection})
+    throw runtime_error("The skim candidate selection must use " + collection);
+
+  vector<PairCut> cuts;
+  auto const add = [&](const string& field, double lower, double upper) {
+    string branch = collection + "_" + field;
+    auto* leaf = tree.GetLeaf(branch.c_str());
+    if (!leaf || leaf->GetLeafCount() != count || leaf->GetLenStatic() != 1)
+      throw runtime_error("Missing or incompatible branch for skim cut: " + branch);
+    string const type = leaf->GetTypeName();
+    if (type != "Float_t" && type != "Double_t" && type != "Int_t" && type != "UInt_t" && type != "Bool_t")
+      throw runtime_error("Skim cut requires a numeric candidate branch: " + branch);
+    if (!(lower <= upper)) throw runtime_error("Invalid skim cut range: " + branch);
+    cuts.push_back({leaf, lower, upper});
+  };
+  for (auto const& [field, flag] : selected->second.flags) add(field, flag, flag);
+  for (auto const& [field, range] : selected->second.allCuts) add(field, range.first, range.second);
+  if (cuts.empty()) throw runtime_error("The skim candidate selection has no cuts: " + name);
+  return cuts;
+}
+
 void WriteMetadata(const string& path, const string& kind, const string& weight, double lower, double upper,
-                   Long64_t originalEvents, Long64_t selectedEvents, Long64_t selectedPairs) {
+                   Long64_t originalEvents, Long64_t selectedEvents, Long64_t selectedPairs,
+                   const vector<PairCut>& pairCuts) {
   unique_ptr<TFile> file(TFile::Open(path.c_str(), "UPDATE"));
   if (!file || file->IsZombie()) throw runtime_error("Could not reopen the skim output");
 
@@ -84,7 +124,22 @@ void WriteMetadata(const string& path, const string& kind, const string& weight,
            << "\",\"mass_min_gev\":" << lower << ",\"mass_max_gev\":" << upper
            << ",\"endpoints\":\"inclusive\",\"original_events\":" << originalEvents
            << ",\"selected_events\":" << selectedEvents << ",\"selected_pairs\":" << selectedPairs
-           << ",\"weight_branch\":\"" << weight << "\"}";
+           << ",\"weight_branch\":\"" << weight << "\"";
+  if (!pairCuts.empty()) {
+    metadata << ",\"pair_cuts\":{";
+    for (auto const& cut : pairCuts) {
+      if (&cut != &pairCuts.front()) metadata << ',';
+      metadata << quoted(cut.leaf->GetName()) << ":[";
+      if (isfinite(cut.lower)) metadata << cut.lower;
+      else metadata << "null";
+      metadata << ',';
+      if (isfinite(cut.upper)) metadata << cut.upper;
+      else metadata << "null";
+      metadata << ']';
+    }
+    metadata << '}';
+  }
+  metadata << '}';
   file->cd();
   if (TObjString(metadata.str().c_str()).Write("ShiftJpsiSkimMetadata") <= 0)
     throw runtime_error("Could not write skim metadata");
@@ -125,6 +180,7 @@ int RunSkimmer(int argc, char** argv) {
     throw runtime_error("Missing or incompatible dimuon count or mass");
   auto const floatLeaves = CandidateLeaves(*tree, count, collection, floats, "Float_t");
   auto const intLeaves = CandidateLeaves(*tree, count, collection, ints, "Int_t");
+  auto const pairCuts = ReadPairCuts(config, *tree, count, collection);
 
   string weight;
   for (auto const& name : weightNames) {
@@ -143,6 +199,7 @@ int RunSkimmer(int argc, char** argv) {
   tree->SetBranchStatus("*", false);
   for (auto const& name : branches)
     if (tree->GetBranch(name.c_str())) tree->SetBranchStatus(name.c_str(), true);
+  for (auto const& cut : pairCuts) tree->SetBranchStatus(cut.leaf->GetName(), true);
   Long64_t const original = tree->GetEntries();
   Long64_t selected = 0, pairs = 0;
   vector<int> rows;
@@ -153,11 +210,24 @@ int RunSkimmer(int argc, char** argv) {
     int const size = rawSize;
     if (size == 0) continue;
     if (mass->GetBranch()->GetEntry(entry) <= 0) throw runtime_error("Could not read the dimuon mass");
+    for (auto const& cut : pairCuts) {
+      if (cut.leaf->GetBranch()->GetEntry(entry) <= 0)
+        throw runtime_error("Could not read skim cut branch: " + string(cut.leaf->GetName()));
+    }
 
     rows.clear();
     for (int index = 0; index < size; ++index) {
       double const value = mass->GetValue(index);
-      if (lower <= value && value <= upper) rows.push_back(index);
+      if (!(lower <= value && value <= upper)) continue;
+      bool passes = true;
+      for (auto const& cut : pairCuts) {
+        double const field = cut.leaf->GetValue(index);
+        if (!isfinite(field) || field < cut.lower || field > cut.upper) {
+          passes = false;
+          break;
+        }
+      }
+      if (passes) rows.push_back(index);
     }
     if (rows.empty()) continue;
     if (tree->GetEntry(entry) <= 0) throw runtime_error("Could not read the selected event");
@@ -173,7 +243,7 @@ int RunSkimmer(int argc, char** argv) {
     pairs += rows.size();
   }
   writer.Save();
-  WriteMetadata(output.temporary, kind, weight, lower, upper, original, selected, pairs);
+  WriteMetadata(output.temporary, kind, weight, lower, upper, original, selected, pairs, pairCuts);
   output.Publish();
   cout << "Kept " << selected << " events with " << pairs << " J/psi pairs." << endl;
   return 0;
