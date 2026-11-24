@@ -33,7 +33,7 @@ def float_around(value, steps=0):
     return number
 
 
-def create_input(path, mc=False, invalid=False):
+def create_input(path, mc=False, invalid=False, control_region=False):
     output = ROOT.TFile.Open(str(path), "RECREATE")
     tree = ROOT.TTree("Events", "Events")
     scalars = {
@@ -61,6 +61,17 @@ def create_input(path, mc=False, invalid=False):
         ((float("nan") if invalid else 3.1, 56),),
         (),
     )
+    if control_region:
+        # One accepted row, with rejected siblings that separately fail mass,
+        # z, charge or topology. A NaN z must fail even with no upper z bound.
+        events += (((3.1, 66), (3.1, 77), (3.1, 88)),)
+        control_cuts = (
+            ((2, 2, 1, 12000), (2, 2, 1, 10000), (2, 2, 1, 12000), (2, 2, 1, 9999)),
+            ((2, 2, 1, 12000), (2, 2, 1, 12000)),
+            ((2, 2, 0, 12000),),
+            (),
+            ((1, 2, 1, 12000), (2, 2, 0, 12000), (2, 2, 1, float("nan"))),
+        )
     for event_index, pairs in enumerate(events):
         scalars["event"][0][0] = EVENT_BASE + event_index
         scalars[COUNT][0][0] = len(pairs)
@@ -73,6 +84,10 @@ def create_input(path, mc=False, invalid=False):
             for field in INT_FIELDS + ("muonIdx1",):
                 candidates[field][index] = index + 1
             candidates["mass"][index] = mass
+            if control_region:
+                for field, value in zip(("topologyMin", "topologyMax", "isOS", "vz"),
+                                        control_cuts[event_index][index]):
+                    candidates[field][index] = value
         tree.Fill()
     tree.Write()
 
@@ -96,9 +111,9 @@ class ShiftSkimmerTest(unittest.TestCase):
         self.source = self.directory / "input.root"
         self.dest = self.directory / "skim.root"
 
-    def skim(self, kind="collision-data"):
+    def skim(self, kind="collision-data", config="shift_skimmer_config.py"):
         return subprocess.run(
-            [str(BINARY), "--config", str(TENANT / "configs/shift_skimmer_config.py"),
+            [str(BINARY), "--config", str(TENANT / "configs" / config),
              "--input_path", str(self.source), "--output_trees_path", str(self.dest), "--input_kind", kind],
             check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         )
@@ -147,6 +162,28 @@ class ShiftSkimmerTest(unittest.TestCase):
 
     def test_mc_native_weight_round_trip(self):
         self.check_skim(mc=True)
+
+    def test_control_region_compacts_only_the_accepted_pair(self):
+        create_input(self.source, control_region=True)
+        result = self.skim(config="shift_jpsi_cr_skimmer_config.py")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        with ROOT.TFile.Open(str(self.dest), "READ") as output:
+            tree = output.Get("Events")
+            self.assertEqual(tree.GetEntries(), 1)
+            tree.GetEntry(0)
+            self.assertEqual(int(tree.event), EVENT_BASE)
+            self.assertEqual(getattr(tree, COUNT), 1)
+            self.assertEqual(list(getattr(tree, f"{COLLECTION}_pt")), [12.0])
+            self.assertEqual(list(getattr(tree, f"{COLLECTION}_vz")), [10000.0])
+            self.assertFalse(tree.GetBranch(f"{COLLECTION}_muonIdx1"))
+            seal = json.loads(str(output.Get("ShiftJpsiSkimMetadata").GetString()))
+            self.assertEqual((seal["original_events"], seal["selected_pairs"]), (5, 1))
+            self.assertEqual(seal["pair_cuts"], {
+                f"{COLLECTION}_isOS": [1, 1],
+                f"{COLLECTION}_topologyMin": [2, 2],
+                f"{COLLECTION}_topologyMax": [2, 2],
+                f"{COLLECTION}_vz": [10000, None],
+            })
 
     def test_nan_mass_is_not_selected(self):
         create_input(self.source, invalid=True)
