@@ -100,7 +100,8 @@ def render_category(edges, samples, category, key, path):
                     f"{pairs:,} pair{'s' if pairs != 1 else ''} in the window"
                 ), transform=axis.transAxes, fontsize=9, va="bottom")
             title = f"CMS Run 2023D data control region · {category}"
-            figure.suptitle(title, fontsize=15, fontweight="bold")
+            figure.suptitle(f"CMS Run 2023D data control region\n{category}",
+                            fontsize=15, fontweight="bold")
             figure.savefig(path, format="pdf", metadata={"Title": title})
         finally:
             plt.close(figure)
@@ -128,7 +129,12 @@ def main():
     parser.add_argument("--summary", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
-    render_control_region(json.loads(args.summary.read_text()), args.output_dir)
+    aggregate = json.loads(args.summary.read_text())
+    _, samples = validate_aggregate(aggregate)
+    tight = [sample for sample in samples if sample["selection"] == "CSC tight"]
+    if not tight:
+        parser.error("The J/ψ control-region summary must include CSC-tight data")
+    render_control_region(dict(aggregate, samples=tight), args.output_dir)
 
 
 if __name__ == "__main__":
