@@ -86,11 +86,13 @@ def prepare_jpsi_plot(data_path, mc_paths, histograms):
     return samples, ready, luminosity
 
 
-def read_jpsi_cr_exposure(source, input_kind):
+def read_jpsi_cr_exposure(source, input_kind, category):
     """Check the selected histogram file's own control-region definition."""
     from shift_jpsi_cr_skimmer_config import extraEventCollections, skimCandidateCollection
     from shift_jpsi_dimuon import jpsi_dimuon
 
+    if category not in ("All", "Both-Both"):
+        raise ValueError(f"Unknown J/ψ CR category: {category}")
     marker = source.Get("ShiftJpsiControlExposure")
     record = json.loads(str(marker.GetString())) if marker else {}
     selection = extraEventCollections[skimCandidateCollection]
@@ -99,24 +101,28 @@ def read_jpsi_cr_exposure(source, input_kind):
     for name, bound in selection.items():
         if name == "inputCollections":
             continue
+        if category == "All" and name in ("topologyMin", "topologyMax"):
+            continue
         limits = bound if isinstance(bound, tuple) else (bound, bound)
         pair_cuts[f"{collection}_{name}"] = [edge if math.isfinite(edge) else None for edge in limits]
     mass_limits = (record.get("mass_min_gev"), record.get("mass_max_gev"))
     mass_window = tuple(record.get("mass_window_gev", mass_limits))
     if mass_limits != (None, None) and mass_limits != mass_window:
         raise ValueError(f"Conflicting J/ψ mass windows in {source.GetName()}")
-    selected_pairs = record.get("selected_pairs_both_both")
+    selected_pairs = record.get("selected_pairs")
+    both_both_pairs = record.get("selected_pairs_both_both")
     if (record.get("schema") != "shift-jpsi-control-publication-v1"
             or record.get("input_kind") != input_kind
             or record.get("pair_cuts") != pair_cuts
             or mass_window != jpsi_dimuon["mass"]
             or type(selected_pairs) is not int or selected_pairs < 0
-            or selected_pairs != record.get("selected_pairs")):
-        raise ValueError(f"Expected published Both-Both J/ψ CR histograms in {source.GetName()}")
+            or type(both_both_pairs) is not int or not 0 <= both_both_pairs <= selected_pairs
+            or (category == "Both-Both" and selected_pairs != both_both_pairs)):
+        raise ValueError(f"Expected published {category} J/ψ CR histograms in {source.GetName()}")
     return record
 
 
-def prepare_jpsi_cr_data(path, histograms):
+def prepare_jpsi_cr_data(path, histograms, category):
     if path is None:
         return None, [], None
     try:
@@ -129,7 +135,7 @@ def prepare_jpsi_cr_data(path, histograms):
         Logger.warn(f"J/ψ CR data histograms are unavailable at {path}")
         return None, [], None
     with source:
-        record = read_jpsi_cr_exposure(source, "collision-data")
+        record = read_jpsi_cr_exposure(source, "collision-data", category)
         recorded_lumi = record.get("recorded_luminosity_pb_inverse")
         if recorded_lumi is not None and (
             type(recorded_lumi) not in (int, float) or not math.isfinite(recorded_lumi) or recorded_lumi <= 0
@@ -155,9 +161,9 @@ def prepare_plot_samples(
     bsm_epsilons_to_plot,
     histogram_cache_directory,
     *,
-    jpsi_control_region=False,
+    jpsi_control_region=None,
 ):
-    histogram_inventory = campaign_histogram_inventory(campaign)
+    histogram_inventory = None if jpsi_control_region else campaign_histogram_inventory(campaign)
     reference_inputs = {}
     if histogram_inventory:
         reference_inputs = streaming_reference_histogram_inputs(histogram_inventory)
@@ -235,7 +241,7 @@ def prepare_plot_samples(
                     try:
                         if jpsi_control_region:
                             with ROOT.TFile.Open(eos_xrootd_url(file_path) or file_path, "READ") as source:
-                                read_jpsi_cr_exposure(source, "mc")
+                                read_jpsi_cr_exposure(source, "mc", jpsi_control_region)
                                 exposure = histogram_gen_normalization(file_path, name, source=source)
                             if exposure is None:
                                 raise ValueError("missing full source normalization")

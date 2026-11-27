@@ -9,3 +9,4 @@ plots/*
 docs/results
 
 plots.tar
+tmp/*
